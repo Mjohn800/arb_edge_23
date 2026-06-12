@@ -204,7 +204,7 @@ function findArbs(events) {
     const best = {};
     for (const bm of ev.bookmakers) {
       for (const mkt of (bm.markets || [])) {
-        if (mkt.key !== 'h2h') continue;
+        if (!['h2h', 'spreads', 'totals', 'outrights'].includes(mkt.key)) continue;
         for (const o of mkt.outcomes) {
           if (!best[o.name] || o.price > best[o.name].price)
             best[o.name] = { price: o.price, book: bm.key, bookName: bm.title };
@@ -349,6 +349,7 @@ export default function App() {
   const [selectedSports, setSelectedSports] = useState(ALL_SPORTS.map(s => s.key));
   const [showSportPicker, setShowSportPicker] = useState(false);
   const [minMargin, setMinMargin] = useState(0);
+  const [wayFilter, setWayFilter] = useState('all');
   const [bets, setBets] = useState(() => { try { return JSON.parse(localStorage.getItem('arb_bets') || '[]'); } catch { return []; } });
   const [manualOutcomes, setManualOutcomes] = useState([
     { label: 'Home', book: 'betway', odds: '' },
@@ -372,7 +373,7 @@ export default function App() {
       const sp = sportsToScan[i];
       setScanProgress({ current: i + 1, total: sportsToScan.length, sport: sp.label });
       try {
-        const res = await fetch('/api/odds?sport=' + sp.key + '&region=' + sp.region);
+        const res = await fetch('/api/odds?sport=' + sp.key + '&region=' + sp.region + '&market=h2h,spreads,totals,outrights');
         if (res.status === 401) { setError('Invalid API key.'); break; }
         if (res.status === 429) { setError('API quota reached. Try again later.'); break; }
         if (!res.ok) continue;
@@ -422,7 +423,9 @@ export default function App() {
 
   const filteredArbs = arbs.filter(a => {
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
-    return a.margin >= minMargin;
+    if (wayFilter === '2' && a.outcomes.length !== 2) return false;
+if (wayFilter === '3' && a.outcomes.length !== 3) return false;
+return a.margin >= minMargin;
   });
 
   const calc = sel ? calcStakes(sel.outcomes, stake) : null;
@@ -474,6 +477,13 @@ export default function App() {
           e('input', { type: 'range', min: 0, max: 5, step: 0.5, value: minMargin, onChange: ev => setMinMargin(parseFloat(ev.target.value)), style: { width: 70 } }),
           e('span', { style: { fontSize: 12, fontWeight: 600, minWidth: 28 } }, minMargin + '%')
         ),
+        e('div', { style: { display: 'flex', gap: 6 } },
+  ['all', '2', '3'].map(w =>
+    e('button', { key: w, onClick: () => setWayFilter(w), style: { ...st.btn(wayFilter === w ? 'primary' : 'outline'), fontSize: 12, padding: '6px 10px' } },
+      w === 'all' ? 'All' : w + '-way'
+    )
+  )
+),
         e('button', { onClick: () => setShowSportPicker(v => !v), style: { ...st.btn('outline'), fontSize: 12, padding: '6px 10px' } }, '⚙ Sports (' + selectedSports.length + ')'),
         e('button', { onClick: () => fetchOdds(apiKey), disabled: loading || !apiKey, style: { ...st.btn('outline'), fontSize: 12, padding: '6px 10px' } }, loading ? '...' : '↻')
       ),
