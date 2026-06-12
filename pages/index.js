@@ -372,7 +372,7 @@ export default function App() {
       const sp = sportsToScan[i];
       setScanProgress({ current: i + 1, total: sportsToScan.length, sport: sp.label });
       try {
-        const res = await fetch('https://api.the-odds-api.com/v4/sports/' + sp.key + '/odds/?apiKey=' + key + '&regions=' + sp.region + '&markets=h2h&oddsFormat=decimal');
+        const res = await fetch('/api/odds?sport=' + sp.key + '&region=' + sp.region);
         if (res.status === 401) { setError('Invalid API key.'); break; }
         if (res.status === 429) { setError('API quota reached. Try again later.'); break; }
         if (!res.ok) continue;
