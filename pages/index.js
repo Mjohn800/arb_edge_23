@@ -364,7 +364,7 @@ export default function App() {
   const [evFilter, setEvFilter] = useState('all');
 
   const fetchOdds = useCallback(async (key) => {
-    if (!key) return;
+   if (!key && !process.env.ODDS_API_KEY) return;
     setLoading(true); setError('');
     const sportsToScan = ALL_SPORTS.filter(s => selectedSports.includes(s.key));
     const all = [];
@@ -396,7 +396,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (apiKey) fetchOdds(apiKey);
+   fetchOdds(apiKey || 'server');
     const id = setInterval(() => { if (apiKey) fetchOdds(apiKey); }, 5 * 60 * 1000);
     return () => clearInterval(id);
   }, [apiKey, fetchOdds]);
