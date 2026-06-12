@@ -1,6 +1,7 @@
 export default async function handler(req, res) {
-  const { sport, region } = req.query;
-  const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds/?apiKey=${process.env.ODDS_API_KEY}&regions=${region}&markets=h2h&oddsFormat=decimal`;
+  const { sport, region, market } = req.query;
+  const markets = market || 'h2h,spreads,totals';
+  const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds/?apiKey=${process.env.ODDS_API_KEY}&regions=${region}&markets=${markets}&oddsFormat=decimal`;
 
   try {
     const response = await fetch(url);
