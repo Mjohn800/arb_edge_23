@@ -365,7 +365,7 @@ const [selectedSports, setSelectedSports] = useState(TOP_SPORTS);
   const [minEV, setMinEV] = useState(2);
   const [evStake, setEvStake] = useState(500);
   const [evFilter, setEvFilter] = useState('all');
-  const [quota, setQuota] = useState({ remaining: null, used: null });
+  const [quota, setQuota] = useState({ remaining: null, used: null, keyIndex: 1 });
 
   const fetchOdds = useCallback(async (key) => {
   if (!key) return;
@@ -382,7 +382,7 @@ const [selectedSports, setSelectedSports] = useState(TOP_SPORTS);
         if (!res.ok) continue;
         const json = await res.json();
 const data = json.data || json;
-if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests });
+if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests, keyIndex: json.keyIndex || 1 });
 data.forEach(e => { e.sport_key = sp.key; });
 all.push(...data);
       } catch { /* sport offline */ }
@@ -512,7 +512,7 @@ return a.margin >= minMargin;
         ))
       ),
       error && e('div', { style: { background: '#fef3c7', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 } }, error),
-        quota.remaining !== null && e('div', { style: { background: parseInt(quota.remaining) < 50 ? '#fef3c7' : '#f0fdf4', color: parseInt(quota.remaining) < 50 ? '#92400e' : '#14532d', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10, display: 'flex', justifyContent: 'space-between' } }, e('span', null, '🔄 API requests used: ' + quota.used), e('span', { style: { fontWeight: 700 } }, quota.remaining + ' remaining')),
+        quota.remaining !== null && e('div', { style: { background: parseInt(quota.remaining) < 50 ? '#fef3c7' : '#f0fdf4', color: parseInt(quota.remaining) < 50 ? '#92400e' : '#14532d', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10, display: 'flex', justifyContent: 'space-between' } }, e('span', null, '🔄 '🔑 Key ' + (quota.keyIndex || 1) + ' · 🔄 Used: ' + quota.used), e('span', { style: { fontWeight: 700 } }, quota.remaining + ' remaining')),
       !apiKey && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } }, '📌 Demo mode — tap Connect Live to scan real odds across ' + ALL_SPORTS.length + ' sports. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'),
       filteredArbs.map(arb => {
         const info = getSportInfo(arb.sport);
