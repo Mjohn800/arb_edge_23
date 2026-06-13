@@ -24,7 +24,7 @@ export default async function handler(req, res) {
       const data = await response.json();
       const remainingRequests = response.headers.get('x-requests-remaining');
       const usedRequests = response.headers.get('x-requests-used');
-      return res.status(200).json({ data, remainingRequests, usedRequests });
+      return res.status(200).json({ data, remainingRequests, usedRequests, keyIndex: keys.indexOf(key) + 1 });
     } catch (err) {
       lastError = err.message;
       continue;
