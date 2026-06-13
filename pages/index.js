@@ -368,7 +368,7 @@ const [selectedSports, setSelectedSports] = useState(TOP_SPORTS);
   const [quota, setQuota] = useState({ remaining: null, used: null });
 
   const fetchOdds = useCallback(async (key) => {
-   if (!key && !process.env.ODDS_API_KEY) return;
+  if (!key) return;
     setLoading(true); setError('');
     const sportsToScan = ALL_SPORTS.filter(s => selectedSports.includes(s.key));
     const all = [];
