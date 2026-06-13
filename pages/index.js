@@ -335,7 +335,7 @@ const EMPTY_MANUAL = { match: '', sport: 'soccer_epl', commenceTime: new Date(Da
 
 export default function App() {
   const [tab, setTab] = useState('scanner');
-  const [apiKey, setApiKey] = useState(() => { try { return localStorage.getItem('oa_key') || ''; } catch { return ''; } });
+const [apiKey, setApiKey] = useState('server');
   const [apiInput, setApiInput] = useState('');
   const [showSetup, setShowSetup] = useState(false);
   const [arbs, setArbs] = useState(MOCK);
