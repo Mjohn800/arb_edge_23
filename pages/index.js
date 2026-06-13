@@ -347,7 +347,8 @@ export default function App() {
   const [stake, setStake] = useState(500);
   const [currency, setCurrency] = useState('GHS');
   const [groupFilter, setGroupFilter] = useState('all');
-  const [selectedSports, setSelectedSports] = useState(ALL_SPORTS.map(s => s.key));
+  const TOP_SPORTS = ['soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_italy_serie_a','soccer_france_ligue_one','soccer_africa_cup_of_nations','soccer_ghana_premiership','soccer_fifa_world_cup','basketball_nba','tennis_atp_wimbledon','tennis_wta_wimbledon','mma_mixed_martial_arts','boxing_boxing','cricket_ipl','cricket_t20_world_cup','americanfootball_nfl','soccer_uefa_europa_league','soccer_conmebol_copa_libertadores','soccer_usa_mls'];
+const [selectedSports, setSelectedSports] = useState(TOP_SPORTS);
   const [showSportPicker, setShowSportPicker] = useState(false);
   const [minMargin, setMinMargin] = useState(0);
   const [wayFilter, setWayFilter] = useState('all');
@@ -364,6 +365,7 @@ export default function App() {
   const [minEV, setMinEV] = useState(2);
   const [evStake, setEvStake] = useState(500);
   const [evFilter, setEvFilter] = useState('all');
+  const [quota, setQuota] = useState({ remaining: null, used: null });
 
   const fetchOdds = useCallback(async (key) => {
    if (!key && !process.env.ODDS_API_KEY) return;
@@ -378,9 +380,11 @@ export default function App() {
         if (res.status === 401) { setError('Invalid API key.'); break; }
         if (res.status === 429) { setError('API quota reached. Try again later.'); break; }
         if (!res.ok) continue;
-        const data = await res.json();
-        data.forEach(e => { e.sport_key = sp.key; });
-        all.push(...data);
+        const json = await res.json();
+const data = json.data || json;
+if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests });
+data.forEach(e => { e.sport_key = sp.key; });
+all.push(...data);
       } catch { /* sport offline */ }
     }
     const found = findArbs(all);
@@ -508,6 +512,7 @@ return a.margin >= minMargin;
         ))
       ),
       error && e('div', { style: { background: '#fef3c7', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 } }, error),
+        quota.remaining !== null && e('div', { style: { background: parseInt(quota.remaining) < 50 ? '#fef3c7' : '#f0fdf4', color: parseInt(quota.remaining) < 50 ? '#92400e' : '#14532d', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10, display: 'flex', justifyContent: 'space-between' } }, e('span', null, '🔄 API requests used: ' + quota.used), e('span', { style: { fontWeight: 700 } }, quota.remaining + ' remaining')),
       !apiKey && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } }, '📌 Demo mode — tap Connect Live to scan real odds across ' + ALL_SPORTS.length + ' sports. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'),
       filteredArbs.map(arb => {
         const info = getSportInfo(arb.sport);
