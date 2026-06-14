@@ -562,12 +562,12 @@ e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportU
     : e('div', null,
         e('div', { style: { fontWeight: 700, fontSize: 13, color: C.greenDark, marginBottom: 8 } }, '🤖 AI Analysis'),
         e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 } },
-          e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Predicted'), e('div', { style: { fontWeight: 700, color: C.text } }, cardAnalysis[arb.id].predictedOutcome)),
-          e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Confidence'), e('div', { style: { fontWeight: 700, color: C.blue } }, cardAnalysis[arb.id].confidence)),
-          e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Risk'), e('div', { style: { fontWeight: 700, color: C.amber } }, cardAnalysis[arb.id].riskLevel)),
-          e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Verdict'), e('div', { style: { fontWeight: 700, color: C.green } }, cardAnalysis[arb.id].verdict))
+         e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Predicted'), e('div', { style: { fontWeight: 700, color: C.text } }, cardAnalysis[arb.id].predictedOutcome)),
+e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Confidence'), e('div', { style: { fontWeight: 700, color: C.blue } }, cardAnalysis[arb.id].confidence + '%')),
+e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Risk'), e('div', { style: { fontWeight: 700, color: C.amber } }, cardAnalysis[arb.id].riskLevel)),
+e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Best Value'), e('div', { style: { fontWeight: 700, color: C.green } }, cardAnalysis[arb.id].valueLeg)),
         ),
-        e('div', { style: { fontSize: 12, color: C.muted, lineHeight: 1.6 } }, cardAnalysis[arb.id].summary)
+        e('div', { style: { fontSize: 12, color: C.muted, lineHeight: 1.6 } }, cardAnalysis[arb.id].tip + ' ' + cardAnalysis[arb.id].reasoning)     
       )
         );
       })
