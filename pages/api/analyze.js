@@ -1,9 +1,4 @@
-export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
-  const { match, sport, outcomes, margin, marketType } = req.body;
-
-  const prompt = `You are a sports betting analyst for West African bettors (mainly Ghana). Analyze this betting opportunity:
+const prompt = `You are an expert sports analyst with deep knowledge of team statistics. Analyze this betting opportunity for West African bettors.
 
 Match: ${match}
 Sport: ${sport}
@@ -12,37 +7,37 @@ Arbitrage margin: ${margin}%
 Odds breakdown:
 ${outcomes.map(o => `- ${o.label}: ${o.odds} on ${o.bookName}`).join('\n')}
 
-Provide a brief analysis in this exact JSON format:
+Using your knowledge of these teams, provide a detailed analysis including:
+1. Recent form (last 5 games) for each team
+2. Goals scored and conceded trends
+3. Head to head record (last 5 meetings)
+4. Key injuries or suspensions if known
+5. Home/away performance
+
+Then give betting recommendations beyond just the winner.
+
+Respond ONLY with this exact JSON, no markdown, no extra text:
 {
-  "predictedOutcome": "most likely result in 5 words or less",
+  "predictedOutcome": "most likely result e.g. Arsenal Win or Draw",
   "confidence": 65,
-  "valueLeg": "which outcome has best value e.g. Arsenal Win",
+  "valueLeg": "best value bet e.g. Arsenal Win",
   "riskLevel": "Low",
-  "tip": "one actionable sentence for the bettor",
-  "reasoning": "2 sentences explaining your analysis"
-}
-
-Only respond with the JSON. No extra text. No markdown.`;
-
-  try {
-    const response = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + process.env.GEMINI_API_KEY,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 500 }
-        })
-      }
-    );
-
-    const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-    const clean = text.replace(/```json|```/g, '').trim();
-    const analysis = JSON.parse(clean);
-    res.status(200).json(analysis);
-  } catch (err) {
-    res.status(500).json({ error: 'Analysis failed: ' + err.message });
-  }
-}
+  "form": {
+    "home": "W W D L W",
+    "away": "L W W D L"
+  },
+  "goalsAvg": {
+    "homeScoredPer90": 1.8,
+    "homeConceededPer90": 0.9,
+    "awayScoredPer90": 1.2,
+    "awayConceededPer90": 1.4
+  },
+  "h2h": "Arsenal won 3 of last 5 meetings. Avg 2.4 goals per game.",
+  "additionalBets": [
+    { "market": "Over 2.5 Goals", "recommendation": "Yes", "confidence": 72, "reasoning": "Both teams average over 1.5 goals per game" },
+    { "market": "Both Teams to Score", "recommendation": "Yes", "confidence": 68, "reasoning": "Chelsea scored in 4 of last 5 away games" },
+    { "market": "Correct Score", "recommendation": "2-1", "confidence": 18, "reasoning": "Most common scoreline in H2H" }
+  ],
+  "tip": "One actionable sentence for the bettor.",
+  "reasoning": "2 sentences explaining your overall analysis."
+}`;
