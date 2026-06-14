@@ -858,5 +858,5 @@ e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportU
       ),
       e('div', { style: { background: C.amberLight, borderRadius: 10, padding: '11px 14px', marginTop: 16, fontSize: 12, color: '#78350f', lineHeight: 1.6 } }, '⚖️ Sports betting is legal in Ghana under the Gaming Commission of Ghana. Bet responsibly.')
     )
-  );
+  ),
 }
