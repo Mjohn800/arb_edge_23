@@ -556,21 +556,77 @@ e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportU
             e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →'),
             e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis'),
           ),
-          cardAnalysis[arb.id] && e('div', { style: { marginTop: 10, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 14px', fontSize: 12, lineHeight: 1.6 } },
-            cardAnalysis[arb.id].error
-              ? e('div', { style: { color: '#dc2626' } }, '⚠️ ' + cardAnalysis[arb.id].error)
-              : e('div', null,
-                  e('div', { style: { fontWeight: 700, fontSize: 13, color: C.greenDark, marginBottom: 8 } }, '🤖 AI Analysis'),
-                  e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 } },
-                    e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Predicted'), e('div', { style: { fontWeight: 700, color: C.text } }, cardAnalysis[arb.id].predictedOutcome)),
-                    e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Confidence'), e('div', { style: { fontWeight: 700, color: C.blue } }, cardAnalysis[arb.id].confidence + '%')),
-                    e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Risk'), e('div', { style: { fontWeight: 700, color: C.amber } }, cardAnalysis[arb.id].riskLevel)),
-                    e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Best Value'), e('div', { style: { fontWeight: 700, color: C.green } }, cardAnalysis[arb.id].valueLeg)),
-                  ),
-                  e('div', { style: { fontSize: 12, color: C.muted, lineHeight: 1.6 } }, cardAnalysis[arb.id].tip + ' ' + cardAnalysis[arb.id].reasoning)
-                )
+         cardAnalysis[arb.id] && e('div', { style: { marginTop: 10, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 14px', fontSize: 12, lineHeight: 1.6 } },
+  cardAnalysis[arb.id].error
+    ? e('div', { style: { color: '#dc2626' } }, '⚠️ ' + cardAnalysis[arb.id].error)
+    : e('div', null,
+        e('div', { style: { fontWeight: 700, fontSize: 13, color: C.greenDark, marginBottom: 8 } }, '🤖 AI Analysis'),
+        
+        e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 } },
+          e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Predicted'), e('div', { style: { fontWeight: 700, color: C.text } }, cardAnalysis[arb.id].predictedOutcome)),
+          e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Confidence'), e('div', { style: { fontWeight: 700, color: C.blue } }, cardAnalysis[arb.id].confidence + '%')),
+          e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Risk'), e('div', { style: { fontWeight: 700, color: C.amber } }, cardAnalysis[arb.id].riskLevel)),
+          e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Best Value'), e('div', { style: { fontWeight: 700, color: C.green } }, cardAnalysis[arb.id].valueLeg)),
+        ),
+
+        cardAnalysis[arb.id].form && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8 } },
+          e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '📊 RECENT FORM'),
+          e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 4 } },
+            e('span', { style: { fontSize: 11, color: C.muted } }, 'Home:'),
+            e('span', { style: { fontWeight: 700, letterSpacing: 2 } }, cardAnalysis[arb.id].form.home)
+          ),
+          e('div', { style: { display: 'flex', justifyContent: 'space-between' } },
+            e('span', { style: { fontSize: 11, color: C.muted } }, 'Away:'),
+            e('span', { style: { fontWeight: 700, letterSpacing: 2 } }, cardAnalysis[arb.id].form.away)
           )
-        );
+        ),
+
+        cardAnalysis[arb.id].goalsAvg && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8 } },
+          e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '⚽ GOALS STATS (per 90)'),
+          e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 } },
+            e('div', { style: st.oddsCell },
+              e('div', { style: { fontSize: 10, color: C.muted } }, 'Home scored'),
+              e('div', { style: { fontWeight: 700, color: C.green } }, cardAnalysis[arb.id].goalsAvg.homeScoredPer90)
+            ),
+            e('div', { style: st.oddsCell },
+              e('div', { style: { fontSize: 10, color: C.muted } }, 'Home conceded'),
+              e('div', { style: { fontWeight: 700, color: '#dc2626' } }, cardAnalysis[arb.id].goalsAvg.homeConceededPer90)
+            ),
+            e('div', { style: st.oddsCell },
+              e('div', { style: { fontSize: 10, color: C.muted } }, 'Away scored'),
+              e('div', { style: { fontWeight: 700, color: C.green } }, cardAnalysis[arb.id].goalsAvg.awayScoredPer90)
+            ),
+            e('div', { style: st.oddsCell },
+              e('div', { style: { fontSize: 10, color: C.muted } }, 'Away conceded'),
+              e('div', { style: { fontWeight: 700, color: '#dc2626' } }, cardAnalysis[arb.id].goalsAvg.awayConceededPer90)
+            ),
+          )
+        ),
+
+        cardAnalysis[arb.id].h2h && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8, fontSize: 12, color: C.text } },
+          e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, '🔁 HEAD TO HEAD'),
+          e('div', null, cardAnalysis[arb.id].h2h)
+        ),
+
+        cardAnalysis[arb.id].additionalBets && e('div', { style: { marginBottom: 8 } },
+          e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '💡 ADDITIONAL MARKETS'),
+          cardAnalysis[arb.id].additionalBets.map((bet, i) =>
+            e('div', { key: i, style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 6 } },
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 3 } },
+                e('span', { style: { fontWeight: 700, color: C.text } }, bet.market),
+                e('span', { style: { background: C.greenLight, color: C.greenDark, fontWeight: 700, fontSize: 11, padding: '2px 8px', borderRadius: 12 } }, bet.recommendation + ' · ' + bet.confidence + '%')
+              ),
+              e('div', { style: { fontSize: 11, color: C.muted } }, bet.reasoning)
+            )
+          )
+        ),
+
+        e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '8px 10px', fontSize: 11, color: '#78350f' } },
+          e('div', { style: { fontWeight: 700, marginBottom: 2 } }, '💬 ' + cardAnalysis[arb.id].tip),
+          e('div', null, cardAnalysis[arb.id].reasoning)
+        )
+      )
+),
       }),
     tab === 'calculator' && e('div', { style: st.section },
       !sel ? e('div', { style: { textAlign: 'center', padding: '40px 0' } },
