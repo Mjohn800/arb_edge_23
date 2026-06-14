@@ -416,9 +416,6 @@ all.push(...data);
     setBets(p => [{ id: Date.now(), match: matchName || sel.match, sport: sport || sel.sport, margin: sel ? sel.margin : 0, stake, currency, profit: profitAmt !== undefined ? profitAmt : parseFloat(c.profit.toFixed(2)), date: new Date().toISOString(), status: 'pending', outcomes: outcomes.map((o, i) => ({ ...o, stake: parseFloat(c.stakes[i].toFixed(2)), ret: parseFloat(c.returns[i].toFixed(2)) })) }, ...p]);
     setTab('tracker');
   };
-  const logBet = (...) => {
-  ...
-};   ← logBet ends here
 
 const analyzeArb = async (arb) => {   ← paste starts here
   if (analyzingId === arb.id) return;
