@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, createElement } from 'react';
+guimport React, { useState, useEffect, useCallback, createElement } from 'react';
 
 // ─── BOOKMAKERS ───────────────────────────────────────────────────────────────
 const BOOKS = {
@@ -366,6 +366,8 @@ const [selectedSports, setSelectedSports] = useState(TOP_SPORTS);
   const [evStake, setEvStake] = useState(500);
   const [evFilter, setEvFilter] = useState('all');
   const [quota, setQuota] = useState({ remaining: null, used: null, keyIndex: 1 });
+  const [cardAnalysis, setCardAnalysis] = useState({});
+const [analyzingId, setAnalyzingId] = useState(null);
 
   const fetchOdds = useCallback(async (key) => {
   if (!key) return;
@@ -414,6 +416,30 @@ all.push(...data);
     setBets(p => [{ id: Date.now(), match: matchName || sel.match, sport: sport || sel.sport, margin: sel ? sel.margin : 0, stake, currency, profit: profitAmt !== undefined ? profitAmt : parseFloat(c.profit.toFixed(2)), date: new Date().toISOString(), status: 'pending', outcomes: outcomes.map((o, i) => ({ ...o, stake: parseFloat(c.stakes[i].toFixed(2)), ret: parseFloat(c.returns[i].toFixed(2)) })) }, ...p]);
     setTab('tracker');
   };
+  const logBet = (...) => {
+  ...
+};   ← logBet ends here
+
+const analyzeArb = async (arb) => {   ← paste starts here
+  if (analyzingId === arb.id) return;
+  setAnalyzingId(arb.id);
+  try {
+    const res = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        match: arb.match, sport: getSportInfo(arb.sport).label,
+        outcomes: arb.outcomes, margin: arb.margin,
+        marketType: arb.marketType || 'Match Winner'
+      })
+    });
+    const data = await res.json();
+    setCardAnalysis(p => ({ ...p, [arb.id]: data }));
+  } catch (err) {
+    setCardAnalysis(p => ({ ...p, [arb.id]: { error: 'Analysis failed' } }));
+  }
+  setAnalyzingId(null);
+};
 
   const calcManual = () => {
     const valid = manualOutcomes.filter(o => o.odds && parseFloat(o.odds) > 1);
@@ -530,7 +556,8 @@ e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportU
             ))
           ),
           sel && sel.id === arb.id && e('div', { style: { marginTop: 10, display: 'flex', gap: 8 } },
-            e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →')
+            e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →'),
+            e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis'),
           )
         );
       })
