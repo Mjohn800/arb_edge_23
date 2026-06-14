@@ -417,7 +417,7 @@ all.push(...data);
     setTab('tracker');
   };
 
-const analyzeArb = async (arb) => {   ← paste starts here
+const analyzeArb = async (arb) => {  
   if (analyzingId === arb.id) return;
   setAnalyzingId(arb.id);
   try {
