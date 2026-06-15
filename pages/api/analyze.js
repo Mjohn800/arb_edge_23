@@ -1,4 +1,11 @@
-const prompt = `You are an expert sports analyst with deep knowledge of team statistics. Analyze this betting opportunity for West African bettors.
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { match, sport, outcomes, margin, marketType } = req.body;
+
+  const prompt = `You are an expert sports analyst with deep knowledge of team statistics. Analyze this betting opportunity for West African bettors.
 
 Match: ${match}
 Sport: ${sport}
@@ -41,3 +48,36 @@ Respond ONLY with this exact JSON, no markdown, no extra text:
   "tip": "One actionable sentence for the bettor.",
   "reasoning": "2 sentences explaining your overall analysis."
 }`;
+
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.4,
+          maxOutputTokens: 1000,
+        },
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(500).json({ error: data.error?.message || 'Gemini API error' });
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    // Strip any accidental markdown fences
+    const clean = text.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+    return res.status(200).json(parsed);
+  } catch (err) {
+    return res.status(500).json({ error: 'Analysis failed: ' + err.message });
+  }
+}
