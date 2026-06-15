@@ -353,7 +353,14 @@ const [selectedSports, setSelectedSports] = useState(TOP_SPORTS);
   const [showSportPicker, setShowSportPicker] = useState(false);
   const [minMargin, setMinMargin] = useState(0);
   const [wayFilter, setWayFilter] = useState('all');
-  const [bets, setBets] = useState(() => { try { return JSON.parse(localStorage.getItem('arb_bets') || '[]'); } catch { return []; } });
+  const [bets, setBets] = useState([]);
+
+useEffect(() => {
+  try {
+    const saved = localStorage.getItem('arb_bets');
+    if (saved) setBets(JSON.parse(saved));
+  } catch {}
+}, []);
   const [manualOutcomes, setManualOutcomes] = useState([
     { label: 'Home', book: 'betway', odds: '' },
     { label: 'Draw', book: 'sportybet', odds: '' },
