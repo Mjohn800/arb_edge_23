@@ -632,11 +632,12 @@ e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportU
         e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '8px 10px', fontSize: 11, color: '#78350f' } },
           e('div', { style: { fontWeight: 700, marginBottom: 2 } }, '💬 ' + cardAnalysis[arb.id].tip),
           e('div', null, cardAnalysis[arb.id].reasoning)
-        )
+)
       )
-      ))
-        )
-           ),
+    )
+  ),
+)
+),
           
     tab === 'calculator' && e('div', { style: st.section },
       !sel ? e('div', { style: { textAlign: 'center', padding: '40px 0' } },
