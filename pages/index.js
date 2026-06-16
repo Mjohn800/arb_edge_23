@@ -395,13 +395,8 @@ const data = json.data || json;
 if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests, keyIndex: json.keyIndex || 1 });
 data.forEach(e => { e.sport_key = sp.key; });
 all.push(...data);
-        all.push(...data);
-if (i === 0) {
-  const books = [...new Set(data.flatMap(e => (e.bookmakers || []).map(b => b.key)))];
-  setError('Books found: ' + books.join(', '));
-}
-} catch { /* sport offline */ }
-      } catch { /* sport offline */ }
+if (i === 0) setError('Books: ' + data.flatMap(e => (e.bookmakers||[]).map(b=>b.key)).filter((v,i,a)=>a.indexOf(v)===i).join(', '));
+catch { /* sport offline */ }
     }
     const found = findArbs(all);
     const foundEV = findEVBets(all, minEV);
