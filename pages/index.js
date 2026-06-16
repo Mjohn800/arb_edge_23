@@ -396,7 +396,7 @@ if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: 
 data.forEach(e => { e.sport_key = sp.key; });
 all.push(...data);
 if (i === 0) setError('Books: ' + data.flatMap(e => (e.bookmakers||[]).map(b=>b.key)).filter((v,i,a)=>a.indexOf(v)===i).join(', '));
-catch { /* sport offline */ }
+      } catch { /* sport offline */ }
     }
     const found = findArbs(all);
     const foundEV = findEVBets(all, minEV);
