@@ -634,7 +634,8 @@ e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportU
           e('div', null, cardAnalysis[arb.id].reasoning)
         )
       )
-      ),
+      )),
+          
     tab === 'calculator' && e('div', { style: st.section },
       !sel ? e('div', { style: { textAlign: 'center', padding: '40px 0' } },
         e('div', { style: { fontSize: 36, marginBottom: 10 } }, '📊'),
