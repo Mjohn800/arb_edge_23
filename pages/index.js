@@ -225,7 +225,7 @@ function findEVBets(events, minEV = 2) {
   const evBets = [];
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
-    const pinnBm = ev.bookmakers.find(b => b.key === 'pinnacle');
+  const pinnBm = ev.bookmakers.find(b => b.key === 'betfair_ex_eu');
     if (!pinnBm) continue;
     const pinnMkt = (pinnBm.markets || []).find(m => m.key === 'h2h');
     if (!pinnMkt) continue;
@@ -234,7 +234,7 @@ function findEVBets(events, minEV = 2) {
     const trueProbs = {};
     pinnOuts.forEach(o => { trueProbs[o.name] = (1 / o.price) / rawImplied; });
     for (const bm of ev.bookmakers) {
-      if (bm.key === 'pinnacle') continue;
+     if (bm.key === 'betfair_ex_eu') continue;
       const mkt = (bm.markets || []).find(m => m.key === 'h2h');
       if (!mkt) continue;
       for (const o of mkt.outcomes) {
@@ -252,7 +252,7 @@ function findEVBets(events, minEV = 2) {
             bookName: bm.title,
             odds: o.price,
             trueProb: parseFloat((prob * 100).toFixed(1)),
-            pinnacleOdds: parseFloat((1 / prob).toFixed(2)),
+            fairOdds: parseFloat((1 / prob).toFixed(2)),
             ev_pct,
           });
         }
@@ -759,7 +759,7 @@ return a.margin >= minMargin;
           e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginTop: 4 } },
             [
               ['Your odds', bet.odds.toFixed(2), C.green],
-              ['Fair odds', bet.pinnacleOdds.toFixed(2), C.muted],
+              ['Fair odds', bet.fairOdds.toFixed(2), C.muted],
               ['True prob', bet.trueProb.toFixed(1) + '%', C.blue],
               ['Edge', '+' + bet.ev_pct.toFixed(1) + '%', '#1d4ed8'],
             ].map(([l, v, c]) =>
