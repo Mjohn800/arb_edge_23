@@ -619,6 +619,7 @@ return a.margin >= minMargin;
           )
         );
       }),
+                ),
           
     tab === 'calculator' && e('div', { style: st.section },
       !sel ? e('div', { style: { textAlign: 'center', padding: '40px 0' } },
