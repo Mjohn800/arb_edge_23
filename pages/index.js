@@ -361,6 +361,17 @@ useEffect(() => {
     if (saved) setBets(JSON.parse(saved));
   } catch {}
 }, []);
+  
+  useEffect(() => {
+  try {
+    const saved = localStorage.getItem('arb_sports');
+    if (saved) setSelectedSports(JSON.parse(saved));
+  } catch {}
+}, []);
+
+useEffect(() => {
+  try { localStorage.setItem('arb_sports', JSON.stringify(selectedSports)); } catch {}
+}, [selectedSports]);
   const [manualOutcomes, setManualOutcomes] = useState([
     { label: 'Home', book: 'betway', odds: '' },
     { label: 'Draw', book: 'sportybet', odds: '' },
@@ -395,7 +406,6 @@ const data = json.data || json;
 if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests, keyIndex: json.keyIndex || 1 });
 data.forEach(e => { e.sport_key = sp.key; });
 all.push(...data);
-if (i === 0) setError('Books: ' + data.flatMap(e => (e.bookmakers||[]).map(b=>b.key)).filter((v,i,a)=>a.indexOf(v)===i).join(', '));
       } catch { /* sport offline */ }
     }
     const found = findArbs(all);
