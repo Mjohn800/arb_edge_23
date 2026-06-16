@@ -558,7 +558,7 @@ return a.margin >= minMargin;
               e('div', { style: { fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 1 } }, o.bookName),
               e('div', { style: { fontSize: 14, fontWeight: 700, color: C.green } }, o.odds.toFixed(2)),
 e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportUrls[arb.sport.split('_')[0]]) || (BOOKS[o.book] && BOOKS[o.book].url) || '#', target: '_blank', style: { display: 'block', marginTop: 4, fontSize: 10, fontWeight: 700, color: '#fff', background: C.green, borderRadius: 6, padding: '3px 6px', textDecoration: 'none', textAlign: 'center' } }, 'Bet Now →')
-            ))
+            )))
           ),
           sel && sel.id === arb.id && e('div', { style: { marginTop: 10, display: 'flex', gap: 8 } },
             e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →'),
@@ -634,7 +634,7 @@ e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportU
           e('div', null, cardAnalysis[arb.id].reasoning)
         )
       )
-      )),
+      ))),
           
     tab === 'calculator' && e('div', { style: st.section },
       !sel ? e('div', { style: { textAlign: 'center', padding: '40px 0' } },
@@ -862,7 +862,7 @@ e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportU
           e('span', { style: { color: C.green, flexShrink: 0 } }, '✓'),
           e('span', { style: { fontSize: 13, color: C.muted, lineHeight: 1.4 } }, item)
         )
-      ),
+      )
       e('div', { style: { background: C.amberLight, borderRadius: 10, padding: '11px 14px', marginTop: 16, fontSize: 12, color: '#78350f', lineHeight: 1.6 } }, '⚖️ Sports betting is legal in Ghana under the Gaming Commission of Ghana. Bet responsibly.')
     )
    )
