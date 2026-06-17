@@ -270,10 +270,10 @@ function kellyCriterion(odds, trueProb, fraction = 0.25) {
 }
 
 const MOCK_EV = [
-  { id: 'ev1', sport: 'soccer_epl', match: 'Arsenal vs Chelsea', commenceTime: new Date(Date.now() + 3 * 3600000).toISOString(), outcome: 'Arsenal', book: 'betway', bookName: 'Betway', odds: 2.55, trueProb: 41.2, fairOdds: 2.43, ev_pct: 5.1 },
-  { id: 'ev2', sport: 'basketball_nba', match: 'Lakers vs Celtics', commenceTime: new Date(Date.now() + 5 * 3600000).toISOString(), outcome: 'Celtics', book: '1xbet', bookName: '1xBet', odds: 1.95, trueProb: 52.8, fairOdds: 1.89, ev_pct: 3.0 },
-  { id: 'ev3', sport: 'soccer_uefa_champs_league', match: 'Real Madrid vs Man City', commenceTime: new Date(Date.now() + 26 * 3600000).toISOString(), outcome: 'Draw', book: 'bet365', bookName: 'Bet365', odds: 3.90, trueProb: 26.1, fairOdds: 3.83, ev_pct: 1.8 },
-  { id: 'ev4', sport: 'mma_mixed_martial_arts', match: 'Pereira vs Ankalaev', commenceTime: new Date(Date.now() + 48 * 3600000).toISOString(), outcome: 'Ankalaev', book: 'marathonbet', bookName: 'MarathonBet', odds: 2.45, trueProb: 42.0, fairOdds: 2.38, ev_pct: 2.9 },
+  { id: 'ev1', sport: 'soccer_epl', match: 'Arsenal vs Chelsea', commenceTime: new Date(Date.now() + 3 * 3600000).toISOString(), outcome: 'Arsenal', book: 'betway', bookName: 'Betway', odds: 2.55, trueProb: 41.2, pinnacleOdds: 2.43, ev_pct: 5.1 },
+  { id: 'ev2', sport: 'basketball_nba', match: 'Lakers vs Celtics', commenceTime: new Date(Date.now() + 5 * 3600000).toISOString(), outcome: 'Celtics', book: '1xbet', bookName: '1xBet', odds: 1.95, trueProb: 52.8, pinnacleOdds: 1.89, ev_pct: 3.0 },
+  { id: 'ev3', sport: 'soccer_uefa_champs_league', match: 'Real Madrid vs Man City', commenceTime: new Date(Date.now() + 26 * 3600000).toISOString(), outcome: 'Draw', book: 'bet365', bookName: 'Bet365', odds: 3.90, trueProb: 26.1, pinnacleOdds: 3.83, ev_pct: 1.8 },
+  { id: 'ev4', sport: 'mma_mixed_martial_arts', match: 'Pereira vs Ankalaev', commenceTime: new Date(Date.now() + 48 * 3600000).toISOString(), outcome: 'Ankalaev', book: 'marathonbet', bookName: 'MarathonBet', odds: 2.45, trueProb: 42.0, pinnacleOdds: 2.38, ev_pct: 2.9 },
 ];
 
 function calcStakes(outcomes, total) {
@@ -315,7 +315,7 @@ const st = {
   setupBox: { marginTop: 12, background: '#1f2937', borderRadius: 10, padding: '12px 14px' },
   setupText: { fontSize: 12, color: '#9ca3af', marginBottom: 10, lineHeight: 1.5 },
   section: { padding: '0 12px' },
-  card: (sel) => ({ background: C.white, borderRadius: 12, padding: '13px 14px', marginBottom: 10, cursor: 'pointer', border: sel ? '2px solid #00d4aa' : '1px solid ' + C.border }),
+  card: (sel, demo) => ({ background: C.white, borderRadius: 12, padding: '13px 14px', marginBottom: 10, cursor: 'pointer', border: sel ? '2px solid #00d4aa' : demo ? '1px dashed ' + C.amber : '1px solid ' + C.border }),
   cardRow: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 8 },
   matchTitle: { fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 2 },
   sportLabel: { fontSize: 12, color: C.muted, marginBottom: 3 },
@@ -344,6 +344,8 @@ const [apiKey, setApiKey] = useState('server');
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0, sport: '' });
   const [lastFetch, setLastFetch] = useState(null);
   const [error, setError] = useState('');
+  const [isDemo, setIsDemo] = useState(true);
+  const [isDemoEV, setIsDemoEV] = useState(true);
   const [sel, setSel] = useState(null);
   const [stake, setStake] = useState(500);
   const [currency, setCurrency] = useState('GHS');
@@ -361,17 +363,6 @@ useEffect(() => {
     if (saved) setBets(JSON.parse(saved));
   } catch {}
 }, []);
-  
-  useEffect(() => {
-  try {
-    const saved = localStorage.getItem('arb_sports');
-    if (saved) setSelectedSports(JSON.parse(saved));
-  } catch {}
-}, []);
-
-useEffect(() => {
-  try { localStorage.setItem('arb_sports', JSON.stringify(selectedSports)); } catch {}
-}, [selectedSports]);
   const [manualOutcomes, setManualOutcomes] = useState([
     { label: 'Home', book: 'betway', odds: '' },
     { label: 'Draw', book: 'sportybet', odds: '' },
@@ -406,14 +397,15 @@ const data = json.data || json;
 if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests, keyIndex: json.keyIndex || 1 });
 data.forEach(e => { e.sport_key = sp.key; });
 all.push(...data);
+if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map(b=>b.key)).filter((v,i,a)=>a.indexOf(v)===i).join(', '));
       } catch { /* sport offline */ }
     }
     const found = findArbs(all);
     const foundEV = findEVBets(all, minEV);
-    if (found.length > 0) { setArbs(found); setLastFetch(new Date()); }
-    else { setArbs(MOCK); setError('No live arbs right now. Showing demo data.'); }
-    if (foundEV.length > 0) setEvBets(foundEV);
-    else setEvBets(MOCK_EV);
+    if (found.length > 0) { setArbs(found); setIsDemo(false); setLastFetch(new Date()); }
+    else { setArbs(MOCK); setIsDemo(true); }
+    if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
+    else { setEvBets(MOCK_EV); setIsDemoEV(true); }
     setLoading(false);
   }, [selectedSports, minEV]);
 
@@ -492,7 +484,7 @@ return a.margin >= minMargin;
       e('div', { style: st.headerRow },
         e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ ' + scanProgress.sport + '...' : '● ' + filteredArbs.length + ' arbs'),
         lastFetch && e('span', { style: st.badge('#1f2937', '#9ca3af') }, lastFetch.toLocaleTimeString()),
-        !apiKey && e('span', { style: st.badge('#451a03', '#fcd34d') }, '⚠ Demo'),
+        isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, '⚠ Demo'),
         e('button', { onClick: () => setShowSetup(v => !v), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 10px' } }, apiKey ? '⚙ Connected' : 'Connect Live ↗')
       ),
       showSetup && e('div', { style: st.setupBox },
@@ -510,7 +502,7 @@ return a.margin >= minMargin;
     ),
     tab === 'scanner' && e('div', { style: st.section },
       e('div', { style: st.metricsGrid },
-        [['Arbs', filteredArbs.length, null], ['Best', filteredArbs[0] ? filteredArbs[0].margin.toFixed(1) + '%' : '—', C.green], ['Sports', selectedSports.length, null], ['Mode', apiKey ? 'Live' : 'Demo', apiKey ? C.green : C.amber]].map(([l, v, c]) =>
+        [['Arbs', filteredArbs.length, null], ['Best', filteredArbs[0] ? filteredArbs[0].margin.toFixed(1) + '%' : '—', C.green], ['Sports', selectedSports.length, null], ['Mode', isDemo ? 'Demo' : 'Live', isDemo ? C.amber : C.green]].map(([l, v, c]) =>
           e('div', { key: l, style: st.metric }, e('div', { style: st.metricLabel }, l), e('div', { style: st.metricVal(c) }, v))
         )
       ),
@@ -555,13 +547,20 @@ return a.margin >= minMargin;
       ),
       error && e('div', { style: { background: '#fef3c7', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 } }, error),
         quota.remaining !== null && e('div', { style: { background: parseInt(quota.remaining) < 50 ? '#fef3c7' : '#f0fdf4', color: parseInt(quota.remaining) < 50 ? '#92400e' : '#14532d', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10, display: 'flex', justifyContent: 'space-between' } }, e('span', null, 'Key ' + (quota.keyIndex || 1) + ' | Used: ' + quota.used), e('span', { style: { fontWeight: 700 } }, quota.remaining + ' remaining')),
-      !apiKey && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } }, '📌 Demo mode — tap Connect Live to scan real odds across ' + ALL_SPORTS.length + ' sports. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'),
+      isDemo && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
+        apiKey
+          ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 5 min.'
+          : '📌 Demo mode — tap Connect Live to scan real odds across ' + ALL_SPORTS.length + ' sports. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'
+      ),
  filteredArbs.map(arb => {
         const info = getSportInfo(arb.sport);
-        return e('div', { key: arb.id, style: st.card(sel && sel.id === arb.id), onClick: () => setSel(sel && sel.id === arb.id ? null : arb) },
+        return e('div', { key: arb.id, style: st.card(sel && sel.id === arb.id, isDemo), onClick: () => setSel(sel && sel.id === arb.id ? null : arb) },
           e('div', { style: st.cardRow },
             e('div', null, e('div', { style: st.sportLabel }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(arb.commenceTime)), e('div', { style: st.matchTitle }, arb.match)),
-            e('span', { style: st.profitBadge(arb.margin) }, '+' + arb.margin.toFixed(1) + '%')
+            e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
+              isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, 'DEMO'),
+              e('span', { style: st.profitBadge(arb.margin) }, '+' + arb.margin.toFixed(1) + '%')
+            )
           ),
           e('div', { style: st.oddsGrid(arb.outcomes.length) },
             arb.outcomes.map((o, i) => e('div', { key: i, style: st.oddsCell },
@@ -729,7 +728,7 @@ return a.margin >= minMargin;
           ['+EV found', evBets.filter(b => evFilter === 'all' || b.sport === evFilter).length, null],
           ['Best EV', evBets[0] ? '+' + evBets[0].ev_pct.toFixed(1) + '%' : '—', C.blue],
           ['Avg EV', evBets.length > 0 ? '+' + (evBets.reduce((s,b) => s + b.ev_pct, 0) / evBets.length).toFixed(1) + '%' : '—', C.blue],
-          ['Mode', apiKey ? 'Live' : 'Demo', apiKey ? C.green : C.amber],
+          ['Mode', isDemoEV ? 'Demo' : 'Live', isDemoEV ? C.amber : C.green],
         ].map(([l, v, c]) => e('div', { key: l, style: st.metric }, e('div', { style: st.metricLabel }, l), e('div', { style: st.metricVal(c) }, v)))
       ),
       e('div', { style: { display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' } },
@@ -754,7 +753,7 @@ return a.margin >= minMargin;
         const kellyStake = parseFloat((kelly / 100 * evStake).toFixed(2));
         const expectedProfit = parseFloat(((bet.odds * bet.trueProb / 100 - 1) * kellyStake).toFixed(2));
         const info = getSportInfo(bet.sport);
-        return e('div', { key: bet.id, style: { ...st.card(false), cursor: 'default' } },
+        return e('div', { key: bet.id, style: { ...st.card(false, isDemoEV), cursor: 'default' } },
           e('div', { style: st.cardRow },
             e('div', null,
               e('div', { style: st.sportLabel }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(bet.commenceTime)),
@@ -764,7 +763,10 @@ return a.margin >= minMargin;
                 e('span', { style: { color: C.muted } }, ' · ' + bet.bookName)
               )
             ),
-            e('span', { style: { background: '#eff6ff', color: '#1e40af', fontSize: 13, fontWeight: 700, padding: '4px 11px', borderRadius: 20, flexShrink: 0 } }, '+' + bet.ev_pct.toFixed(1) + '% EV')
+            e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
+              isDemoEV && e('span', { style: st.badge('#451a03', '#fcd34d') }, 'DEMO'),
+              e('span', { style: { background: '#eff6ff', color: '#1e40af', fontSize: 13, fontWeight: 700, padding: '4px 11px', borderRadius: 20 } }, '+' + bet.ev_pct.toFixed(1) + '% EV')
+            )
           ),
           e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginTop: 4 } },
             [
