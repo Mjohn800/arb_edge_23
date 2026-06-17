@@ -26,13 +26,9 @@ export default async function handler(req, res) {
         continue;
       }
       if (!response.ok) {
-        let body = null;
-        try { body = await response.json(); } catch {}
-        return res.status(response.status).json({
-          error: (body && (body.message || body.error_code)) || 'Odds API error',
-          detail: body || null,
-        });
-      }
+  lastError = response.status;
+  continue;
+}
       const data = await response.json();
       const remainingRequests = response.headers.get('x-requests-remaining');
       const usedRequests = response.headers.get('x-requests-used');
