@@ -353,11 +353,14 @@ const [apiKey, setApiKey] = useState('server');
   const [currency, setCurrency] = useState('GHS');
   const [groupFilter, setGroupFilter] = useState('all');
   const TOP_SPORTS = ['soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_italy_serie_a','soccer_france_ligue_one','soccer_africa_cup_of_nations','soccer_ghana_premiership','soccer_fifa_world_cup','basketball_nba','tennis_atp_wimbledon','tennis_wta_wimbledon','mma_mixed_martial_arts','boxing_boxing','cricket_ipl','cricket_t20_world_cup','americanfootball_nfl','soccer_uefa_europa_league','soccer_conmebol_copa_libertadores','soccer_usa_mls'];
-const [selectedSports, setSelectedSports] = useState(TOP_SPORTS);
+const [selectedSports, setSelectedSports] = useState(() => {
+  try { const saved = localStorage.getItem('arb_sports'); return saved ? JSON.parse(saved) : TOP_SPORTS; } catch { return TOP_SPORTS; }
+});
   const [showSportPicker, setShowSportPicker] = useState(false);
   const [minMargin, setMinMargin] = useState(0);
   const [wayFilter, setWayFilter] = useState('all');
   const [bets, setBets] = useState([]);
+  useEffect(() => { try { localStorage.setItem('arb_sports', JSON.stringify(selectedSports)); } catch {} }, [selectedSports]);
 
 useEffect(() => {
   try {
