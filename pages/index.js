@@ -221,11 +221,13 @@ function findArbs(events) {
   return arbs.sort((a, b) => b.margin - a.margin);
 }
 
+const SHARP_REFERENCE_BOOKS = ['pinnacle', 'betfair_ex_eu'];
+
 function findEVBets(events, minEV = 2) {
   const evBets = [];
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
-  const pinnBm = ev.bookmakers.find(b => b.key === 'betfair_ex_eu');
+    const pinnBm = ev.bookmakers.find(b => SHARP_REFERENCE_BOOKS.includes(b.key));
     if (!pinnBm) continue;
     const pinnMkt = (pinnBm.markets || []).find(m => m.key === 'h2h');
     if (!pinnMkt) continue;
@@ -234,7 +236,7 @@ function findEVBets(events, minEV = 2) {
     const trueProbs = {};
     pinnOuts.forEach(o => { trueProbs[o.name] = (1 / o.price) / rawImplied; });
     for (const bm of ev.bookmakers) {
-     if (bm.key === 'betfair_ex_eu') continue;
+     if (bm.key === pinnBm.key) continue;
       const mkt = (bm.markets || []).find(m => m.key === 'h2h');
       if (!mkt) continue;
       for (const o of mkt.outcomes) {
@@ -270,10 +272,10 @@ function kellyCriterion(odds, trueProb, fraction = 0.25) {
 }
 
 const MOCK_EV = [
-  { id: 'ev1', sport: 'soccer_epl', match: 'Arsenal vs Chelsea', commenceTime: new Date(Date.now() + 3 * 3600000).toISOString(), outcome: 'Arsenal', book: 'betway', bookName: 'Betway', odds: 2.55, trueProb: 41.2, pinnacleOdds: 2.43, ev_pct: 5.1 },
-  { id: 'ev2', sport: 'basketball_nba', match: 'Lakers vs Celtics', commenceTime: new Date(Date.now() + 5 * 3600000).toISOString(), outcome: 'Celtics', book: '1xbet', bookName: '1xBet', odds: 1.95, trueProb: 52.8, pinnacleOdds: 1.89, ev_pct: 3.0 },
-  { id: 'ev3', sport: 'soccer_uefa_champs_league', match: 'Real Madrid vs Man City', commenceTime: new Date(Date.now() + 26 * 3600000).toISOString(), outcome: 'Draw', book: 'bet365', bookName: 'Bet365', odds: 3.90, trueProb: 26.1, pinnacleOdds: 3.83, ev_pct: 1.8 },
-  { id: 'ev4', sport: 'mma_mixed_martial_arts', match: 'Pereira vs Ankalaev', commenceTime: new Date(Date.now() + 48 * 3600000).toISOString(), outcome: 'Ankalaev', book: 'marathonbet', bookName: 'MarathonBet', odds: 2.45, trueProb: 42.0, pinnacleOdds: 2.38, ev_pct: 2.9 },
+  { id: 'ev1', sport: 'soccer_epl', match: 'Arsenal vs Chelsea', commenceTime: new Date(Date.now() + 3 * 3600000).toISOString(), outcome: 'Arsenal', book: 'betway', bookName: 'Betway', odds: 2.55, trueProb: 41.2, fairOdds: 2.43, ev_pct: 5.1 },
+  { id: 'ev2', sport: 'basketball_nba', match: 'Lakers vs Celtics', commenceTime: new Date(Date.now() + 5 * 3600000).toISOString(), outcome: 'Celtics', book: '1xbet', bookName: '1xBet', odds: 1.95, trueProb: 52.8, fairOdds: 1.89, ev_pct: 3.0 },
+  { id: 'ev3', sport: 'soccer_uefa_champs_league', match: 'Real Madrid vs Man City', commenceTime: new Date(Date.now() + 26 * 3600000).toISOString(), outcome: 'Draw', book: 'bet365', bookName: 'Bet365', odds: 3.90, trueProb: 26.1, fairOdds: 3.83, ev_pct: 1.8 },
+  { id: 'ev4', sport: 'mma_mixed_martial_arts', match: 'Pereira vs Ankalaev', commenceTime: new Date(Date.now() + 48 * 3600000).toISOString(), outcome: 'Ankalaev', book: 'marathonbet', bookName: 'MarathonBet', odds: 2.45, trueProb: 42.0, fairOdds: 2.38, ev_pct: 2.9 },
 ];
 
 function calcStakes(outcomes, total) {
@@ -384,21 +386,37 @@ const [analyzingId, setAnalyzingId] = useState(null);
     setLoading(true); setError('');
     const sportsToScan = ALL_SPORTS.filter(s => selectedSports.includes(s.key));
     const all = [];
+    let okCount = 0, lastFailStatus = null, lastFailBody = '';
     for (let i = 0; i < sportsToScan.length; i++) {
       const sp = sportsToScan[i];
       setScanProgress({ current: i + 1, total: sportsToScan.length, sport: sp.label });
       try {
-        const res = await fetch('/api/odds?sport=' + sp.key + '&region=' + sp.region + '&market=h2h,spreads,totals,outrights');
+        // Outright/futures sport keys (e.g. '..._winner') ONLY accept markets=outrights.
+        // Regular match-based sports ONLY accept h2h/spreads/totals. Mixing the two in
+        // one request triggers the upstream API's INVALID_MARKET_COMBO error and fails
+        // the ENTIRE request — which is why every sport was coming back empty.
+        const isOutright = sp.key.endsWith('_winner');
+        const sportMarkets = isOutright ? 'outrights' : 'h2h,spreads,totals';
+        const res = await fetch('/api/odds?sport=' + sp.key + '&regions=' + sp.region + '&markets=' + sportMarkets);
         if (res.status === 401) { setError('Invalid API key.'); break; }
         if (res.status === 429) { setError('API quota reached. Try again later.'); break; }
-        if (!res.ok) continue;
+        if (!res.ok) {
+          lastFailStatus = res.status;
+          try { lastFailBody = await res.text(); } catch { lastFailBody = ''; }
+          console.warn('Odds fetch failed for', sp.key, res.status, lastFailBody);
+          continue;
+        }
+        okCount++;
         const json = await res.json();
 const data = json.data || json;
 if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests, keyIndex: json.keyIndex || 1 });
 data.forEach(e => { e.sport_key = sp.key; });
 all.push(...data);
 if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map(b=>b.key)).filter((v,i,a)=>a.indexOf(v)===i).join(', '));
-      } catch { /* sport offline */ }
+      } catch (err) { console.warn('Sport fetch threw for', sp.key, err); }
+    }
+    if (sportsToScan.length > 0 && okCount === 0) {
+      setError('Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. Showing demo data below.');
     }
     const found = findArbs(all);
     const foundEV = findEVBets(all, minEV);
@@ -547,7 +565,7 @@ return a.margin >= minMargin;
       ),
       error && e('div', { style: { background: '#fef3c7', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 } }, error),
         quota.remaining !== null && e('div', { style: { background: parseInt(quota.remaining) < 50 ? '#fef3c7' : '#f0fdf4', color: parseInt(quota.remaining) < 50 ? '#92400e' : '#14532d', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10, display: 'flex', justifyContent: 'space-between' } }, e('span', null, 'Key ' + (quota.keyIndex || 1) + ' | Used: ' + quota.used), e('span', { style: { fontWeight: 700 } }, quota.remaining + ' remaining')),
-      isDemo && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
+      isDemo && !error && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
         apiKey
           ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 5 min.'
           : '📌 Demo mode — tap Connect Live to scan real odds across ' + ALL_SPORTS.length + ' sports. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'
