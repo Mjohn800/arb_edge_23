@@ -393,6 +393,7 @@ const [analyzingId, setAnalyzingId] = useState(null);
     for (let i = 0; i < sportsToScan.length; i++) {
       const sp = sportsToScan[i];
       setScanProgress({ current: i + 1, total: sportsToScan.length, sport: sp.label });
+      await new Promise(r => setTimeout(r, 1000));
       try {
         // Outright/futures sport keys (e.g. '..._winner') ONLY accept markets=outrights.
         // Regular match-based sports ONLY accept h2h/spreads/totals. Mixing the two in
@@ -436,11 +437,14 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
   };
 
   useEffect(() => {
-   fetchOdds(apiKey || 'server');
-    const id = setInterval(() => { if (apiKey) fetchOdds(apiKey); }, 5 * 60 * 1000);
-    return () => clearInterval(id);
-  }, [apiKey, fetchOdds]);
-
+  const now = new Date();
+  if (!lastFetch || (now - new Date(lastFetch)) > 5 * 60 * 1000) {
+    fetchOdds(apiKey || 'server');
+  }
+  const id = setInterval(() => { if (apiKey) fetchOdds(apiKey); }, 5 * 60 * 1000);
+  return () => clearInterval(id);
+}, [apiKey, fetchOdds]);
+  
   useEffect(() => { try { localStorage.setItem('arb_bets', JSON.stringify(bets)); } catch {} }, [bets]);
 
   const logBet = (outcomes, matchName, sport, profitAmt) => {
