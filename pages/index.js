@@ -409,7 +409,7 @@ const [analyzingId, setAnalyzingId] = useState(null);
         // the ENTIRE request — which is why every sport was coming back empty.
         const isOutright = sp.key.endsWith('_winner');
         const sportMarkets = isOutright ? 'outrights' : 'h2h,spreads,totals';
-        const res = await fetch('/api/odds?sport=' + sp.key + '&regions=' + sp.region + '&markets=' + sportMarkets);
+        const res = await fetch('/api/odds?sport=' + sp.key + '&region=' + sp.region + '&market=' + sportMarkets);
         if (res.status === 401) { setError('Invalid API key.'); break; }
         if (res.status === 429) { setError('API quota reached. Try again later.'); break; }
         if (!res.ok) {
