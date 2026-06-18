@@ -859,37 +859,22 @@ return a.margin >= minMargin;
         e('button', {
           onClick: async () => {
             setAnalyzerLoading(true);
-            const sportsToLoad = ALL_SPORTS.filter(s => {
-              if (analyzerSportFilter === 'all') return selectedSports.includes(s.key);
-              const g = SPORT_GROUPS.find(g => g.group === analyzerSportFilter);
-              return g && g.sports.some(sp => sp.key === s.key) && selectedSports.includes(s.key);
-            });
-            const all = [];
-            for (const sp of sportsToLoad) {
-              try {
-                const isOutright = sp.key.endsWith('_winner');
-                if (isOutright) continue;
-                const res = await fetch('/api/odds?sport=' + sp.key + '&regions=' + sp.region + '&markets=h2h');
-                if (!res.ok) continue;
+            try {
+              const sportsParam = ALL_SPORTS.filter(s => {
+                if (analyzerSportFilter === 'all') return true;
+                const g = SPORT_GROUPS.find(g => g.group === analyzerSportFilter);
+                return g && g.sports.some(sp => sp.key === s.key);
+              }).map(s => s.key).join(',');
+              const res = await fetch('/api/fixtures?sports=' + sportsParam);
+              if (res.ok) {
                 const json = await res.json();
-                const data = json.data || json;
-                data.forEach(ev => { ev.sport_key = sp.key; });
-                all.push(...data);
-              } catch {}
+                setAnalyzerGames(json.fixtures || []);
+              } else {
+                setAnalyzerGames([]);
+              }
+            } catch (err) {
+              setAnalyzerGames([]);
             }
-            const games = all
-              .filter(ev => ev.bookmakers && ev.bookmakers.length > 0)
-              .map(ev => ({
-                id: ev.id,
-                sport: ev.sport_key,
-                match: ev.home_team + ' vs ' + ev.away_team,
-                commenceTime: ev.commence_time,
-                homeTeam: ev.home_team,
-                awayTeam: ev.away_team,
-                bookmakers: ev.bookmakers,
-              }))
-              .sort((a, b) => new Date(a.commenceTime) - new Date(b.commenceTime));
-            setAnalyzerGames(games);
             setAnalyzerLoaded(true);
             setAnalyzerLoading(false);
           },
@@ -921,34 +906,30 @@ return a.margin >= minMargin;
           return e('div', { key: game.id, style: { background: C.white, borderRadius: 12, padding: '13px 14px', marginBottom: 10, border: '1px solid ' + C.border } },
             e('div', { style: st.cardRow },
               e('div', null,
-                e('div', { style: st.sportLabel }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(game.commenceTime)),
-                e('div', { style: st.matchTitle }, game.match)
+                e('div', { style: st.sportLabel }, info.emoji + ' ' + (game.league || info.label) + ' · ⏱ ' + timeUntil(game.commenceTime)),
+                e('div', { style: st.matchTitle }, game.match),
+                game.venue && e('div', { style: { fontSize: 11, color: C.muted, marginTop: 2 } }, '📍 ' + game.venue)
               ),
               e('button', {
                 onClick: async () => {
                   if (analyzingGameId === game.id) return;
                   setAnalyzingGameId(game.id);
                   try {
-                    const bestOdds = {};
-                    for (const bm of game.bookmakers) {
-                      for (const mkt of (bm.markets || [])) {
-                        if (mkt.key !== 'h2h') continue;
-                        for (const o of mkt.outcomes) {
-                          if (!bestOdds[o.name] || o.price > bestOdds[o.name].odds)
-                            bestOdds[o.name] = { label: o.name, odds: o.price, bookName: bm.title, book: bm.key };
-                        }
-                      }
-                    }
-                    const outcomes = Object.values(bestOdds);
+                    const outcomes = [
+                      { label: game.homeTeam, odds: 0, bookName: 'Check bookmakers' },
+                      { label: 'Draw', odds: 0, bookName: 'Check bookmakers' },
+                      { label: game.awayTeam, odds: 0, bookName: 'Check bookmakers' },
+                    ];
                     const res = await fetch('/api/analyze', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
                         match: game.match,
-                        sport: info.label,
+                        sport: game.league || getSportInfo(game.sport).label,
                         outcomes,
                         margin: 0,
                         marketType: 'Match Winner',
+                        venue: game.venue || '',
                         includeNews: true,
                       })
                     });
@@ -1009,6 +990,14 @@ return a.margin >= minMargin;
                           e('div', { style: { fontSize: 11, color: C.muted } }, bet.reasoning)
                         )
                       )
+                    ),
+                    analysis.playerNews && e('div', { style: { background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 10px', marginBottom: 8, fontSize: 12 } },
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: '#dc2626', marginBottom: 4 } }, '🚑 PLAYER NEWS & INJURIES'),
+                      e('div', { style: { color: C.text, lineHeight: 1.5 } }, analysis.playerNews)
+                    ),
+                    analysis.keyInsight && e('div', { style: { background: C.blueLight, border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 10px', marginBottom: 8, fontSize: 12 } },
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.blue, marginBottom: 4 } }, '🔑 KEY INSIGHT'),
+                      e('div', { style: { color: C.text, lineHeight: 1.5 } }, analysis.keyInsight)
                     ),
                     analysis.tip && e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '8px 10px', fontSize: 11, color: '#78350f' } },
                       e('div', { style: { fontWeight: 700, marginBottom: 2 } }, '💬 ' + analysis.tip),
