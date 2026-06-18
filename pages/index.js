@@ -380,7 +380,15 @@ useEffect(() => {
   const [minEV, setMinEV] = useState(2);
   const [evStake, setEvStake] = useState(500);
   const [evFilter, setEvFilter] = useState('all');
+  const [analyzerGames, setAnalyzerGames] = useState([]);
+  const [analyzerLoading, setAnalyzerLoading] = useState(false);
+  const [analyzerSportFilter, setAnalyzerSportFilter] = useState('all');
+  const [gameAnalyses, setGameAnalyses] = useState({});
+  const [analyzingGameId, setAnalyzingGameId] = useState(null);
+  const [analyzerLoaded, setAnalyzerLoaded] = useState(false);
   const [quota, setQuota] = useState({ remaining: null, used: null, keyIndex: 1 });
+  const [nextScanAt, setNextScanAt] = useState(null);
+  const [countdown, setCountdown] = useState(0);
   const [cardAnalysis, setCardAnalysis] = useState({});
 const [analyzingId, setAnalyzingId] = useState(null);
 
@@ -429,6 +437,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
     else { setEvBets(MOCK_EV); setIsDemoEV(true); }
     setLoading(false);
+    setNextScanAt(Date.now() + 5 * 60 * 1000);
   }, [selectedSports, minEV]);
 
   const saveKey = () => {
@@ -446,6 +455,16 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
 }, [apiKey, fetchOdds]);
   
   useEffect(() => { try { localStorage.setItem('arb_bets', JSON.stringify(bets)); } catch {} }, [bets]);
+
+  useEffect(() => {
+    const tick = setInterval(() => {
+      if (nextScanAt) {
+        const secs = Math.max(0, Math.round((nextScanAt - Date.now()) / 1000));
+        setCountdown(secs);
+      }
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [nextScanAt]);
 
   const logBet = (outcomes, matchName, sport, profitAmt) => {
     const c = calcStakes(outcomes, stake);
@@ -521,13 +540,18 @@ return a.margin >= minMargin;
       )
     ),
     e('div', { style: st.tabs },
-      [['scanner','🔍 Scanner'], ['calculator','🧮 Calculator'], ['manual','✏️ Manual Arb'], ['ev','📈 +EV Bets'], ['tracker','📒 Bets (' + bets.length + ')'], ['guide','📚 Guide']].map(([k, l]) =>
+      [['scanner','🔍 Scanner'], ['calculator','🧮 Calculator'], ['manual','✏️ Manual Arb'], ['ev','📈 +EV Bets'], ['analyzer','🧠 Bet Analyzer'], ['tracker','📒 Bets (' + bets.length + ')'], ['guide','📚 Guide']].map(([k, l]) =>
         e('button', { key: k, style: st.tab(tab === k), onClick: () => setTab(k) }, l)
       )
     ),
     tab === 'scanner' && e('div', { style: st.section },
       e('div', { style: st.metricsGrid },
-        [['Arbs', filteredArbs.length, null], ['Best', filteredArbs[0] ? filteredArbs[0].margin.toFixed(1) + '%' : '—', C.green], ['Sports', selectedSports.length, null], ['Mode', isDemo ? 'Demo' : 'Live', isDemo ? C.amber : C.green]].map(([l, v, c]) =>
+        [
+          ['Arbs', filteredArbs.length, null],
+          ['Best', filteredArbs[0] ? filteredArbs[0].margin.toFixed(1) + '%' : '—', C.green],
+          ['Sports', selectedSports.length, null],
+          ['Next Scan', loading ? '...' : (nextScanAt && !loading ? (countdown > 0 ? Math.floor(countdown / 60) + ':' + String(countdown % 60).padStart(2, '0') : '0:00') : '—'), loading ? C.muted : countdown < 30 && countdown > 0 && !loading ? C.amber : C.text]
+        ].map(([l, v, c]) =>
           e('div', { key: l, style: st.metric }, e('div', { style: st.metricLabel }, l), e('div', { style: st.metricVal(c) }, v))
         )
       ),
@@ -653,9 +677,8 @@ return a.margin >= minMargin;
                 )
           )
         );
-      }),
-                ),
-          
+      })
+    ),
     tab === 'calculator' && e('div', { style: st.section },
       !sel ? e('div', { style: { textAlign: 'center', padding: '40px 0' } },
         e('div', { style: { fontSize: 36, marginBottom: 10 } }, '📊'),
@@ -823,6 +846,178 @@ return a.margin >= minMargin;
           )
         );
       })
+    ),
+    tab === 'analyzer' && e('div', { style: st.section },
+      e('div', { style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1e3a8a', lineHeight: 1.6 } },
+        '🧠 Select any upcoming game from your scanned sports and get a deep AI analysis — form, H2H, goals stats, player availability, news, and a betting prediction.'
+      ),
+      e('div', { style: { display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' } },
+        e('select', { value: analyzerSportFilter, onChange: ev => setAnalyzerSportFilter(ev.target.value), style: { ...st.input, width: 'auto', fontSize: 12, padding: '6px 10px' } },
+          e('option', { value: 'all' }, 'All sports'),
+          SPORT_GROUPS.map(g => e('option', { key: g.group, value: g.group }, g.group))
+        ),
+        e('button', {
+          onClick: async () => {
+            setAnalyzerLoading(true);
+            const sportsToLoad = ALL_SPORTS.filter(s => {
+              if (analyzerSportFilter === 'all') return selectedSports.includes(s.key);
+              const g = SPORT_GROUPS.find(g => g.group === analyzerSportFilter);
+              return g && g.sports.some(sp => sp.key === s.key) && selectedSports.includes(s.key);
+            });
+            const all = [];
+            for (const sp of sportsToLoad) {
+              try {
+                const isOutright = sp.key.endsWith('_winner');
+                if (isOutright) continue;
+                const res = await fetch('/api/odds?sport=' + sp.key + '&regions=' + sp.region + '&markets=h2h');
+                if (!res.ok) continue;
+                const json = await res.json();
+                const data = json.data || json;
+                data.forEach(ev => { ev.sport_key = sp.key; });
+                all.push(...data);
+              } catch {}
+            }
+            const games = all
+              .filter(ev => ev.bookmakers && ev.bookmakers.length > 0)
+              .map(ev => ({
+                id: ev.id,
+                sport: ev.sport_key,
+                match: ev.home_team + ' vs ' + ev.away_team,
+                commenceTime: ev.commence_time,
+                homeTeam: ev.home_team,
+                awayTeam: ev.away_team,
+                bookmakers: ev.bookmakers,
+              }))
+              .sort((a, b) => new Date(a.commenceTime) - new Date(b.commenceTime));
+            setAnalyzerGames(games);
+            setAnalyzerLoaded(true);
+            setAnalyzerLoading(false);
+          },
+          disabled: analyzerLoading,
+          style: { ...st.btn('primary'), fontSize: 12 }
+        }, analyzerLoading ? '⟳ Loading...' : '🔍 Load Games')
+      ),
+      !analyzerLoaded && !analyzerLoading && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
+        e('div', { style: { fontSize: 36, marginBottom: 8 } }, '🧠'),
+        e('div', { style: { fontSize: 14, fontWeight: 600, marginBottom: 4 } }, 'Bet Analyzer'),
+        e('div', { style: { fontSize: 13 } }, 'Tap Load Games to fetch upcoming matches from your selected sports.')
+      ),
+      analyzerLoading && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
+        e('div', { style: { fontSize: 36, marginBottom: 8 } }, '⟳'),
+        e('div', { style: { fontSize: 14 } }, 'Loading games...')
+      ),
+      analyzerLoaded && analyzerGames.length === 0 && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
+        e('div', { style: { fontSize: 14 } }, 'No upcoming games found. Try selecting more sports or check your API key.')
+      ),
+      analyzerGames
+        .filter(g => {
+          if (analyzerSportFilter === 'all') return true;
+          const grp = SPORT_GROUPS.find(g2 => g2.group === analyzerSportFilter);
+          return grp && grp.sports.some(s => s.key === g.sport);
+        })
+        .map(game => {
+          const info = getSportInfo(game.sport);
+          const analysis = gameAnalyses[game.id];
+          return e('div', { key: game.id, style: { background: C.white, borderRadius: 12, padding: '13px 14px', marginBottom: 10, border: '1px solid ' + C.border } },
+            e('div', { style: st.cardRow },
+              e('div', null,
+                e('div', { style: st.sportLabel }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(game.commenceTime)),
+                e('div', { style: st.matchTitle }, game.match)
+              ),
+              e('button', {
+                onClick: async () => {
+                  if (analyzingGameId === game.id) return;
+                  setAnalyzingGameId(game.id);
+                  try {
+                    const bestOdds = {};
+                    for (const bm of game.bookmakers) {
+                      for (const mkt of (bm.markets || [])) {
+                        if (mkt.key !== 'h2h') continue;
+                        for (const o of mkt.outcomes) {
+                          if (!bestOdds[o.name] || o.price > bestOdds[o.name].odds)
+                            bestOdds[o.name] = { label: o.name, odds: o.price, bookName: bm.title, book: bm.key };
+                        }
+                      }
+                    }
+                    const outcomes = Object.values(bestOdds);
+                    const res = await fetch('/api/analyze', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        match: game.match,
+                        sport: info.label,
+                        outcomes,
+                        margin: 0,
+                        marketType: 'Match Winner',
+                        includeNews: true,
+                      })
+                    });
+                    const data = await res.json();
+                    setGameAnalyses(p => ({ ...p, [game.id]: data }));
+                  } catch (err) {
+                    setGameAnalyses(p => ({ ...p, [game.id]: { error: 'Analysis failed: ' + err.message } }));
+                  }
+                  setAnalyzingGameId(null);
+                },
+                disabled: analyzingGameId === game.id,
+                style: { ...st.btn('primary'), fontSize: 12, padding: '7px 12px' }
+              }, analyzingGameId === game.id ? '⟳ Analyzing...' : '🧠 Analyze')
+            ),
+            analysis && e('div', { style: { marginTop: 10 } },
+              analysis.error
+                ? e('div', { style: { color: '#dc2626', fontSize: 12 } }, '⚠️ ' + analysis.error)
+                : e('div', { style: { background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 14px', fontSize: 12 } },
+                    e('div', { style: { fontWeight: 700, fontSize: 13, color: C.greenDark, marginBottom: 10 } }, '🤖 AI Analysis — ' + game.match),
+                    e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 } },
+                      e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Predicted'), e('div', { style: { fontWeight: 700, color: C.text } }, analysis.predictedOutcome || '—')),
+                      e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Confidence'), e('div', { style: { fontWeight: 700, color: C.blue } }, (analysis.confidence || '—') + '%')),
+                      e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Risk'), e('div', { style: { fontWeight: 700, color: C.amber } }, analysis.riskLevel || '—')),
+                      e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Best Value'), e('div', { style: { fontWeight: 700, color: C.green } }, analysis.valueLeg || '—'))
+                    ),
+                    analysis.form && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8 } },
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '📊 RECENT FORM'),
+                      e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 4 } },
+                        e('span', { style: { fontSize: 11, color: C.muted } }, game.homeTeam + ':'),
+                        e('span', { style: { fontWeight: 700, letterSpacing: 2 } }, analysis.form.home)
+                      ),
+                      e('div', { style: { display: 'flex', justifyContent: 'space-between' } },
+                        e('span', { style: { fontSize: 11, color: C.muted } }, game.awayTeam + ':'),
+                        e('span', { style: { fontWeight: 700, letterSpacing: 2 } }, analysis.form.away)
+                      )
+                    ),
+                    analysis.goalsAvg && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8 } },
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '⚽ GOALS STATS (per 90)'),
+                      e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 } },
+                        e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Home scored'), e('div', { style: { fontWeight: 700, color: C.green } }, analysis.goalsAvg.homeScoredPer90)),
+                        e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Home conceded'), e('div', { style: { fontWeight: 700, color: '#dc2626' } }, analysis.goalsAvg.homeConceededPer90)),
+                        e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Away scored'), e('div', { style: { fontWeight: 700, color: C.green } }, analysis.goalsAvg.awayScoredPer90)),
+                        e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Away conceded'), e('div', { style: { fontWeight: 700, color: '#dc2626' } }, analysis.goalsAvg.awayConceededPer90))
+                      )
+                    ),
+                    analysis.h2h && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8, fontSize: 12, color: C.text } },
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, '🔁 HEAD TO HEAD'),
+                      e('div', null, analysis.h2h)
+                    ),
+                    analysis.additionalBets && e('div', { style: { marginBottom: 8 } },
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '💡 ADDITIONAL MARKETS'),
+                      analysis.additionalBets.map((bet, i) =>
+                        e('div', { key: i, style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 6 } },
+                          e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 3 } },
+                            e('span', { style: { fontWeight: 700, color: C.text } }, bet.market),
+                            e('span', { style: { background: C.greenLight, color: C.greenDark, fontWeight: 700, fontSize: 11, padding: '2px 8px', borderRadius: 12 } }, bet.recommendation + ' · ' + bet.confidence + '%')
+                          ),
+                          e('div', { style: { fontSize: 11, color: C.muted } }, bet.reasoning)
+                        )
+                      )
+                    ),
+                    analysis.tip && e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '8px 10px', fontSize: 11, color: '#78350f' } },
+                      e('div', { style: { fontWeight: 700, marginBottom: 2 } }, '💬 ' + analysis.tip),
+                      analysis.reasoning && e('div', null, analysis.reasoning)
+                    )
+                  )
+            )
+          );
+        })
     ),
     tab === 'tracker' && e('div', { style: st.section },
       e('div', { style: st.metricsGrid },
