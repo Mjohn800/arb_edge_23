@@ -579,6 +579,7 @@ return a.margin >= minMargin;
         e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 10 } },
           e('span', { style: { fontSize: 13, fontWeight: 600 } }, 'Select sports to scan'),
           e('div', { style: { display: 'flex', gap: 6 } },
+            e('button', { onClick: () => setSelectedSports(TOP_SPORTS), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 8px' } }, 'Default'),
             e('button', { onClick: () => setSelectedSports(ALL_SPORTS.map(s => s.key)), style: { ...st.btn('success'), fontSize: 11, padding: '4px 8px' } }, 'All'),
             e('button', { onClick: () => setSelectedSports([]), style: { ...st.btn('danger'), fontSize: 11, padding: '4px 8px' } }, 'None')
           )
