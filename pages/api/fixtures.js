@@ -108,21 +108,27 @@ export default async function handler(req, res) {
     upcoming.forEach(f => results.push({ ...f, sport: 'soccer_fifa_world_cup' }));
   }
 
-  // Fetch other sports from TheSportsDB
+  // Fetch other sports from TheSportsDB — in parallel, each with its own timeout,
+  // so one slow/unresponsive league can't block the others or blow the function's
+  // time budget (sequential awaits here previously risked killing the entire
+  // response, World Cup fixtures included, on a slow scan).
   const leaguesToFetch = sportKeys
     .filter(k => k !== 'soccer_fifa_world_cup' && LEAGUE_IDS[k])
     .map(k => ({ key: k, id: LEAGUE_IDS[k] }));
 
-  for (const { key, id } of leaguesToFetch) {
+  const fetchLeague = async ({ key, id }) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     try {
-      const r = await fetch(`${BASE}/eventsnextleague.php?id=${id}`);
-      if (!r.ok) continue;
+      const r = await fetch(`${BASE}/eventsnextleague.php?id=${id}`, { signal: controller.signal });
+      if (!r.ok) return [];
       const data = await r.json();
       const events = data.events || [];
+      const out = [];
       for (const ev of events) {
         const eventDate = new Date(ev.strTimestamp || ev.dateEvent);
         if (eventDate < now) continue;
-        results.push({
+        out.push({
           id: ev.idEvent,
           sport: key,
           league: ev.strLeague,
@@ -133,10 +139,17 @@ export default async function handler(req, res) {
           venue: ev.strVenue || '',
         });
       }
+      return out;
     } catch (err) {
       console.warn('SportsDB fetch failed for', key, err.message);
+      return [];
+    } finally {
+      clearTimeout(timeout);
     }
-  }
+  };
+
+  const leagueResults = await Promise.all(leaguesToFetch.map(fetchLeague));
+  leagueResults.forEach(events => results.push(...events));
 
   // Sort by date
   results.sort((a, b) => new Date(a.commenceTime) - new Date(b.commenceTime));
