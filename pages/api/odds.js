@@ -12,6 +12,7 @@ export default async function handler(req, res) {
   console.log('[odds] requesting sport:', sport, 'region:', region, 'markets:', markets);
 
   let lastError = null;
+  let lastErrorDetail = null;
 
   for (const key of keys) {
     const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${key}&regions=${region}&markets=${markets}&oddsFormat=decimal`;
@@ -26,6 +27,7 @@ export default async function handler(req, res) {
         let body = null;
         try { body = await response.json(); } catch {}
         lastError = (body && (body.message || body.error_code)) || `key error (${response.status})`;
+        lastErrorDetail = body;
         console.log(`[odds] key ${keys.indexOf(key)+1} error body:`, lastError);
         continue;
       }
@@ -34,6 +36,7 @@ export default async function handler(req, res) {
         try { body = await response.json(); } catch {}
         console.log(`[odds] key ${keys.indexOf(key)+1} status ${response.status} body:`, JSON.stringify(body));
         lastError = response.status;
+        lastErrorDetail = body;
         continue;
       }
       const data = await response.json();
@@ -46,6 +49,10 @@ export default async function handler(req, res) {
     }
   }
 
-  console.log('[odds] all keys failed, lastError:', lastError);
-  res.status(429).json({ error: 'All API keys exhausted. ' + lastError });
+  console.log('[odds] all keys failed, lastError:', lastError, 'detail:', JSON.stringify(lastErrorDetail));
+  res.status(429).json({
+    error: 'All API keys exhausted. ' + lastError,
+    detail: lastErrorDetail,
+    sport, region, markets,
+  });
 }
