@@ -17,6 +17,7 @@ const MSPORT_SPORT_MAP = {
   soccer_france_ligue_one:      { sportId: 1, leagueId: '61'   },
   soccer_ghana_premiership:     { sportId: 1, leagueId: '288'  },
   soccer_africa_cup_of_nations: { sportId: 1, leagueId: '6'    },
+  soccer_fifa_world_cup:        { sportId: 1, leagueId: '1'    },
   basketball_nba:               { sportId: 2, leagueId: '12'   },
   tennis_atp_wimbledon:         { sportId: 5, leagueId: '3'    },
   mma_mixed_martial_arts:       { sportId: 30, leagueId: null  },
