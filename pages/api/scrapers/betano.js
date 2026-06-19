@@ -17,6 +17,7 @@ const BETANO_SPORT_MAP = {
   soccer_france_ligue_one:      { sportId: 4, leagueId: 9 },
   soccer_ghana_premiership:     { sportId: 4, leagueId: 557 },
   soccer_africa_cup_of_nations: { sportId: 4, leagueId: 422 },
+  soccer_fifa_world_cup:        { sportId: 4, leagueId: 1    },
   basketball_nba:               { sportId: 2, leagueId: 132 },
   tennis_atp_wimbledon:         { sportId: 5, leagueId: 270 },
   mma_mixed_martial_arts:       { sportId: 23, leagueId: null },
