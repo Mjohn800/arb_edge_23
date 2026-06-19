@@ -1317,4 +1317,227 @@ return a.margin >= minMargin;
 
       // By book
       const byBook = {};
-      bets.forEach(b => (b.outcomes || []).forEach(o => { const bk = o.bookName || o.book || 'Unknown'; if (!byBook[bk]) byBook[bk] = { staked
+      bets.forEach(b => (b.outcomes || []).forEach(o => { const bk = o.bookName || o.book || 'Unknown'; if (!byBook[bk]) byBook[bk] = { staked: 0, profit: 0, count: 0 }; byBook[bk].count++; }));
+
+      // By type
+      const byType = { arb: { count: 0, profit: 0, staked: 0 }, ev: { count: 0, profit: 0, staked: 0 }, manual: { count: 0, profit: 0, staked: 0 } };
+      bets.forEach(b => { const t = b.type || 'arb'; if (!byType[t]) byType[t] = { count: 0, profit: 0, staked: 0 }; byType[t].count++; byType[t].staked += b.stake; if (b.status === 'won') byType[t].profit += b.profit; if (b.status === 'lost') byType[t].profit -= b.stake; });
+
+      // CLV helper
+      const clvBet = (bet) => {
+        const closing = parseFloat(clvInputs[bet.id]);
+        if (!closing || !bet.placedOdds) return null;
+        return ((bet.placedOdds / closing - 1) * 100).toFixed(1);
+      };
+
+      // Bankroll curve (cumulative)
+      const curve = [bankroll];
+      [...bets].reverse().forEach(b => { const last = curve[curve.length - 1]; if (b.status === 'won') curve.push(last + b.profit); else if (b.status === 'lost') curve.push(last - b.stake); else curve.push(last); });
+
+      // CSV export
+      const exportCSV = () => {
+        const rows = [['Date','Match','Sport','Type','Stake','Currency','Status','Profit/Loss','ROI%','CLV']];
+        bets.forEach(b => { const clv = clvBet(b); rows.push([new Date(b.date).toLocaleDateString(), b.match, getSportInfo(b.sport).label, b.type || 'arb', b.stake, b.currency, b.status, b.status === 'won' ? b.profit : b.status === 'lost' ? -b.stake : '', b.stake > 0 ? ((( b.status === 'won' ? b.profit : b.status === 'lost' ? -b.stake : 0) / b.stake)*100).toFixed(1) : '', clv !== null ? clv + '%' : '']); });
+        const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'arbredge_bets.csv'; a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      return e('div', null,
+        // Header with view toggle + export
+        e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 } },
+          e('div', { style: { display: 'flex', gap: 6 } },
+            e('button', { onClick: () => setTrackerView('bets'), style: { ...st.btn(trackerView === 'bets' ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, '📋 Bets'),
+            e('button', { onClick: () => setTrackerView('dashboard'), style: { ...st.btn(trackerView === 'dashboard' ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, '📊 Dashboard')
+          ),
+          e('div', { style: { display: 'flex', gap: 6 } },
+            bets.length > 0 && e('button', { onClick: exportCSV, style: { ...st.btn('outline'), fontSize: 11, padding: '5px 10px' } }, '⬇ CSV'),
+            e('button', { onClick: () => setBets([]), style: { ...st.btn('danger'), fontSize: 11, padding: '5px 10px' } }, 'Clear')
+          )
+        ),
+
+        // Summary metrics — always visible
+        e('div', { style: st.metricsGrid },
+          [
+            ['Bets', bets.length, null],
+            ['P&L', (bets[0] ? bets[0].currency : currency) + ' ' + realProfit.toFixed(2), realProfit >= 0 ? C.green : '#dc2626'],
+            ['ROI', roi + '%', parseFloat(roi) >= 0 ? C.green : '#dc2626'],
+            ['Win rate', winRate + (winRate !== '—' ? '%' : ''), null],
+          ].map(([l, v, c]) => e('div', { key: l, style: st.metric }, e('div', { style: st.metricLabel }, l), e('div', { style: st.metricVal(c) }, v)))
+        ),
+
+        // ── DASHBOARD VIEW ──
+        trackerView === 'dashboard' && bets.length === 0 && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
+          e('div', { style: { fontSize: 36, marginBottom: 8 } }, '📊'),
+          e('div', { style: { fontSize: 14 } }, 'Log some bets first to see your analytics.')
+        ),
+
+        trackerView === 'dashboard' && bets.length > 0 && e('div', null,
+
+          // Bankroll setting
+          e('div', { style: { background: C.grayLight, borderRadius: 10, padding: '10px 14px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 } },
+            e('span', { style: { fontSize: 13, color: C.muted, flexShrink: 0 } }, 'Starting bankroll:'),
+            e('input', { type: 'number', value: bankroll, min: 1, step: 50, onChange: ev => setBankroll(Math.max(1, parseFloat(ev.target.value) || 500)), style: { ...st.input, width: 110 } }),
+            e('span', { style: { fontSize: 13, fontWeight: 700, color: realProfit >= 0 ? C.green : '#dc2626' } }, '→ ' + currency + ' ' + (bankroll + realProfit).toFixed(2))
+          ),
+
+          // Streak + top sport highlights
+          e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 } },
+            e('div', { style: { background: C.grayLight, borderRadius: 10, padding: '10px 12px' } },
+              e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 4 } }, 'Current streak'),
+              e('div', { style: { fontSize: 15, fontWeight: 700 } }, streakLabel)
+            ),
+            e('div', { style: { background: C.grayLight, borderRadius: 10, padding: '10px 12px' } },
+              e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 4 } }, 'Best sport'),
+              e('div', { style: { fontSize: 13, fontWeight: 700, color: topSport ? (topSport[1].profit >= 0 ? C.green : '#dc2626') : C.muted } },
+                topSport ? getSportInfo(topSport[0]).emoji + ' ' + getSportInfo(topSport[0]).label + ' (' + currency + ' ' + topSport[1].profit.toFixed(2) + ')' : '—')
+            )
+          ),
+
+          // Bankroll curve (mini SVG)
+          e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 8 } }, '📈 Bankroll curve'),
+            (() => {
+              if (curve.length < 2) return e('div', { style: { color: C.muted, fontSize: 12 } }, 'Not enough settled bets yet.');
+              const W = 300, H = 80;
+              const min = Math.min(...curve), max = Math.max(...curve);
+              const range = max - min || 1;
+              const pts = curve.map((v, i) => [(i / (curve.length - 1)) * W, H - ((v - min) / range) * (H - 8)]);
+              const d = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+              const color = curve[curve.length - 1] >= curve[0] ? C.green : '#dc2626';
+              return e('svg', { viewBox: '0 0 ' + W + ' ' + H, style: { width: '100%', height: H } },
+                e('polyline', { points: pts.map(p => p.join(',')).join(' '), fill: 'none', stroke: color, strokeWidth: 2 }),
+                e('circle', { cx: pts[pts.length-1][0], cy: pts[pts.length-1][1], r: 4, fill: color })
+              );
+            })()
+          ),
+
+          // By bet type
+          e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, '🎯 By bet type'),
+            Object.entries(byType).filter(([, v]) => v.count > 0).map(([type, v]) =>
+              e('div', { key: type, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
+                e('div', null,
+                  e('div', { style: { fontSize: 13, fontWeight: 600 } }, type === 'ev' ? '📈 +EV' : type === 'arb' ? '⚡ Arb' : '✏️ Manual'),
+                  e('div', { style: { fontSize: 11, color: C.muted } }, v.count + ' bets · ' + currency + ' ' + v.staked.toFixed(2) + ' staked')
+                ),
+                e('div', { style: { fontSize: 14, fontWeight: 700, color: v.profit >= 0 ? C.green : '#dc2626', textAlign: 'right' } },
+                  (v.profit >= 0 ? '+' : '') + currency + ' ' + v.profit.toFixed(2),
+                  e('div', { style: { fontSize: 11, color: C.muted } }, v.staked > 0 ? ((v.profit/v.staked)*100).toFixed(1) + '% ROI' : '')
+                )
+              )
+            )
+          ),
+
+          // By sport
+          e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, '🌍 By sport'),
+            Object.entries(bySport).sort((a, b) => b[1].profit - a[1].profit).map(([sport, v]) => {
+              const info = getSportInfo(sport);
+              const pct = Math.abs(v.profit) / Math.max(Math.abs(Math.min(...Object.values(bySport).map(x=>x.profit))), Math.max(...Object.values(bySport).map(x=>x.profit)), 1);
+              return e('div', { key: sport, style: { marginBottom: 10 } },
+                e('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 } },
+                  e('span', null, info.emoji + ' ' + info.label + ' (' + v.count + ')'),
+                  e('span', { style: { fontWeight: 700, color: v.profit >= 0 ? C.green : '#dc2626' } }, (v.profit >= 0 ? '+' : '') + currency + ' ' + v.profit.toFixed(2))
+                ),
+                e('div', { style: { height: 6, background: C.grayLight, borderRadius: 3, overflow: 'hidden' } },
+                  e('div', { style: { height: '100%', width: (pct * 100).toFixed(0) + '%', background: v.profit >= 0 ? C.green : '#dc2626', borderRadius: 3 } })
+                )
+              );
+            })
+          )
+        ),
+
+        // ── BETS LIST VIEW ──
+        trackerView === 'bets' && bets.length === 0 &&
+          e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
+            e('div', { style: { fontSize: 36, marginBottom: 8 } }, '📒'),
+            e('div', { style: { fontSize: 14 } }, 'No bets logged yet. Hit "Log Bet" on any arb or +EV card.')
+          ),
+
+        trackerView === 'bets' && bets.map(bet => {
+          const clv = clvBet(bet);
+          return e('div', { key: bet.id, style: { ...st.card(false), cursor: 'default', marginBottom: 10 } },
+            e('div', { style: st.cardRow },
+              e('div', { style: { flex: 1, minWidth: 0 } },
+                e('div', { style: { display: 'flex', gap: 5, marginBottom: 3, flexWrap: 'wrap' } },
+                  e('span', { style: st.sportLabel }, getSportInfo(bet.sport).emoji + ' ' + getSportInfo(bet.sport).label),
+                  e('span', { style: { fontSize: 11, color: C.muted } }, '· ' + new Date(bet.date).toLocaleDateString()),
+                  e('span', { style: { fontSize: 11, fontWeight: 600, color: bet.type === 'ev' ? C.blue : bet.type === 'manual' ? C.purple : C.green, background: bet.type === 'ev' ? '#eff6ff' : bet.type === 'manual' ? C.purpleLight : C.greenLight, padding: '1px 6px', borderRadius: 10 } }, bet.type === 'ev' ? '+EV' : bet.type === 'manual' ? 'Manual' : 'Arb')
+                ),
+                e('div', { style: st.matchTitle }, bet.match)
+              ),
+              e('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 } },
+                e('select', { value: bet.status, onChange: ev => setBets(p => p.map(b => b.id === bet.id ? { ...b, status: ev.target.value } : b)), style: { fontSize: 11, padding: '3px 6px', borderRadius: 6, border: '1px solid ' + C.border, background: C.white } },
+                  e('option', { value: 'pending' }, '⏳ Pending'), e('option', { value: 'won' }, '✅ Won'), e('option', { value: 'lost' }, '❌ Lost')
+                ),
+                e('button', { onClick: () => setBets(p => p.filter(b => b.id !== bet.id)), style: { ...st.btn('danger'), padding: '3px 8px', fontSize: 11 } }, '✕')
+              )
+            ),
+
+            // Outcomes / legs
+            e('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 } },
+              (bet.outcomes || []).map((o, i) => e('div', { key: i, style: { background: C.grayLight, borderRadius: 8, padding: '5px 9px', fontSize: 12 } },
+                e('div', { style: { color: C.muted, fontSize: 11 } }, o.label || o.outcome || 'Bet'),
+                e('div', { style: { fontWeight: 700 } }, (o.bookName || o.book || '') + ' · ' + (bet.currency || currency) + ' ' + (o.stake || bet.stake).toFixed(2)),
+                o.odds && e('div', { style: { color: C.green, fontWeight: 700, fontSize: 13 } }, '@' + o.odds.toFixed(2))
+              ))
+            ),
+
+            // P&L line
+            e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTop: '1px solid ' + C.border } },
+              e('div', { style: { fontSize: 12, color: C.muted } },
+                'Staked: ' + (bet.currency || currency) + ' ' + (bet.stake || 0).toFixed(2) +
+                (bet.status !== 'pending' ? ' · ' + (bet.status === 'won' ? '✅ Won ' + (bet.currency || currency) + ' ' + bet.profit.toFixed(2) : '❌ Lost ' + (bet.currency || currency) + ' ' + (bet.stake || 0).toFixed(2)) : ' · ⏳ Pending')
+              ),
+              clv !== null && e('span', { style: { fontSize: 11, fontWeight: 700, color: parseFloat(clv) >= 0 ? C.green : '#dc2626', background: parseFloat(clv) >= 0 ? C.greenLight : '#fef2f2', padding: '2px 8px', borderRadius: 10 } }, 'CLV ' + (parseFloat(clv) >= 0 ? '+' : '') + clv + '%')
+            ),
+
+            // CLV input (for EV bets — compare placed odds vs closing odds)
+            bet.type === 'ev' && bet.status !== 'pending' && e('div', { style: { marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' } },
+              e('span', { style: { fontSize: 11, color: C.muted, flexShrink: 0 } }, 'Closing odds:'),
+              e('input', { type: 'number', step: 0.01, placeholder: 'e.g. 14.50', value: clvInputs[bet.id] || '', onChange: ev => setClvInputs(p => ({ ...p, [bet.id]: ev.target.value })), style: { ...st.input, width: 100, fontSize: 12, padding: '4px 8px' } }),
+              clv !== null && e('span', { style: { fontSize: 12, color: C.muted } }, 'You beat closing line by ' + clv + '%')
+            )
+          );
+        })
+      );
+    })()),
+    tab === 'guide' && e('div', { style: st.section },
+      e('div', { style: st.guideH }, '🇬🇭 All Bookmakers in Ghana'),
+      e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 } },
+        Object.entries(BOOKS).map(([k, b]) =>
+          e('div', { key: k, style: { background: b.manual ? C.purpleLight : C.grayLight, borderRadius: 10, padding: '11px 14px' } },
+            e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
+              e('a', { href: b.url, target: '_blank', rel: 'noreferrer', style: { fontSize: 14, fontWeight: 700, color: C.text, textDecoration: 'none' } }, b.name),
+              e('div', { style: { display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' } },
+                b.manual && e('span', { style: { background: C.purpleLight, color: C.purple, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12, border: '1px solid #c4b5fd' } }, '✏️ Manual entry'),
+                !b.manual && e('span', { style: { background: '#e0f2fe', color: '#0369a1', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🔄 Auto-scanned'),
+                b.licensed && e('span', { style: { background: C.greenLight, color: C.greenDark, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '✓ GGC Licensed'),
+                b.momo && e('span', { style: { background: C.amberLight, color: '#78350f', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '📱 MoMo')
+              )
+            ),
+            e('div', { style: { fontSize: 12, color: C.muted } }, b.note)
+          )
+        )
+      ),
+      e('div', { style: { background: C.purpleLight, border: '1px solid #c4b5fd', borderRadius: 10, padding: '11px 14px', marginBottom: 16, fontSize: 12, color: C.purple, lineHeight: 1.6 } },
+        '✏️ Betano, MSport and SportyBet are not yet in the Odds API feed. To arb with them: open their app, find the best odds on a match, then enter those odds in the Manual Arb tab to check if an arb exists against any auto-scanned book.'
+      ),
+      e('div', { style: st.guideH }, '🌍 Sports coverage'),
+      e('div', { style: st.guideP }, 'ArbEdge scans ' + ALL_SPORTS.length + ' competitions worldwide — FIFA World Cup (Men & Women), AFCON, all Grand Slams (ATP & WTA), NBA, WNBA, NFL, UFC/MMA, ICC Cricket World Cup, Champions League, Copa América, IPL, and 80+ football leagues.'),
+      e('div', { style: st.guideH }, '⚠️ Key risks'),
+      e('div', { style: st.guideP }, 'Account limits: bookmakers detect arbers. Use round stakes and place occasional recreational bets. Odds movement: place the better-odds leg first — you have 30 seconds to 3 minutes. For Betano and MSport you need to check odds manually and move fast.'),
+      e('div', { style: st.guideH }, '📋 Quick checklist'),
+      ['Margin at least 1.5% (covers drift)', 'Same event start time on both books', 'Funds pre-loaded — no deposits mid-arb', 'Higher-odds leg placed first', 'Screenshot betslips after placement', 'Log bet in Tracker tab', 'Withdraw profits regularly'].map((item, i) =>
+       e('div', { key: i, style: { display: 'flex', gap: 8, marginBottom: 6 } },
+          e('span', { style: { color: C.green, flexShrink: 0 } }, '✓'),
+          e('span', { style: { fontSize: 13, color: C.muted, lineHeight: 1.4 } }, item)
+        )
+      ),
+      e('div', { style: { background: C.amberLight, borderRadius: 10, padding: '11px 14px', marginTop: 16, fontSize: 12, color: '#78350f', lineHeight: 1.6 } }, '⚖️ Sports betting is legal in Ghana under the Gaming Commission of Ghana. Bet responsibly.')
+   )
+  );
+}
