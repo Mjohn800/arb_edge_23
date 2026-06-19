@@ -3,23 +3,26 @@ import React, { useState, useEffect, useCallback, createElement } from 'react';
 
 // ─── BOOKMAKERS ───────────────────────────────────────────────────────────────
 const BOOKS = {
-  betway:        { name: 'Betway',       momo: true,  licensed: true,  manual: false, url: 'https://www.betway.com.gh/sports/all-sports', sportUrls: { soccer: 'https://www.betway.com.gh/sports/soccer', basketball: 'https://www.betway.com.gh/sports/basketball', tennis: 'https://www.betway.com.gh/sports/tennis', cricket: 'https://www.betway.com.gh/sports/cricket', mma: 'https://www.betway.com.gh/sports/mma' } },
-  '1xbet':       { name: '1xBet',        momo: true,  licensed: true,  manual: false, url: 'https://1xbet.com/en/line', sportUrls: { soccer: 'https://1xbet.com/en/line/football', basketball: 'https://1xbet.com/en/line/basketball', tennis: 'https://1xbet.com/en/line/tennis', cricket: 'https://1xbet.com/en/line/cricket', mma: 'https://1xbet.com/en/line/mma' } },
-  bet365:        { name: 'Bet365',       momo: false, licensed: false, manual: false, url: 'https://www.bet365.com/#/AS/B1/', sportUrls: { soccer: 'https://www.bet365.com/#/AS/B1/', basketball: 'https://www.bet365.com/#/AS/B18/', tennis: 'https://www.bet365.com/#/AS/B13/', cricket: 'https://www.bet365.com/#/AS/B19/', mma: 'https://www.bet365.com/#/AS/B14/' } },
-  pinnacle:      { name: 'Pinnacle',     momo: false, licensed: false, manual: false, url: 'https://www.pinnacle.com/en/soccer/matchups', sportUrls: { soccer: 'https://www.pinnacle.com/en/soccer/matchups', basketball: 'https://www.pinnacle.com/en/basketball/matchups', tennis: 'https://www.pinnacle.com/en/tennis/matchups', cricket: 'https://www.pinnacle.com/en/cricket/matchups', mma: 'https://www.pinnacle.com/en/mixed-martial-arts/matchups' } },
-  betfair_ex_eu: { name: 'Betfair',      momo: false, licensed: false, manual: false, url: 'https://www.betfair.com/exchange/plus/football', sportUrls: { soccer: 'https://www.betfair.com/exchange/plus/football', basketball: 'https://www.betfair.com/exchange/plus/basketball', tennis: 'https://www.betfair.com/exchange/plus/tennis', cricket: 'https://www.betfair.com/exchange/plus/cricket', mma: 'https://www.betfair.com/exchange/plus/mixed-martial-arts' } },
-  marathonbet:   { name: 'MarathonBet',  momo: false, licensed: false, manual: false, url: 'https://www.marathonbet.com/en/betting/Football', sportUrls: { soccer: 'https://www.marathonbet.com/en/betting/Football', basketball: 'https://www.marathonbet.com/en/betting/Basketball', tennis: 'https://www.marathonbet.com/en/betting/Tennis', cricket: 'https://www.marathonbet.com/en/betting/Cricket', mma: 'https://www.marathonbet.com/en/betting/MMA' } },
-  unibet_eu:     { name: 'Unibet',       momo: false, licensed: false, manual: false, url: 'https://www.unibet.com/betting/sports/filter/football/all/matches', sportUrls: { soccer: 'https://www.unibet.com/betting/sports/filter/football/all/matches', basketball: 'https://www.unibet.com/betting/sports/filter/basketball/all/matches', tennis: 'https://www.unibet.com/betting/sports/filter/tennis/all/matches', cricket: 'https://www.unibet.com/betting/sports/filter/cricket/all/matches', mma: 'https://www.unibet.com/betting/sports/filter/mma/all/matches' } },
-  williamhill:   { name: 'William Hill', momo: false, licensed: false, manual: false, url: 'https://www.williamhill.com/sports/football', sportUrls: { soccer: 'https://www.williamhill.com/sports/football', basketball: 'https://www.williamhill.com/sports/basketball', tennis: 'https://www.williamhill.com/sports/tennis', cricket: 'https://www.williamhill.com/sports/cricket', mma: 'https://www.williamhill.com/sports/mma' } },
-  melbet:        { name: 'MelBet',       momo: true,  licensed: false, manual: false, url: 'https://melbet.com/en/sport/football', sportUrls: { soccer: 'https://melbet.com/en/sport/football', basketball: 'https://melbet.com/en/sport/basketball', tennis: 'https://melbet.com/en/sport/tennis', cricket: 'https://melbet.com/en/sport/cricket', mma: 'https://melbet.com/en/sport/mma' } },
-  sportybet:     { name: 'SportyBet',    momo: true,  licensed: true,  manual: true,  url: 'https://www.sportybet.com/gh/sport/football', sportUrls: { soccer: 'https://www.sportybet.com/gh/sport/football', basketball: 'https://www.sportybet.com/gh/sport/basketball', tennis: 'https://www.sportybet.com/gh/sport/tennis', cricket: 'https://www.sportybet.com/gh/sport/cricket', mma: 'https://www.sportybet.com/gh/sport/mma' } },
-  betano:        { name: 'Betano',       momo: true,  licensed: false, manual: true,  url: 'https://www.betano.com.gh/sport/football', sportUrls: { soccer: 'https://www.betano.com.gh/sport/football', basketball: 'https://www.betano.com.gh/sport/basketball', tennis: 'https://www.betano.com.gh/sport/tennis', cricket: 'https://www.betano.com.gh/sport/cricket', mma: 'https://www.betano.com.gh/sport/mma' } },
-  msport:        { name: 'MSport',       momo: true,  licensed: false, manual: true,  url: 'https://www.msport.com/gh/football', sportUrls: { soccer: 'https://www.msport.com/gh/football', basketball: 'https://www.msport.com/gh/basketball', tennis: 'https://www.msport.com/gh/tennis', cricket: 'https://www.msport.com/gh/cricket', mma: 'https://www.msport.com/gh/mma' } },
-  footballcom:   { name: 'Football.com', momo: false, licensed: false, manual: true,  url: 'https://www.football.com/betting', sportUrls: { soccer: 'https://www.football.com/betting/football' } },
+  betway:        { name: 'Betway',       momo: true,  licensed: true,  manual: false, accessible: true,  url: 'https://www.betway.com.gh/sports/all-sports', sportUrls: { soccer: 'https://www.betway.com.gh/sports/soccer', basketball: 'https://www.betway.com.gh/sports/basketball', tennis: 'https://www.betway.com.gh/sports/tennis', cricket: 'https://www.betway.com.gh/sports/cricket', mma: 'https://www.betway.com.gh/sports/mma' } },
+  '1xbet':       { name: '1xBet',        momo: true,  licensed: true,  manual: false, accessible: true,  url: 'https://1xbet.com/en/line', sportUrls: { soccer: 'https://1xbet.com/en/line/football', basketball: 'https://1xbet.com/en/line/basketball', tennis: 'https://1xbet.com/en/line/tennis', cricket: 'https://1xbet.com/en/line/cricket', mma: 'https://1xbet.com/en/line/mma' } },
+  bet365:        { name: 'Bet365',       momo: false, licensed: false, manual: false, accessible: false, url: 'https://www.bet365.com/#/AS/B1/', sportUrls: { soccer: 'https://www.bet365.com/#/AS/B1/', basketball: 'https://www.bet365.com/#/AS/B18/', tennis: 'https://www.bet365.com/#/AS/B13/', cricket: 'https://www.bet365.com/#/AS/B19/', mma: 'https://www.bet365.com/#/AS/B14/' } },
+  pinnacle:      { name: 'Pinnacle',     momo: false, licensed: false, manual: false, accessible: false, url: 'https://www.pinnacle.com/en/soccer/matchups', sportUrls: { soccer: 'https://www.pinnacle.com/en/soccer/matchups', basketball: 'https://www.pinnacle.com/en/basketball/matchups', tennis: 'https://www.pinnacle.com/en/tennis/matchups', cricket: 'https://www.pinnacle.com/en/cricket/matchups', mma: 'https://www.pinnacle.com/en/mixed-martial-arts/matchups' } },
+  betfair_ex_eu: { name: 'Betfair',      momo: false, licensed: false, manual: false, accessible: false, url: 'https://www.betfair.com/exchange/plus/football', sportUrls: { soccer: 'https://www.betfair.com/exchange/plus/football', basketball: 'https://www.betfair.com/exchange/plus/basketball', tennis: 'https://www.betfair.com/exchange/plus/tennis', cricket: 'https://www.betfair.com/exchange/plus/cricket', mma: 'https://www.betfair.com/exchange/plus/mixed-martial-arts' } },
+  marathonbet:   { name: 'MarathonBet',  momo: false, licensed: false, manual: false, accessible: false, url: 'https://www.marathonbet.com/en/betting/Football', sportUrls: { soccer: 'https://www.marathonbet.com/en/betting/Football', basketball: 'https://www.marathonbet.com/en/betting/Basketball', tennis: 'https://www.marathonbet.com/en/betting/Tennis', cricket: 'https://www.marathonbet.com/en/betting/Cricket', mma: 'https://www.marathonbet.com/en/betting/MMA' } },
+  unibet_eu:     { name: 'Unibet',       momo: false, licensed: false, manual: false, accessible: false, url: 'https://www.unibet.com/betting/sports/filter/football/all/matches', sportUrls: { soccer: 'https://www.unibet.com/betting/sports/filter/football/all/matches', basketball: 'https://www.unibet.com/betting/sports/filter/basketball/all/matches', tennis: 'https://www.unibet.com/betting/sports/filter/tennis/all/matches', cricket: 'https://www.unibet.com/betting/sports/filter/cricket/all/matches', mma: 'https://www.unibet.com/betting/sports/filter/mma/all/matches' } },
+  williamhill:   { name: 'William Hill', momo: false, licensed: false, manual: false, accessible: false, url: 'https://www.williamhill.com/sports/football', sportUrls: { soccer: 'https://www.williamhill.com/sports/football', basketball: 'https://www.williamhill.com/sports/basketball', tennis: 'https://www.williamhill.com/sports/tennis', cricket: 'https://www.williamhill.com/sports/cricket', mma: 'https://www.williamhill.com/sports/mma' } },
+  melbet:        { name: 'MelBet',       momo: true,  licensed: false, manual: false, accessible: true,  url: 'https://melbet.com/en/sport/football', sportUrls: { soccer: 'https://melbet.com/en/sport/football', basketball: 'https://melbet.com/en/sport/basketball', tennis: 'https://melbet.com/en/sport/tennis', cricket: 'https://melbet.com/en/sport/cricket', mma: 'https://melbet.com/en/sport/mma' } },
+  sportybet:     { name: 'SportyBet',    momo: true,  licensed: true,  manual: true,  accessible: true,  url: 'https://www.sportybet.com/gh/sport/football', sportUrls: { soccer: 'https://www.sportybet.com/gh/sport/football', basketball: 'https://www.sportybet.com/gh/sport/basketball', tennis: 'https://www.sportybet.com/gh/sport/tennis', cricket: 'https://www.sportybet.com/gh/sport/cricket', mma: 'https://www.sportybet.com/gh/sport/mma' } },
+  betano:        { name: 'Betano',       momo: true,  licensed: false, manual: true,  accessible: true,  url: 'https://www.betano.com.gh/sport/football', sportUrls: { soccer: 'https://www.betano.com.gh/sport/football', basketball: 'https://www.betano.com.gh/sport/basketball', tennis: 'https://www.betano.com.gh/sport/tennis', cricket: 'https://www.betano.com.gh/sport/cricket', mma: 'https://www.betano.com.gh/sport/mma' } },
+  msport:        { name: 'MSport',       momo: true,  licensed: false, manual: true,  accessible: true,  url: 'https://www.msport.com/gh/football', sportUrls: { soccer: 'https://www.msport.com/gh/football', basketball: 'https://www.msport.com/gh/basketball', tennis: 'https://www.msport.com/gh/tennis', cricket: 'https://www.msport.com/gh/cricket', mma: 'https://www.msport.com/gh/mma' } },
+  footballcom:   { name: 'Football.com', momo: false, licensed: false, manual: true,  accessible: false, url: 'https://www.football.com/betting', sportUrls: { soccer: 'https://www.football.com/betting/football' } },
 };
 
 const API_BOOKS = Object.entries(BOOKS).filter(([,b]) => !b.manual).map(([k]) => k);
 const MANUAL_BOOKS = Object.entries(BOOKS).filter(([,b]) => b.manual);
+const ACCESSIBLE_BOOKS = Object.entries(BOOKS).filter(([,b]) => b.accessible).map(([k]) => k);
+// True only if every leg/outcome of an opportunity is on a book accessible from West Africa
+const isFullyAccessible = (outcomes) => (outcomes || []).every(o => BOOKS[o.book] && BOOKS[o.book].accessible);
 
 const SPORT_GROUPS = [
   { group: '⚽ Africa & World', sports: [
@@ -490,6 +493,7 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [showSportPicker, setShowSportPicker] = useState(false);
   const [minMargin, setMinMargin] = useState(0);
   const [wayFilter, setWayFilter] = useState('all');
+  const [accessOnly, setAccessOnly] = useState(false);
   const [bets, setBets] = useState([]);
   const [bankroll, setBankroll] = useState(() => { try { return parseFloat(localStorage.getItem('arb_bankroll') || '500'); } catch { return 500; } });
   const [trackerView, setTrackerView] = useState('bets'); // 'bets' | 'dashboard'
@@ -657,6 +661,7 @@ const analyzeArb = async (arb) => {
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
 if (wayFilter === '3' && a.outcomes.length !== 3) return false;
+if (accessOnly && !isFullyAccessible(a.outcomes)) return false;
 return a.margin >= minMargin;
   });
 
@@ -718,6 +723,7 @@ return a.margin >= minMargin;
     )
   )
 ),
+        e('button', { onClick: () => setAccessOnly(v => !v), style: { ...st.btn(accessOnly ? 'success' : 'outline'), fontSize: 12, padding: '6px 10px' } }, accessOnly ? '✓ Accessible only' : '🌍 All books'),
         e('button', { onClick: () => setShowSportPicker(v => !v), style: { ...st.btn('outline'), fontSize: 12, padding: '6px 10px' } }, '⚙ Sports (' + selectedSports.length + ')'),
         e('button', { onClick: () => fetchOdds(apiKey), disabled: loading || !apiKey, style: { ...st.btn('outline'), fontSize: 12, padding: '6px 10px' } }, loading ? '...' : '↻')
       ),
@@ -755,6 +761,7 @@ return a.margin >= minMargin;
             e('div', null, e('div', { style: st.sportLabel }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(arb.commenceTime)), e('div', { style: st.matchTitle }, arb.match)),
             e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
               isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, 'DEMO'),
+              !isFullyAccessible(arb.outcomes) && e('span', { style: st.badge('#7f1d1d', '#fecaca') }, '🚫 Not all books accessible'),
               e('span', { style: st.profitBadge(arb.margin) }, '+' + arb.margin.toFixed(1) + '%')
             )
           ),
@@ -762,6 +769,7 @@ return a.margin >= minMargin;
             arb.outcomes.map((o, i) => e('div', { key: i, style: st.oddsCell },
               e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 2 } }, o.label),
               e('div', { style: { fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 1 } }, o.bookName),
+              !(BOOKS[o.book] && BOOKS[o.book].accessible) && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b91c1c', marginBottom: 1 } }, '🚫 Not accessible'),
               e('div', { style: { fontSize: 14, fontWeight: 700, color: C.green } }, o.odds.toFixed(2)),
               e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportUrls[arb.sport.split('_')[0]]) || (BOOKS[o.book] && BOOKS[o.book].url) || '#', target: '_blank', style: { display: 'block', marginTop: 4, fontSize: 10, fontWeight: 700, color: '#fff', background: C.green, borderRadius: 6, padding: '3px 6px', textDecoration: 'none', textAlign: 'center' } }, 'Bet Now →')
             ))
@@ -939,11 +947,12 @@ return a.margin >= minMargin;
         e('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
           e('span', { style: { fontSize: 12, color: C.muted } }, 'Bankroll:'),
           e('input', { type: 'number', value: evStake, min: 50, step: 50, onChange: ev => setEvStake(Math.max(50, parseFloat(ev.target.value) || 500)), style: { ...st.input, width: 100 } })
-        )
+        ),
+        e('button', { onClick: () => setAccessOnly(v => !v), style: { ...st.btn(accessOnly ? 'success' : 'outline'), fontSize: 12, padding: '6px 10px' } }, accessOnly ? '✓ Accessible only' : '🌍 All books')
       ),
-      evBets.filter(b => evFilter === 'all' || b.sport === evFilter).length === 0 &&
+      evBets.filter(b => (evFilter === 'all' || b.sport === evFilter) && (!accessOnly || (BOOKS[b.book] && BOOKS[b.book].accessible))).length === 0 &&
         e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } }, 'No +EV bets found at this threshold. Lower the min EV or connect a live API key.'),
-      evBets.filter(b => evFilter === 'all' || b.sport === evFilter).map(bet => {
+      evBets.filter(b => (evFilter === 'all' || b.sport === evFilter) && (!accessOnly || (BOOKS[b.book] && BOOKS[b.book].accessible))).map(bet => {
         const kelly = kellyCriterion(bet.odds, bet.trueProb);
         const kellyStake = parseFloat((kelly / 100 * evStake).toFixed(2));
         const expectedProfit = parseFloat(((bet.odds * bet.trueProb / 100 - 1) * kellyStake).toFixed(2));
@@ -960,6 +969,7 @@ return a.margin >= minMargin;
             ),
             e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
               isDemoEV && e('span', { style: st.badge('#451a03', '#fcd34d') }, 'DEMO'),
+              !(BOOKS[bet.book] && BOOKS[bet.book].accessible) && e('span', { style: st.badge('#7f1d1d', '#fecaca') }, '🚫 Not accessible'),
               e('span', { style: { background: '#eff6ff', color: '#1e40af', fontSize: 13, fontWeight: 700, padding: '4px 11px', borderRadius: 20 } }, '+' + bet.ev_pct.toFixed(1) + '% EV')
             )
           ),
@@ -1020,23 +1030,27 @@ return a.margin >= minMargin;
               e('div', { style: st.matchTitle }, ev.match),
               e('div', { style: { fontSize: 11, color: C.muted, marginTop: 2 } }, 'Max gap: up to ' + ev.maxGap.toFixed(1) + '% better odds available')
             ),
-            ev.outcomes.map(o =>
-              e('div', { key: o.name, style: { marginBottom: 10 } },
+            ev.outcomes.map(o => {
+              const bestAccessible = o.all.find(bk => BOOKS[bk.book] && BOOKS[bk.book].accessible);
+              return e('div', { key: o.name, style: { marginBottom: 10 } },
                 e('div', { style: { fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 } }, o.name),
+                bestAccessible && bestAccessible.book !== o.all[0].book &&
+                  e('div', { style: { fontSize: 11, color: C.greenDark, background: C.greenLight, borderRadius: 6, padding: '4px 8px', marginBottom: 4 } }, '✓ Best you can actually place: ' + bestAccessible.bookName + ' @ ' + bestAccessible.odds.toFixed(2)),
                 e('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-                  o.all.map((bk, idx) =>
-                    e('div', { key: bk.book, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', borderRadius: 8, background: idx === 0 ? C.greenLight : C.grayLight } },
-                      e('span', { style: { fontSize: 12, color: idx === 0 ? C.greenDark : C.muted } }, bk.bookName),
+                  o.all.map((bk, idx) => {
+                    const accessible = BOOKS[bk.book] && BOOKS[bk.book].accessible;
+                    return e('div', { key: bk.book, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', borderRadius: 8, background: idx === 0 ? C.greenLight : C.grayLight, opacity: accessible ? 1 : 0.55 } },
+                      e('span', { style: { fontSize: 12, color: idx === 0 ? C.greenDark : C.muted } }, bk.bookName + (accessible ? '' : ' 🚫')),
                       e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                         e('span', { style: { fontSize: 14, fontWeight: 700, color: idx === 0 ? C.green : C.text } }, bk.odds.toFixed(2)),
                         idx === 0 && o.gap > 0 && e('span', { style: { fontSize: 11, fontWeight: 700, color: C.greenDark, background: C.greenLight, padding: '1px 6px', borderRadius: 10 } }, '★ Best'),
                         idx === o.all.length - 1 && o.gap > 0 && e('span', { style: { fontSize: 10, color: '#dc2626' } }, '-' + o.gap.toFixed(1) + '%')
                       )
-                    )
-                  )
+                    );
+                  })
                 )
-              )
-            )
+              );
+            })
           );
         })
       ),
@@ -1066,14 +1080,16 @@ return a.margin >= minMargin;
               )
             ),
             e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 } },
-              [m.legA, m.legB].map((leg, i) =>
-                e('div', { key: i, style: { background: C.grayLight, borderRadius: 8, padding: '8px 10px' } },
+              [m.legA, m.legB].map((leg, i) => {
+                const accessible = BOOKS[leg.book] && BOOKS[leg.book].accessible;
+                return e('div', { key: i, style: { background: C.grayLight, borderRadius: 8, padding: '8px 10px', opacity: accessible ? 1 : 0.55 } },
                   e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 3 } }, 'Leg ' + (i + 1)),
-                  e('div', { style: { fontSize: 13, fontWeight: 700 } }, leg.bookName),
+                  e('div', { style: { fontSize: 13, fontWeight: 700 } }, leg.bookName + (accessible ? '' : ' 🚫')),
+                  !accessible && e('div', { style: { fontSize: 10, fontWeight: 700, color: '#b91c1c' } }, 'Not accessible'),
                   e('div', { style: { fontSize: 12, color: C.muted } }, leg.side),
                   e('div', { style: { fontSize: 15, fontWeight: 700, color: C.green, marginTop: 2 } }, leg.odds.toFixed(2))
-                )
-              )
+                );
+              })
             ),
             e('div', { style: { background: '#fdf4ff', borderRadius: 8, padding: '8px 10px', marginTop: 8, fontSize: 12, color: '#6b21a8' } },
               '💡 If the final margin falls between ' + Math.abs(m.legA.line) + ' and ' + Math.abs(m.legB.line) + ', both legs win. Otherwise one leg wins, one loses.'
@@ -1118,15 +1134,16 @@ return a.margin >= minMargin;
               )
             ),
             e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 6 } }, '📖 Lagging soft books (act fast):'),
-            s.laggingBooks.map(bk =>
-              e('div', { key: bk.book, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff7ed', borderRadius: 8, padding: '6px 10px', marginBottom: 4 } },
-                e('span', { style: { fontSize: 13, fontWeight: 600 } }, bk.bookName),
+            s.laggingBooks.map(bk => {
+              const accessible = BOOKS[bk.book] && BOOKS[bk.book].accessible;
+              return e('div', { key: bk.book, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff7ed', borderRadius: 8, padding: '6px 10px', marginBottom: 4, opacity: accessible ? 1 : 0.55 } },
+                e('span', { style: { fontSize: 13, fontWeight: 600 } }, bk.bookName + (accessible ? '' : ' 🚫')),
                 e('div', { style: { display: 'flex', gap: 10, alignItems: 'center' } },
                   e('span', { style: { fontSize: 14, fontWeight: 700, color: C.green } }, bk.odds.toFixed(2)),
                   e('span', { style: { fontSize: 11, color: C.muted } }, 'was ' + bk.prevOdds.toFixed(2))
                 )
-              )
-            ),
+              );
+            }),
             e('div', { style: { background: '#fff7ed', borderRadius: 8, padding: '6px 10px', marginTop: 6, fontSize: 11, color: '#92400e' } },
               '⚡ Place this bet before ' + s.laggingBooks.map(b => b.bookName).join('/') + ' update their lines.'
             )
