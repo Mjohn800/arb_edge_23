@@ -1088,6 +1088,7 @@ const analyzeArb = async (arb) => {
         );
       }));
     }),
+    ),
     tab === 'edge' && e('div', { style: st.section },
       // Sub-tab nav
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
