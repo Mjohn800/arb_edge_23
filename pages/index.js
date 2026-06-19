@@ -360,6 +360,9 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [minMargin, setMinMargin] = useState(0);
   const [wayFilter, setWayFilter] = useState('all');
   const [bets, setBets] = useState([]);
+  const [bankroll, setBankroll] = useState(() => { try { return parseFloat(localStorage.getItem('arb_bankroll') || '500'); } catch { return 500; } });
+  const [trackerView, setTrackerView] = useState('bets'); // 'bets' | 'dashboard'
+  const [clvInputs, setClvInputs] = useState({}); // betId -> closing odds string
   useEffect(() => { try { localStorage.setItem('arb_sports', JSON.stringify(selectedSports)); } catch {} }, [selectedSports]);
 
 useEffect(() => {
@@ -437,7 +440,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
     else { setEvBets(MOCK_EV); setIsDemoEV(true); }
     setLoading(false);
-    setNextScanAt(Date.now() + 5 * 60 * 1000);
+    setNextScanAt(Date.now() + 12 * 60 * 1000);
   }, [selectedSports, minEV]);
 
   const saveKey = () => {
@@ -447,14 +450,15 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
 
   useEffect(() => {
   const now = new Date();
-  if (!lastFetch || (now - new Date(lastFetch)) > 5 * 60 * 1000) {
+  if (!lastFetch || (now - new Date(lastFetch)) > 12 * 60 * 1000) {
     fetchOdds(apiKey || 'server');
   }
-  const id = setInterval(() => { if (apiKey) fetchOdds(apiKey); }, 5 * 60 * 1000);
+  const id = setInterval(() => { if (apiKey) fetchOdds(apiKey); }, 12 * 60 * 1000);
   return () => clearInterval(id);
 }, [apiKey, fetchOdds]);
   
   useEffect(() => { try { localStorage.setItem('arb_bets', JSON.stringify(bets)); } catch {} }, [bets]);
+  useEffect(() => { try { localStorage.setItem('arb_bankroll', bankroll.toString()); } catch {} }, [bankroll]);
 
   useEffect(() => {
     const tick = setInterval(() => {
@@ -466,9 +470,14 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     return () => clearInterval(tick);
   }, [nextScanAt]);
 
-  const logBet = (outcomes, matchName, sport, profitAmt) => {
+  const logBet = (outcomes, matchName, sport, profitAmt, betType) => {
     const c = calcStakes(outcomes, stake);
-    setBets(p => [{ id: Date.now(), match: matchName || sel.match, sport: sport || sel.sport, margin: sel ? sel.margin : 0, stake, currency, profit: profitAmt !== undefined ? profitAmt : parseFloat(c.profit.toFixed(2)), date: new Date().toISOString(), status: 'pending', outcomes: outcomes.map((o, i) => ({ ...o, stake: parseFloat(c.stakes[i].toFixed(2)), ret: parseFloat(c.returns[i].toFixed(2)) })) }, ...p]);
+    setBets(p => [{ id: Date.now(), match: matchName || sel.match, sport: sport || sel.sport, margin: sel ? sel.margin : 0, stake, currency, profit: profitAmt !== undefined ? profitAmt : parseFloat(c.profit.toFixed(2)), date: new Date().toISOString(), status: 'pending', type: betType || 'arb', outcomes: outcomes.map((o, i) => ({ ...o, stake: parseFloat(c.stakes[i].toFixed(2)), ret: parseFloat(c.returns[i].toFixed(2)) })) }, ...p]);
+    setTab('tracker');
+  };
+
+  const logEVBet = (bet, kellyStake, expectedProfit) => {
+    setBets(p => [{ id: Date.now(), match: bet.match, sport: bet.sport, margin: bet.ev_pct, stake: kellyStake, currency, profit: expectedProfit, date: new Date().toISOString(), status: 'pending', type: 'ev', clvOdds: null, placedOdds: bet.odds, outcomes: [{ label: bet.outcome, bookName: bet.bookName, book: bet.book, odds: bet.odds, stake: kellyStake, ret: parseFloat((kellyStake * bet.odds).toFixed(2)) }] }, ...p]);
     setTab('tracker');
   };
 
@@ -512,9 +521,6 @@ return a.margin >= minMargin;
   });
 
   const calc = sel ? calcStakes(sel.outcomes, stake) : null;
-  const totalProfit = bets.filter(b => b.status === 'won').reduce((s, b) => s + b.profit, 0);
-  const totalStaked = bets.reduce((s, b) => s + b.stake, 0);
-  const roi = totalStaked > 0 ? ((totalProfit / totalStaked) * 100).toFixed(1) : '0.0';
 
   // ── KEY FIX: use named import instead of React.createElement
   const e = createElement;
@@ -599,7 +605,7 @@ return a.margin >= minMargin;
         quota.remaining !== null && e('div', { style: { background: parseInt(quota.remaining) < 50 ? '#fef3c7' : '#f0fdf4', color: parseInt(quota.remaining) < 50 ? '#92400e' : '#14532d', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10, display: 'flex', justifyContent: 'space-between' } }, e('span', null, 'Key ' + (quota.keyIndex || 1) + ' | Used: ' + quota.used), e('span', { style: { fontWeight: 700 } }, quota.remaining + ' remaining')),
       isDemo && !error && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
         apiKey
-          ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 5 min.'
+          ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 12 min.'
           : '📌 Demo mode — tap Connect Live to scan real odds across ' + ALL_SPORTS.length + ' sports. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'
       ),
  filteredArbs.map(arb => {
@@ -844,7 +850,8 @@ return a.margin >= minMargin;
           ),
           e('div', { style: { fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.4 } },
             '⚠️ +EV is a long-run strategy. Any single bet can lose. The edge only shows over 100s of bets.'
-          )
+          ),
+          e('button', { onClick: () => logEVBet(bet, kellyStake, expectedProfit), style: { ...st.btn('success'), marginTop: 8, width: '100%', fontSize: 12 } }, '📒 Log This Bet')
         );
       })
     ),
@@ -1009,36 +1016,216 @@ return a.margin >= minMargin;
           );
         })
     ),
-    tab === 'tracker' && e('div', { style: st.section },
-      e('div', { style: st.metricsGrid },
-        [['Bets', bets.length, null], ['Staked', (bets[0] ? bets[0].currency : 'GHS') + ' ' + totalStaked.toFixed(0), null], ['Profit', (bets[0] ? bets[0].currency : 'GHS') + ' ' + totalProfit.toFixed(2), totalProfit >= 0 ? C.green : '#dc2626'], ['ROI', roi + '%', parseFloat(roi) >= 0 ? C.green : '#dc2626']].map(([l, v, c]) =>
-          e('div', { key: l, style: st.metric }, e('div', { style: st.metricLabel }, l), e('div', { style: st.metricVal(c) }, v))
-        )
-      ),
-      bets.length === 0
-        ? e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } }, e('div', { style: { fontSize: 36, marginBottom: 8 } }, '📒'), e('div', { style: { fontSize: 14 } }, 'No bets yet.'))
-        : bets.map(bet => e('div', { key: bet.id, style: { ...st.card(false), cursor: 'default' } },
-          e('div', { style: st.cardRow },
-            e('div', null,
-              e('div', { style: st.sportLabel }, getSportInfo(bet.sport).emoji + ' ' + getSportInfo(bet.sport).label + ' · ' + new Date(bet.date).toLocaleDateString()),
-              e('div', { style: st.matchTitle }, bet.match)
+    tab === 'tracker' && e('div', { style: st.section }, (() => {
+      const wonBets = bets.filter(b => b.status === 'won');
+      const lostBets = bets.filter(b => b.status === 'lost');
+      const settledBets = bets.filter(b => b.status !== 'pending');
+      const realProfit = wonBets.reduce((s, b) => s + b.profit, 0) - lostBets.reduce((s, b) => s + b.stake, 0);
+      const totalStaked = bets.reduce((s, b) => s + b.stake, 0);
+      const roi = totalStaked > 0 ? ((realProfit / totalStaked) * 100).toFixed(1) : '0.0';
+      const winRate = settledBets.length > 0 ? ((wonBets.length / settledBets.length) * 100).toFixed(0) : '—';
+
+      // Streak
+      const settled = [...bets].filter(b => b.status !== 'pending').reverse();
+      let streak = 0, streakType = '';
+      for (const b of settled) { if (streak === 0) { streakType = b.status; streak = 1; } else if (b.status === streakType) streak++; else break; }
+      const streakLabel = streak > 0 ? (streakType === 'won' ? '🔥 ' + streak + 'W streak' : '❄️ ' + streak + 'L streak') : '—';
+
+      // By sport
+      const bySport = {};
+      bets.forEach(b => { if (!bySport[b.sport]) bySport[b.sport] = { staked: 0, profit: 0, count: 0, won: 0 }; bySport[b.sport].count++; if (b.status === 'won') { bySport[b.sport].profit += b.profit; bySport[b.sport].won++; } if (b.status === 'lost') bySport[b.sport].profit -= b.stake; bySport[b.sport].staked += b.stake; });
+      const topSport = Object.entries(bySport).sort((a, b) => b[1].profit - a[1].profit)[0];
+
+      // By book
+      const byBook = {};
+      bets.forEach(b => (b.outcomes || []).forEach(o => { const bk = o.bookName || o.book || 'Unknown'; if (!byBook[bk]) byBook[bk] = { staked: 0, profit: 0, count: 0 }; byBook[bk].count++; }));
+
+      // By type
+      const byType = { arb: { count: 0, profit: 0, staked: 0 }, ev: { count: 0, profit: 0, staked: 0 }, manual: { count: 0, profit: 0, staked: 0 } };
+      bets.forEach(b => { const t = b.type || 'arb'; if (!byType[t]) byType[t] = { count: 0, profit: 0, staked: 0 }; byType[t].count++; byType[t].staked += b.stake; if (b.status === 'won') byType[t].profit += b.profit; if (b.status === 'lost') byType[t].profit -= b.stake; });
+
+      // CLV helper
+      const clvBet = (bet) => {
+        const closing = parseFloat(clvInputs[bet.id]);
+        if (!closing || !bet.placedOdds) return null;
+        return ((bet.placedOdds / closing - 1) * 100).toFixed(1);
+      };
+
+      // Bankroll curve (cumulative)
+      const curve = [bankroll];
+      [...bets].reverse().forEach(b => { const last = curve[curve.length - 1]; if (b.status === 'won') curve.push(last + b.profit); else if (b.status === 'lost') curve.push(last - b.stake); else curve.push(last); });
+
+      // CSV export
+      const exportCSV = () => {
+        const rows = [['Date','Match','Sport','Type','Stake','Currency','Status','Profit/Loss','ROI%','CLV']];
+        bets.forEach(b => { const clv = clvBet(b); rows.push([new Date(b.date).toLocaleDateString(), b.match, getSportInfo(b.sport).label, b.type || 'arb', b.stake, b.currency, b.status, b.status === 'won' ? b.profit : b.status === 'lost' ? -b.stake : '', b.stake > 0 ? ((( b.status === 'won' ? b.profit : b.status === 'lost' ? -b.stake : 0) / b.stake)*100).toFixed(1) : '', clv !== null ? clv + '%' : '']); });
+        const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'arbredge_bets.csv'; a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      return e('div', null,
+        // Header with view toggle + export
+        e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 } },
+          e('div', { style: { display: 'flex', gap: 6 } },
+            e('button', { onClick: () => setTrackerView('bets'), style: { ...st.btn(trackerView === 'bets' ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, '📋 Bets'),
+            e('button', { onClick: () => setTrackerView('dashboard'), style: { ...st.btn(trackerView === 'dashboard' ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, '📊 Dashboard')
+          ),
+          e('div', { style: { display: 'flex', gap: 6 } },
+            bets.length > 0 && e('button', { onClick: exportCSV, style: { ...st.btn('outline'), fontSize: 11, padding: '5px 10px' } }, '⬇ CSV'),
+            e('button', { onClick: () => setBets([]), style: { ...st.btn('danger'), fontSize: 11, padding: '5px 10px' } }, 'Clear')
+          )
+        ),
+
+        // Summary metrics — always visible
+        e('div', { style: st.metricsGrid },
+          [
+            ['Bets', bets.length, null],
+            ['P&L', (bets[0] ? bets[0].currency : currency) + ' ' + realProfit.toFixed(2), realProfit >= 0 ? C.green : '#dc2626'],
+            ['ROI', roi + '%', parseFloat(roi) >= 0 ? C.green : '#dc2626'],
+            ['Win rate', winRate + (winRate !== '—' ? '%' : ''), null],
+          ].map(([l, v, c]) => e('div', { key: l, style: st.metric }, e('div', { style: st.metricLabel }, l), e('div', { style: st.metricVal(c) }, v)))
+        ),
+
+        // ── DASHBOARD VIEW ──
+        trackerView === 'dashboard' && bets.length === 0 && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
+          e('div', { style: { fontSize: 36, marginBottom: 8 } }, '📊'),
+          e('div', { style: { fontSize: 14 } }, 'Log some bets first to see your analytics.')
+        ),
+
+        trackerView === 'dashboard' && bets.length > 0 && e('div', null,
+
+          // Bankroll setting
+          e('div', { style: { background: C.grayLight, borderRadius: 10, padding: '10px 14px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 } },
+            e('span', { style: { fontSize: 13, color: C.muted, flexShrink: 0 } }, 'Starting bankroll:'),
+            e('input', { type: 'number', value: bankroll, min: 1, step: 50, onChange: ev => setBankroll(Math.max(1, parseFloat(ev.target.value) || 500)), style: { ...st.input, width: 110 } }),
+            e('span', { style: { fontSize: 13, fontWeight: 700, color: realProfit >= 0 ? C.green : '#dc2626' } }, '→ ' + currency + ' ' + (bankroll + realProfit).toFixed(2))
+          ),
+
+          // Streak + top sport highlights
+          e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 } },
+            e('div', { style: { background: C.grayLight, borderRadius: 10, padding: '10px 12px' } },
+              e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 4 } }, 'Current streak'),
+              e('div', { style: { fontSize: 15, fontWeight: 700 } }, streakLabel)
             ),
-            e('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
-              e('span', { style: { fontSize: 13, fontWeight: 700, color: C.green } }, '+' + bet.currency + ' ' + bet.profit.toFixed(2)),
-              e('select', { value: bet.status, onChange: ev => setBets(p => p.map(b => b.id === bet.id ? { ...b, status: ev.target.value } : b)), style: { fontSize: 11, padding: '3px 6px', borderRadius: 6, border: '1px solid ' + C.border, background: C.white } },
-                e('option', { value: 'pending' }, 'Pending'), e('option', { value: 'won' }, 'Won ✓'), e('option', { value: 'lost' }, 'Lost ✗')
-              ),
-              e('button', { onClick: () => setBets(p => p.filter(b => b.id !== bet.id)), style: { ...st.btn('danger'), padding: '3px 8px', fontSize: 11 } }, '✕')
+            e('div', { style: { background: C.grayLight, borderRadius: 10, padding: '10px 12px' } },
+              e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 4 } }, 'Best sport'),
+              e('div', { style: { fontSize: 13, fontWeight: 700, color: topSport ? (topSport[1].profit >= 0 ? C.green : '#dc2626') : C.muted } },
+                topSport ? getSportInfo(topSport[0]).emoji + ' ' + getSportInfo(topSport[0]).label + ' (' + currency + ' ' + topSport[1].profit.toFixed(2) + ')' : '—')
             )
           ),
-          e('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
-            bet.outcomes.map((o, i) => e('div', { key: i, style: { background: C.grayLight, borderRadius: 8, padding: '5px 9px', fontSize: 12 } },
-              e('span', { style: { color: C.muted } }, o.label + ' · ' + (BOOKS[o.book]?.name || o.bookName || o.book)),
-              e('span', { style: { fontWeight: 700, marginLeft: 6 } }, bet.currency + ' ' + o.stake.toFixed(2))
-            ))
+
+          // Bankroll curve (mini SVG)
+          e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 8 } }, '📈 Bankroll curve'),
+            (() => {
+              if (curve.length < 2) return e('div', { style: { color: C.muted, fontSize: 12 } }, 'Not enough settled bets yet.');
+              const W = 300, H = 80;
+              const min = Math.min(...curve), max = Math.max(...curve);
+              const range = max - min || 1;
+              const pts = curve.map((v, i) => [(i / (curve.length - 1)) * W, H - ((v - min) / range) * (H - 8)]);
+              const d = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+              const color = curve[curve.length - 1] >= curve[0] ? C.green : '#dc2626';
+              return e('svg', { viewBox: '0 0 ' + W + ' ' + H, style: { width: '100%', height: H } },
+                e('polyline', { points: pts.map(p => p.join(',')).join(' '), fill: 'none', stroke: color, strokeWidth: 2 }),
+                e('circle', { cx: pts[pts.length-1][0], cy: pts[pts.length-1][1], r: 4, fill: color })
+              );
+            })()
+          ),
+
+          // By bet type
+          e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, '🎯 By bet type'),
+            Object.entries(byType).filter(([, v]) => v.count > 0).map(([type, v]) =>
+              e('div', { key: type, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
+                e('div', null,
+                  e('div', { style: { fontSize: 13, fontWeight: 600 } }, type === 'ev' ? '📈 +EV' : type === 'arb' ? '⚡ Arb' : '✏️ Manual'),
+                  e('div', { style: { fontSize: 11, color: C.muted } }, v.count + ' bets · ' + currency + ' ' + v.staked.toFixed(2) + ' staked')
+                ),
+                e('div', { style: { fontSize: 14, fontWeight: 700, color: v.profit >= 0 ? C.green : '#dc2626', textAlign: 'right' } },
+                  (v.profit >= 0 ? '+' : '') + currency + ' ' + v.profit.toFixed(2),
+                  e('div', { style: { fontSize: 11, color: C.muted } }, v.staked > 0 ? ((v.profit/v.staked)*100).toFixed(1) + '% ROI' : '')
+                )
+              )
+            )
+          ),
+
+          // By sport
+          e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, '🌍 By sport'),
+            Object.entries(bySport).sort((a, b) => b[1].profit - a[1].profit).map(([sport, v]) => {
+              const info = getSportInfo(sport);
+              const pct = Math.abs(v.profit) / Math.max(Math.abs(Math.min(...Object.values(bySport).map(x=>x.profit))), Math.max(...Object.values(bySport).map(x=>x.profit)), 1);
+              return e('div', { key: sport, style: { marginBottom: 10 } },
+                e('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 } },
+                  e('span', null, info.emoji + ' ' + info.label + ' (' + v.count + ')'),
+                  e('span', { style: { fontWeight: 700, color: v.profit >= 0 ? C.green : '#dc2626' } }, (v.profit >= 0 ? '+' : '') + currency + ' ' + v.profit.toFixed(2))
+                ),
+                e('div', { style: { height: 6, background: C.grayLight, borderRadius: 3, overflow: 'hidden' } },
+                  e('div', { style: { height: '100%', width: (pct * 100).toFixed(0) + '%', background: v.profit >= 0 ? C.green : '#dc2626', borderRadius: 3 } })
+                )
+              );
+            })
           )
-        ))
-    ),
+        ),
+
+        // ── BETS LIST VIEW ──
+        trackerView === 'bets' && bets.length === 0 &&
+          e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
+            e('div', { style: { fontSize: 36, marginBottom: 8 } }, '📒'),
+            e('div', { style: { fontSize: 14 } }, 'No bets logged yet. Hit "Log Bet" on any arb or +EV card.')
+          ),
+
+        trackerView === 'bets' && bets.map(bet => {
+          const clv = clvBet(bet);
+          return e('div', { key: bet.id, style: { ...st.card(false), cursor: 'default', marginBottom: 10 } },
+            e('div', { style: st.cardRow },
+              e('div', { style: { flex: 1, minWidth: 0 } },
+                e('div', { style: { display: 'flex', gap: 5, marginBottom: 3, flexWrap: 'wrap' } },
+                  e('span', { style: st.sportLabel }, getSportInfo(bet.sport).emoji + ' ' + getSportInfo(bet.sport).label),
+                  e('span', { style: { fontSize: 11, color: C.muted } }, '· ' + new Date(bet.date).toLocaleDateString()),
+                  e('span', { style: { fontSize: 11, fontWeight: 600, color: bet.type === 'ev' ? C.blue : bet.type === 'manual' ? C.purple : C.green, background: bet.type === 'ev' ? '#eff6ff' : bet.type === 'manual' ? C.purpleLight : C.greenLight, padding: '1px 6px', borderRadius: 10 } }, bet.type === 'ev' ? '+EV' : bet.type === 'manual' ? 'Manual' : 'Arb')
+                ),
+                e('div', { style: st.matchTitle }, bet.match)
+              ),
+              e('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 } },
+                e('select', { value: bet.status, onChange: ev => setBets(p => p.map(b => b.id === bet.id ? { ...b, status: ev.target.value } : b)), style: { fontSize: 11, padding: '3px 6px', borderRadius: 6, border: '1px solid ' + C.border, background: C.white } },
+                  e('option', { value: 'pending' }, '⏳ Pending'), e('option', { value: 'won' }, '✅ Won'), e('option', { value: 'lost' }, '❌ Lost')
+                ),
+                e('button', { onClick: () => setBets(p => p.filter(b => b.id !== bet.id)), style: { ...st.btn('danger'), padding: '3px 8px', fontSize: 11 } }, '✕')
+              )
+            ),
+
+            // Outcomes / legs
+            e('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 } },
+              (bet.outcomes || []).map((o, i) => e('div', { key: i, style: { background: C.grayLight, borderRadius: 8, padding: '5px 9px', fontSize: 12 } },
+                e('div', { style: { color: C.muted, fontSize: 11 } }, o.label || o.outcome || 'Bet'),
+                e('div', { style: { fontWeight: 700 } }, (o.bookName || o.book || '') + ' · ' + (bet.currency || currency) + ' ' + (o.stake || bet.stake).toFixed(2)),
+                o.odds && e('div', { style: { color: C.green, fontWeight: 700, fontSize: 13 } }, '@' + o.odds.toFixed(2))
+              ))
+            ),
+
+            // P&L line
+            e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTop: '1px solid ' + C.border } },
+              e('div', { style: { fontSize: 12, color: C.muted } },
+                'Staked: ' + (bet.currency || currency) + ' ' + (bet.stake || 0).toFixed(2) +
+                (bet.status !== 'pending' ? ' · ' + (bet.status === 'won' ? '✅ Won ' + (bet.currency || currency) + ' ' + bet.profit.toFixed(2) : '❌ Lost ' + (bet.currency || currency) + ' ' + (bet.stake || 0).toFixed(2)) : ' · ⏳ Pending')
+              ),
+              clv !== null && e('span', { style: { fontSize: 11, fontWeight: 700, color: parseFloat(clv) >= 0 ? C.green : '#dc2626', background: parseFloat(clv) >= 0 ? C.greenLight : '#fef2f2', padding: '2px 8px', borderRadius: 10 } }, 'CLV ' + (parseFloat(clv) >= 0 ? '+' : '') + clv + '%')
+            ),
+
+            // CLV input (for EV bets — compare placed odds vs closing odds)
+            bet.type === 'ev' && bet.status !== 'pending' && e('div', { style: { marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' } },
+              e('span', { style: { fontSize: 11, color: C.muted, flexShrink: 0 } }, 'Closing odds:'),
+              e('input', { type: 'number', step: 0.01, placeholder: 'e.g. 14.50', value: clvInputs[bet.id] || '', onChange: ev => setClvInputs(p => ({ ...p, [bet.id]: ev.target.value })), style: { ...st.input, width: 100, fontSize: 12, padding: '4px 8px' } }),
+              clv !== null && e('span', { style: { fontSize: 12, color: C.muted } }, 'You beat closing line by ' + clv + '%')
+            )
+          );
+        })
+      );
+    })()),
     tab === 'guide' && e('div', { style: st.section },
       e('div', { style: st.guideH }, '🇬🇭 All Bookmakers in Ghana'),
       e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 } },
