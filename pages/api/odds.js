@@ -32,9 +32,19 @@ const GLOBAL_BOOKMAKERS = [
 const waCache = {};
 const WA_CACHE_TTL = 3 * 60 * 1000;
 
+// Tracks last known health per bookmaker, persists across requests in the
+// same serverless instance (best-effort — resets on cold start).
+const waHealth = {
+  sportybet: { ok: null, reason: null, fetchedAt: null },
+  betano:    { ok: null, reason: null, fetchedAt: null },
+  msport:    { ok: null, reason: null, fetchedAt: null },
+};
+
 async function getWAOdds(sportKey) {
   const cached = waCache[sportKey];
-  if (cached && Date.now() - cached.ts < WA_CACHE_TTL) return cached.data;
+  if (cached && Date.now() - cached.ts < WA_CACHE_TTL) {
+    return { events: cached.data, health: cached.health, fromCache: true };
+  }
 
   const [sportybet, betano, msport] = await Promise.allSettled([
     fetchSportybetOdds(sportKey),
@@ -42,14 +52,25 @@ async function getWAOdds(sportKey) {
     fetchMsportOdds(sportKey),
   ]);
 
+  // Update health tracker for each book regardless of cache
+  const extractStatus = (settled, fallbackReason) =>
+    settled.status === 'fulfilled' && settled.value?.status
+      ? settled.value.status
+      : { ok: false, reason: fallbackReason, fetchedAt: new Date().toISOString() };
+
+  waHealth.sportybet = extractStatus(sportybet, 'promise_rejected: ' + (sportybet.reason?.message || 'unknown'));
+  waHealth.betano    = extractStatus(betano,    'promise_rejected: ' + (betano.reason?.message    || 'unknown'));
+  waHealth.msport    = extractStatus(msport,    'promise_rejected: ' + (msport.reason?.message    || 'unknown'));
+
   const results = [
-    ...(sportybet.status === 'fulfilled' ? sportybet.value : []),
-    ...(betano.status    === 'fulfilled' ? betano.value    : []),
-    ...(msport.status    === 'fulfilled' ? msport.value    : []),
+    ...(sportybet.status === 'fulfilled' ? sportybet.value?.events || [] : []),
+    ...(betano.status    === 'fulfilled' ? betano.value?.events    || [] : []),
+    ...(msport.status    === 'fulfilled' ? msport.value?.events    || [] : []),
   ];
 
-  waCache[sportKey] = { data: results, ts: Date.now() };
-  return results;
+  const health = { sportybet: waHealth.sportybet, betano: waHealth.betano, msport: waHealth.msport };
+  waCache[sportKey] = { data: results, health, ts: Date.now() };
+  return { events: results, health, fromCache: false };
 }
 
 // ─── MERGE LOGIC ──────────────────────────────────────────────────────────────
@@ -157,7 +178,9 @@ export default async function handler(req, res) {
   }
 
   // ── 2. WA scrapers run regardless of whether global API succeeded ─────────
-  const waEvents = sport ? await getWAOdds(sport) : [];
+  const waResult = sport ? await getWAOdds(sport) : { events: [], health: waHealth, fromCache: false };
+  const waEvents = waResult.events;
+  const waBookHealth = waResult.health;
 
   // ── 3. If global failed entirely, fall through to WA-only response ────────
   if (!globalData && waEvents.length === 0) {
@@ -166,6 +189,7 @@ export default async function handler(req, res) {
       error: 'All API keys exhausted. ' + lastError,
       detail: lastErrorDetail,
       sport, region, markets,
+      waBookHealth,
     });
   }
 
@@ -185,6 +209,7 @@ export default async function handler(req, res) {
     remainingRequests,
     usedRequests,
     keyIndex,
+    waBookHealth,
     meta: {
       sport,
       totalEvents:  merged.length,
