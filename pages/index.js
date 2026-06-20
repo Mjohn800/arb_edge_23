@@ -320,8 +320,10 @@ function findEVBets(events, minEV = 2, mode = 'all') {
 // A middle exists when two books have different spreads/totals lines on the same
 // event such that there is a range of outcomes where BOTH bets win.
 // e.g. Book A: Team -3.5  Book B: Team +4.5 → middle window = 1 point (score of 4)
-function findMiddles(events) {
+function findMiddles(events, mode = 'global') {
   const middles = [];
+  // West Africa section: a middle is only placeable if BOTH legs are on WA-accessible books.
+  const legsOk = (bookA, bookB) => mode !== 'wa' || (BOOKS[bookA]?.accessible && BOOKS[bookB]?.accessible);
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
 
@@ -333,6 +335,7 @@ function findMiddles(events) {
     for (let i = 0; i < spreadsByBook.length; i++) {
       for (let j = i + 1; j < spreadsByBook.length; j++) {
         const a = spreadsByBook[i], b = spreadsByBook[j];
+        if (!legsOk(a.book, b.book)) continue;
         for (const aOut of a.outcomes) {
           const bOut = b.outcomes.find(o => o.name === aOut.name);
           if (!bOut || aOut.point == null || bOut.point == null) continue;
@@ -356,6 +359,7 @@ function findMiddles(events) {
     for (let i = 0; i < totalsByBook.length; i++) {
       for (let j = i + 1; j < totalsByBook.length; j++) {
         const a = totalsByBook[i], b = totalsByBook[j];
+        if (!legsOk(a.book, b.book)) continue;
         const aOver = a.outcomes.find(o => o.name === 'Over');
         const bUnder = b.outcomes.find(o => o.name === 'Under');
         if (!aOver || !bUnder || aOver.point == null || bUnder.point == null) continue;
@@ -420,12 +424,15 @@ function findSteam(prevEvents, currEvents, threshold = 0.04) {
 // ── LINE SHOPPING ───────────────────────────────────────────────────────────
 // For every event, show the best available price per outcome across all books,
 // and how much better it is vs the worst price — the "leaving money on the table" gap.
-function findBestOdds(events) {
+function findBestOdds(events, mode = 'global') {
   const results = [];
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
     const byOutcome = {};
     for (const bm of ev.bookmakers) {
+      // West Africa section: only compare books actually accessible from WA —
+      // otherwise the "gap" is theoretical (e.g. vs Pinnacle, which WA bettors can't use).
+      if (mode === 'wa' && !BOOKS[bm.key]?.accessible) continue;
       const mkt = (bm.markets || []).find(m => m.key === 'h2h');
       if (!mkt) continue;
       for (const o of mkt.outcomes) {
@@ -582,8 +589,12 @@ useEffect(() => {
   const [cardAnalysis, setCardAnalysis] = useState({});
   const [analyzingId, setAnalyzingId] = useState(null);
   const [middles, setMiddles] = useState([]);
+  const [middlesWA, setMiddlesWA] = useState([]); // West Africa middles — both legs accessible
+  const [middleSection, setMiddleSection] = useState('global'); // 'global' | 'wa'
   const [steam, setSteam] = useState([]);
   const [bestOdds, setBestOdds] = useState([]);
+  const [bestOddsWA, setBestOddsWA] = useState([]); // West Africa line shopping — accessible books only
+  const [lineshopSection, setLineshopSection] = useState('global'); // 'global' | 'wa'
   const [edgeTab, setEdgeTab] = useState('lineshop'); // 'lineshop' | 'middle' | 'steam'
   const prevEventsRef = React.useRef([]);
 
@@ -634,9 +645,11 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
     else { setEvBets(MOCK_EV); setIsDemoEV(true); }
     setEvWA(foundEVWA);
-    setMiddles(findMiddles(all));
+    setMiddles(findMiddles(all, 'global'));
+    setMiddlesWA(findMiddles(all, 'wa'));
     setSteam(findSteam(prevEventsRef.current, all));
-    setBestOdds(findBestOdds(all));
+    setBestOdds(findBestOdds(all, 'global'));
+    setBestOddsWA(findBestOdds(all, 'wa'));
     prevEventsRef.current = all;
     setLoading(false);
     setNextScanAt(Date.now() + 12 * 60 * 1000);
@@ -1117,11 +1130,28 @@ const analyzeArb = async (arb) => {
         e('div', { style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1e3a8a', lineHeight: 1.6 } },
           '🛒 Line shopping shows the best available price for every outcome across all scanned bookmakers. Always bet at the highest odds available — even a 5% improvement in odds over hundreds of bets is the difference between losing and profiting.'
         ),
-        bestOdds.length === 0 && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
-          e('div', { style: { fontSize: 32, marginBottom: 8 } }, '🛒'),
-          e('div', { style: { fontSize: 14 } }, 'Run a scan first to see best available odds.')
+        // Region section toggle
+        e('div', { style: { display: 'flex', gap: 6, marginBottom: 10 } },
+          [['global','🌍 Global'], ['wa','🇬🇭 West Africa']].map(([k,l]) =>
+            e('button', { key: k, onClick: () => setLineshopSection(k), style: { ...st.btn(lineshopSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '7px 14px' } }, l)
+          )
         ),
-        bestOdds.map(ev => {
+        e('div', { style: { background: lineshopSection === 'wa' ? '#dcfce7' : '#eff6ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: lineshopSection === 'wa' ? C.greenDark : '#1e3a8a' } },
+          lineshopSection === 'wa'
+            ? '🇬🇭 Comparing only books accessible in West Africa (Betway, SportyBet, Betano, MSport, MelBet, 1xBet) — gaps shown are bets you can actually place.'
+            : '🌍 Comparing all scanned books worldwide, including books not accessible from West Africa.'
+        ),
+        (() => {
+          const activeOdds = lineshopSection === 'wa' ? bestOddsWA : bestOdds;
+          if (activeOdds.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
+            e('div', { style: { fontSize: 32, marginBottom: 8 } }, '🛒'),
+            e('div', { style: { fontSize: 14 } },
+              lineshopSection === 'wa'
+                ? 'No West Africa price gaps found yet. Run a scan, or odds may be aligned across WA books right now.'
+                : 'Run a scan first to see best available odds.'
+            )
+          );
+          return activeOdds.map(ev => {
           const info = getSportInfo(ev.sport);
           return e('div', { key: ev.id, style: { ...st.card(false), cursor: 'default', marginBottom: 12 } },
             e('div', { style: { marginBottom: 8 } },
@@ -1151,7 +1181,8 @@ const analyzeArb = async (arb) => {
               );
             })
           );
-        })
+        });
+        })()
       ),
 
       // ── MIDDLE BETTING ──
@@ -1159,11 +1190,28 @@ const analyzeArb = async (arb) => {
         e('div', { style: { background: '#fdf4ff', border: '1px solid #e9d5ff', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#6b21a8', lineHeight: 1.6 } },
           '↔ A middle is when two books offer different spread/total lines on the same game — creating a window of scores where BOTH your bets win. You always collect at least one bet; the aim is occasionally hitting the middle and winning both. Best on NBA, NFL, NFL totals.'
         ),
-        middles.length === 0 && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
-          e('div', { style: { fontSize: 32, marginBottom: 8 } }, '↔'),
-          e('div', { style: { fontSize: 14 } }, 'No middles found yet. Run a scan — middles appear most often in NBA and NFL spreads/totals.')
+        // Region section toggle
+        e('div', { style: { display: 'flex', gap: 6, marginBottom: 10 } },
+          [['global','🌍 Global'], ['wa','🇬🇭 West Africa']].map(([k,l]) =>
+            e('button', { key: k, onClick: () => setMiddleSection(k), style: { ...st.btn(middleSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '7px 14px' } }, l)
+          )
         ),
-        middles.map(m => {
+        e('div', { style: { background: middleSection === 'wa' ? '#dcfce7' : '#fdf4ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: middleSection === 'wa' ? C.greenDark : '#6b21a8' } },
+          middleSection === 'wa'
+            ? '🇬🇭 Both legs must be on books accessible in West Africa (Betway, SportyBet, Betano, MSport, MelBet, 1xBet) — every middle shown here is placeable.'
+            : '🌍 Showing middles across all scanned books worldwide, including books not accessible from West Africa.'
+        ),
+        (() => {
+          const activeMiddles = middleSection === 'wa' ? middlesWA : middles;
+          if (activeMiddles.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
+            e('div', { style: { fontSize: 32, marginBottom: 8 } }, '↔'),
+            e('div', { style: { fontSize: 14 } },
+              middleSection === 'wa'
+                ? 'No West Africa middles found yet. Run a scan — these need a price gap between two WA-accessible books.'
+                : 'No middles found yet. Run a scan — middles appear most often in NBA and NFL spreads/totals.'
+            )
+          );
+          return activeMiddles.map(m => {
           const info = getSportInfo(m.sport);
           const overround = ((m.implied - 1) * 100).toFixed(1);
           return e('div', { key: m.id, style: { background: C.white, border: '1px solid ' + (m.isArb ? C.green : '#e9d5ff'), borderRadius: 12, padding: '13px 14px', marginBottom: 10 } },
@@ -1194,7 +1242,8 @@ const analyzeArb = async (arb) => {
               '💡 If the final margin falls between ' + Math.abs(m.legA.line) + ' and ' + Math.abs(m.legB.line) + ', both legs win. Otherwise one leg wins, one loses.'
             )
           );
-        })
+        });
+        })()
       ),
 
       // ── STEAM CHASING ──
