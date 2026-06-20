@@ -590,6 +590,7 @@ useEffect(() => {
   const [analyzingId, setAnalyzingId] = useState(null);
   const [middles, setMiddles] = useState([]);
   const [middlesWA, setMiddlesWA] = useState([]); // West Africa middles — both legs accessible
+  const [waDebug, setWaDebug] = useState(null); // TEMP: on-screen WA diagnostics (no dev tools needed)
   const [middleSection, setMiddleSection] = useState('global'); // 'global' | 'wa'
   const [steam, setSteam] = useState([]);
   const [bestOdds, setBestOdds] = useState([]);
@@ -665,12 +666,17 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
       const eventsWith2PlusAccessible = all.filter(ev =>
         (ev.bookmakers || []).filter(bm => BOOKS[bm.key]?.accessible).length >= 2
       ).length;
-      console.log('[WA debug] total events scanned:', all.length);
-      console.log('[WA debug] bookmaker key → event count:', keyCounts);
-      console.log('[WA debug] keys recognized as accessible/WA:', accessibleSeen);
-      console.log('[WA debug] keys in data NOT found in BOOKS at all (possible mismatch):', unknownKeys);
-      console.log('[WA debug] events with 2+ accessible books on the SAME event:', eventsWith2PlusAccessible);
-      console.log('[WA debug] bestOddsWA results:', bestOddsWAResult.length, '| middlesWA results:', middlesWAResult.length);
+      const debugInfo = {
+        totalEvents: all.length,
+        keyCounts,
+        accessibleSeen,
+        unknownKeys,
+        eventsWith2PlusAccessible,
+        bestOddsWACount: bestOddsWAResult.length,
+        middlesWACount: middlesWAResult.length,
+      };
+      console.log('[WA debug]', debugInfo);
+      setWaDebug(debugInfo);
     })();
 
     prevEventsRef.current = all;
@@ -1141,6 +1147,16 @@ const analyzeArb = async (arb) => {
     })()
     ),
     tab === 'edge' && e('div', { style: st.section },
+      // ── TEMP: on-screen WA debug panel (no dev tools needed) ───────────────
+      waDebug && e('div', { style: { background: '#1f2937', borderRadius: 10, padding: '10px 12px', marginBottom: 12, fontSize: 11, color: '#e5e7eb', lineHeight: 1.6, fontFamily: 'monospace' } },
+        e('div', { style: { fontWeight: 700, color: '#6ee7b7', marginBottom: 6 } }, '🔎 WA DEBUG (run a scan to refresh)'),
+        e('div', null, 'Total events: ' + waDebug.totalEvents),
+        e('div', null, 'Events with 2+ accessible books: ' + waDebug.eventsWith2PlusAccessible),
+        e('div', null, 'bestOddsWA results: ' + waDebug.bestOddsWACount + ' | middlesWA results: ' + waDebug.middlesWACount),
+        e('div', { style: { marginTop: 6, color: '#fcd34d' } }, 'Accessible keys seen: ' + (waDebug.accessibleSeen.join(', ') || '(none)')),
+        e('div', { style: { marginTop: 4, color: '#fca5a5' } }, 'Unknown keys (not in BOOKS): ' + (waDebug.unknownKeys.join(', ') || '(none)')),
+        e('div', { style: { marginTop: 6, color: '#9ca3af' } }, 'All key counts: ' + JSON.stringify(waDebug.keyCounts))
+      ),
       // Sub-tab nav
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
         [['lineshop', '🛒 Line Shopping'], ['middle', '↔ Middles'], ['steam', '💨 Steam']].map(([k, l]) =>
