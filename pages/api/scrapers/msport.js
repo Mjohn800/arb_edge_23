@@ -3,7 +3,7 @@
  * Fetches live odds from MSport Ghana's internal API.
  * Normalised to The Odds API bookmaker format.
  *
- * MSport uses a REST JSON API at their backend —
+ * MSport uses a REST JSON API at their backend â€”
  * the same endpoint their web frontend calls.
  */
 
@@ -17,7 +17,6 @@ const MSPORT_SPORT_MAP = {
   soccer_france_ligue_one:      { sportId: 1, leagueId: '61'   },
   soccer_ghana_premiership:     { sportId: 1, leagueId: '288'  },
   soccer_africa_cup_of_nations: { sportId: 1, leagueId: '6'    },
-  soccer_fifa_world_cup:        { sportId: 1, leagueId: '1'    },
   basketball_nba:               { sportId: 2, leagueId: '12'   },
   tennis_atp_wimbledon:         { sportId: 5, leagueId: '3'    },
   mma_mixed_martial_arts:       { sportId: 30, leagueId: null  },
@@ -33,7 +32,9 @@ const HEADERS = {
 
 async function fetchMsportOdds(sportKey) {
   const mapping = MSPORT_SPORT_MAP[sportKey];
-  if (!mapping) return [];
+  if (!mapping) {
+    return { events: [], status: { ok: true, reason: 'unsupported_sport', fetchedAt: new Date().toISOString() } };
+  }
 
   try {
     const body = {
@@ -54,16 +55,17 @@ async function fetchMsportOdds(sportKey) {
 
     if (!res.ok) {
       console.warn('[MSport] HTTP', res.status, 'for', sportKey);
-      return [];
+      return { events: [], status: { ok: false, reason: 'http_' + res.status, fetchedAt: new Date().toISOString() } };
     }
 
     const json = await res.json();
     const events = json?.data?.list || json?.data?.matchList || [];
+    const normalised = events.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
 
-    return events.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
+    return { events: normalised, status: { ok: true, reason: null, fetchedAt: new Date().toISOString() } };
   } catch (err) {
     console.warn('[MSport] fetch error for', sportKey, err.message);
-    return [];
+    return { events: [], status: { ok: false, reason: err.name === 'TimeoutError' ? 'timeout' : 'fetch_error: ' + err.message, fetchedAt: new Date().toISOString() } };
   }
 }
 
