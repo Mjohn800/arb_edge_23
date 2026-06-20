@@ -7,6 +7,27 @@ export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_
 export const SHARP_BOOKS_WESTAFRICA = ['1xbet', 'singbet', 'sbobet'];
 export const WA_BOOKS               = ['sportybet', 'betano', 'msport', 'melbet', 'betway'];
 
+// Real Odds-API bookmaker keys we actually compare for the GLOBAL feed.
+// Specifying these by name instead of `regions=eu,uk` costs 1 credit per scan
+// (up to 10 bookmakers = 1 credit) instead of 2 credits for two regions —
+// roughly half the quota burn, since none of the other EU/UK books in those
+// regions are used anywhere in the app anyway.
+const GLOBAL_BOOKMAKERS = [
+  'pinnacle',
+  'betfair_ex_eu',
+  'singbet',
+  'sbobet',
+  'bet365',
+  'marathonbet',
+  'unibet_eu',
+  'williamhill',
+  '1xbet',
+  'melbet',
+].join(',');
+// Note: betway is requested separately or added back here if you drop one of
+// the above — currently at exactly 10 to stay within the 1-credit tier.
+// betfair_ex_uk dropped as redundant with betfair_ex_eu (same exchange, same odds).
+
 // ─── WA SCRAPER CACHE (in-memory, 3 min TTL) ─────────────────────────────────
 const waCache = {};
 const WA_CACHE_TTL = 3 * 60 * 1000;
@@ -80,7 +101,7 @@ export default async function handler(req, res) {
   ].filter(Boolean);
 
   console.log('[odds] keys loaded:', keys.map((k, i) => `KEY_${i+1}=${k ? k.slice(0,8)+'...' : 'MISSING'}`));
-  console.log('[odds] requesting sport:', sport, 'region:', region, 'markets:', markets);
+  console.log('[odds] requesting sport:', sport, 'bookmakers:', GLOBAL_BOOKMAKERS, 'markets:', markets);
 
   let lastError = null;
   let lastErrorDetail = null;
@@ -91,7 +112,7 @@ export default async function handler(req, res) {
 
   // ── 1. Try each API key until one succeeds ────────────────────────────────
   for (const key of keys) {
-    const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${key}&regions=${region}&markets=${markets}&oddsFormat=decimal`;
+    const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${key}&bookmakers=${GLOBAL_BOOKMAKERS}&markets=${markets}&oddsFormat=decimal`;
     try {
       const response = await fetch(url);
       console.log(`[odds] key ${keys.indexOf(key)+1} → status ${response.status}`);
