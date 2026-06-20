@@ -49,11 +49,13 @@ const HEADERS  = {
 /**
  * Fetches events for a given sport key from SportyBet GH.
  * @param {string} sportKey  - our internal sport key e.g. 'soccer_epl'
- * @returns {Array}          - array of events in Odds API bookmaker format
+ * @returns {{ events: Array, status: { ok: boolean, reason: string|null, fetchedAt: string } }}
  */
 async function fetchSportybetOdds(sportKey) {
   const mapping = SPORTYBET_SPORT_MAP[sportKey];
-  if (!mapping) return [];
+  if (!mapping) {
+    return { events: [], status: { ok: true, reason: 'unsupported_sport', fetchedAt: new Date().toISOString() } };
+  }
 
   try {
     const params = new URLSearchParams({
@@ -71,16 +73,17 @@ async function fetchSportybetOdds(sportKey) {
 
     if (!res.ok) {
       console.warn('[SportyBet] HTTP', res.status, 'for', sportKey);
-      return [];
+      return { events: [], status: { ok: false, reason: 'http_' + res.status, fetchedAt: new Date().toISOString() } };
     }
 
     const json = await res.json();
     const events = json?.data?.events || json?.data?.tournamentEvents || [];
+    const normalised = events.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
 
-    return events.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
+    return { events: normalised, status: { ok: true, reason: null, fetchedAt: new Date().toISOString() } };
   } catch (err) {
     console.warn('[SportyBet] fetch error for', sportKey, err.message);
-    return [];
+    return { events: [], status: { ok: false, reason: err.name === 'TimeoutError' ? 'timeout' : 'fetch_error: ' + err.message, fetchedAt: new Date().toISOString() } };
   }
 }
 
