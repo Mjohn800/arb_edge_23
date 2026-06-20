@@ -1071,24 +1071,24 @@ const analyzeArb = async (arb) => {
             ),
             e('div', { style: { background: '#eff6ff', borderRadius: 8, padding: '10px 12px', marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 } },
               [
-              ['¼ Kelly %', kelly.toFixed(1) + '%', C.text],
-              ['Suggested stake', currency + ' ' + kellyStake.toFixed(2), C.text],
-              ['Expected profit', currency + ' ' + expectedProfit.toFixed(2), C.blue],
-            ].map(([l, v, c]) =>
-              e('div', { key: l, style: { textAlign: 'center' } },
-                e('div', { style: { fontSize: 10, color: C.muted, marginBottom: 3 } }, l),
-                e('div', { style: { fontSize: 14, fontWeight: 700, color: c } }, v)
+                ['¼ Kelly %', kelly.toFixed(1) + '%', C.text],
+                ['Suggested stake', currency + ' ' + kellyStake.toFixed(2), C.text],
+                ['Expected profit', currency + ' ' + expectedProfit.toFixed(2), C.blue],
+              ].map(([l, v, c]) =>
+                e('div', { key: l, style: { textAlign: 'center' } },
+                  e('div', { style: { fontSize: 10, color: C.muted, marginBottom: 3 } }, l),
+                  e('div', { style: { fontSize: 14, fontWeight: 700, color: c } }, v)
+                )
               )
-            )
-            )
-          ),
+            ),
           e('div', { style: { fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.4 } },
             '⚠️ +EV is a long-run strategy. Any single bet can lose. The edge only shows over 100s of bets.'
           ),
           e('button', { onClick: () => logEVBet(bet, kellyStake, expectedProfit), style: { ...st.btn('success'), marginTop: 8, width: '100%', fontSize: 12 } }, '📒 Log This Bet')
         );
       }));
-    })(),
+    })()
+    ),
     tab === 'edge' && e('div', { style: st.section },
       // Sub-tab nav
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
