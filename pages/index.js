@@ -645,11 +645,34 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
     else { setEvBets(MOCK_EV); setIsDemoEV(true); }
     setEvWA(foundEVWA);
+    const middlesWAResult = findMiddles(all, 'wa');
+    const bestOddsWAResult = findBestOdds(all, 'wa');
     setMiddles(findMiddles(all, 'global'));
-    setMiddlesWA(findMiddles(all, 'wa'));
+    setMiddlesWA(middlesWAResult);
     setSteam(findSteam(prevEventsRef.current, all));
     setBestOdds(findBestOdds(all, 'global'));
-    setBestOddsWA(findBestOdds(all, 'wa'));
+    setBestOddsWA(bestOddsWAResult);
+
+    // ── TEMP DEBUG: diagnose why the WA section is empty ──────────────────────
+    // Remove once the root cause is confirmed.
+    (() => {
+      const keyCounts = {};
+      all.forEach(ev => (ev.bookmakers || []).forEach(bm => {
+        keyCounts[bm.key] = (keyCounts[bm.key] || 0) + 1;
+      }));
+      const accessibleSeen = Object.keys(keyCounts).filter(k => BOOKS[k]?.accessible);
+      const unknownKeys = Object.keys(keyCounts).filter(k => !BOOKS[k]);
+      const eventsWith2PlusAccessible = all.filter(ev =>
+        (ev.bookmakers || []).filter(bm => BOOKS[bm.key]?.accessible).length >= 2
+      ).length;
+      console.log('[WA debug] total events scanned:', all.length);
+      console.log('[WA debug] bookmaker key → event count:', keyCounts);
+      console.log('[WA debug] keys recognized as accessible/WA:', accessibleSeen);
+      console.log('[WA debug] keys in data NOT found in BOOKS at all (possible mismatch):', unknownKeys);
+      console.log('[WA debug] events with 2+ accessible books on the SAME event:', eventsWith2PlusAccessible);
+      console.log('[WA debug] bestOddsWA results:', bestOddsWAResult.length, '| middlesWA results:', middlesWAResult.length);
+    })();
+
     prevEventsRef.current = all;
     setLoading(false);
     setNextScanAt(Date.now() + 12 * 60 * 1000);
