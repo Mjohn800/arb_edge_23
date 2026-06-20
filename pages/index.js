@@ -1070,7 +1070,7 @@ const analyzeArb = async (arb) => {
               )
             ),
             e('div', { style: { background: '#eff6ff', borderRadius: 8, padding: '10px 12px', marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 } },
-            [
+              [
               ['¼ Kelly %', kelly.toFixed(1) + '%', C.text],
               ['Suggested stake', currency + ' ' + kellyStake.toFixed(2), C.text],
               ['Expected profit', currency + ' ' + expectedProfit.toFixed(2), C.blue],
@@ -1079,6 +1079,7 @@ const analyzeArb = async (arb) => {
                 e('div', { style: { fontSize: 10, color: C.muted, marginBottom: 3 } }, l),
                 e('div', { style: { fontSize: 14, fontWeight: 700, color: c } }, v)
               )
+            )
             )
           ),
           e('div', { style: { fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.4 } },
@@ -1638,6 +1639,6 @@ const analyzeArb = async (arb) => {
         )
       ),
       e('div', { style: { background: C.amberLight, borderRadius: 10, padding: '11px 14px', marginTop: 16, fontSize: 12, color: '#78350f', lineHeight: 1.6 } }, '⚖️ Sports betting is legal in Ghana under the Gaming Commission of Ghana. Bet responsibly.')
-   )
-  ));
+    )
+  );
 }
