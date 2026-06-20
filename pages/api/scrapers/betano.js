@@ -17,7 +17,6 @@ const BETANO_SPORT_MAP = {
   soccer_france_ligue_one:      { sportId: 4, leagueId: 9 },
   soccer_ghana_premiership:     { sportId: 4, leagueId: 557 },
   soccer_africa_cup_of_nations: { sportId: 4, leagueId: 422 },
-  soccer_fifa_world_cup:        { sportId: 4, leagueId: 1    },
   basketball_nba:               { sportId: 2, leagueId: 132 },
   tennis_atp_wimbledon:         { sportId: 5, leagueId: 270 },
   mma_mixed_martial_arts:       { sportId: 23, leagueId: null },
@@ -33,7 +32,9 @@ const HEADERS = {
 
 async function fetchBetanoOdds(sportKey) {
   const mapping = BETANO_SPORT_MAP[sportKey];
-  if (!mapping) return [];
+  if (!mapping) {
+    return { events: [], status: { ok: true, reason: 'unsupported_sport', fetchedAt: new Date().toISOString() } };
+  }
 
   try {
     const url = `${BASE_URL}${mapping.sportId}/${mapping.leagueId ? mapping.leagueId + '/' : ''}?bf=1&page=1`;
@@ -44,18 +45,19 @@ async function fetchBetanoOdds(sportKey) {
 
     if (!res.ok) {
       console.warn('[Betano] HTTP', res.status, 'for', sportKey);
-      return [];
+      return { events: [], status: { ok: false, reason: 'http_' + res.status, fetchedAt: new Date().toISOString() } };
     }
 
     const json = await res.json();
     // Betano wraps events under data.blocks[].events or data.events
     const blocks = json?.data?.blocks || [];
     const events = blocks.flatMap(b => b.events || []);
+    const normalised = events.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
 
-    return events.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
+    return { events: normalised, status: { ok: true, reason: null, fetchedAt: new Date().toISOString() } };
   } catch (err) {
     console.warn('[Betano] fetch error for', sportKey, err.message);
-    return [];
+    return { events: [], status: { ok: false, reason: err.name === 'TimeoutError' ? 'timeout' : 'fetch_error: ' + err.message, fetchedAt: new Date().toISOString() } };
   }
 }
 
