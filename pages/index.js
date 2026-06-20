@@ -1087,7 +1087,7 @@ const analyzeArb = async (arb) => {
           e('button', { onClick: () => logEVBet(bet, kellyStake, expectedProfit), style: { ...st.btn('success'), marginTop: 8, width: '100%', fontSize: 12 } }, '📒 Log This Bet')
         );
       }));
-    }),
+    })(),
     tab === 'edge' && e('div', { style: st.section },
       // Sub-tab nav
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
