@@ -531,6 +531,7 @@ const [apiKey, setApiKey] = useState('server');
   const [error, setError] = useState('');
   const [isDemo, setIsDemo] = useState(true);
   const [isDemoEV, setIsDemoEV] = useState(true);
+  const [waHealth, setWaHealth] = useState(null);
   const [sel, setSel] = useState(null);
   const [stake, setStake] = useState(500);
   const [currency, setCurrency] = useState('GHS');
@@ -616,6 +617,7 @@ useEffect(() => {
         const json = await res.json();
 const data = json.data || json;
 if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests, keyIndex: json.keyIndex || 1 });
+if (json.waBookHealth) setWaHealth(json.waBookHealth);
 data.forEach(e => { e.sport_key = sp.key; });
 all.push(...data);
 if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map(b=>b.key)).filter((v,i,a)=>a.indexOf(v)===i).join(', '));
@@ -740,6 +742,19 @@ const analyzeArb = async (arb) => {
         e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ ' + scanProgress.sport + '...' : '● ' + filteredArbs.length + ' arbs'),
         lastFetch && e('span', { style: st.badge('#1f2937', '#9ca3af') }, lastFetch.toLocaleTimeString()),
         isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, '⚠ Demo'),
+        waHealth && (() => {
+          const books = Object.entries(waHealth);
+          const upCount = books.filter(([, h]) => h && h.ok).length;
+          const allUp = upCount === books.length;
+          const allDown = upCount === 0;
+          const bg = allUp ? '#052e16' : allDown ? '#450a0a' : '#451a03';
+          const fg = allUp ? '#6ee7b7' : allDown ? '#fca5a5' : '#fcd34d';
+          const icon = allUp ? '✓' : allDown ? '✕' : '⚠';
+          return e('span', {
+            style: st.badge(bg, fg),
+            title: books.map(([name, h]) => name + ': ' + (h && h.ok ? 'live' : (h && h.reason) || 'unknown')).join(' · '),
+          }, icon + ' WA ' + upCount + '/' + books.length);
+        })(),
         e('button', { onClick: () => setShowSetup(v => !v), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 10px' } }, apiKey ? '⚙ Connected' : 'Connect Live ↗')
       ),
       showSetup && e('div', { style: st.setupBox },
