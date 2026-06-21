@@ -3,7 +3,7 @@
  * Fetches live odds from MSport Ghana's internal API.
  * Normalised to The Odds API bookmaker format.
  *
- * MSport uses a REST JSON API at their backend â€”
+ * MSport uses a REST JSON API at their backend —
  * the same endpoint their web frontend calls.
  */
 
@@ -17,7 +17,7 @@ const MSPORT_SPORT_MAP = {
   soccer_france_ligue_one:      { sportId: 1, leagueId: '61'   },
   soccer_ghana_premiership:     { sportId: 1, leagueId: '288'  },
   soccer_africa_cup_of_nations: { sportId: 1, leagueId: '6'    },
-  // TEMP 2026-06-21: leagueId unknown â€” was completely missing before, which is why
+  // TEMP 2026-06-21: leagueId unknown — was completely missing before, which is why
   // World Cup always returned 0 events with no error. Falling back to no filter
   // (same pattern already used for MMA below) queries all of sportId 1 broadly.
   // Find the real leagueId via the site's own network requests (browse to the World
@@ -61,8 +61,10 @@ async function fetchMsportOdds(sportKey) {
     });
 
     if (!res.ok) {
-      console.warn('[MSport] HTTP', res.status, 'for', sportKey);
-      return { events: [], status: { ok: false, reason: 'http_' + res.status, fetchedAt: new Date().toISOString() } };
+      let bodyText = '';
+      try { bodyText = (await res.text()).slice(0, 300); } catch {}
+      console.warn('[MSport] HTTP', res.status, 'for', sportKey, '| body:', bodyText);
+      return { events: [], status: { ok: false, reason: 'http_' + res.status + (bodyText ? ': ' + bodyText : ''), fetchedAt: new Date().toISOString() } };
     }
 
     const json = await res.json();
