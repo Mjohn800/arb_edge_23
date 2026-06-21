@@ -4,7 +4,7 @@ import { fetchMsportOdds }    from './scrapers/msport';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
-export const SHARP_BOOKS_WESTAFRICA = ['1xbet', 'singbet', 'sbobet'];
+export const SHARP_BOOKS_WESTAFRICA = ['1xbet', 'singbet', 'sbobet']; // 1xbet confirmed dead (no data) — harmless to leave here since findEVBets just won't match it, but singbet/sbobet are the real reference books now
 export const WA_BOOKS               = ['sportybet', 'betano', 'msport', 'melbet', 'betway'];
 
 // Real Odds-API bookmaker keys we actually compare for the GLOBAL feed.
@@ -12,6 +12,16 @@ export const WA_BOOKS               = ['sportybet', 'betano', 'msport', 'melbet'
 // (up to 10 bookmakers = 1 credit) instead of 2 credits for two regions —
 // roughly half the quota burn, since none of the other EU/UK books in those
 // regions are used anywhere in the app anyway.
+//
+// 1xbet and melbet were REMOVED 2026-06-20 after a direct API test confirmed
+// they return `"bookmakers":[]` on every fixture (verified on live FIFA World
+// Cup matches, with Pinnacle returning fully priced odds on the same
+// fixtures as a control) — they are not in this account's bookmaker
+// coverage at all. This is not a credits/plan-tier issue; buying more
+// requests will not make their data appear. If you want to test a
+// replacement key (e.g. betclic, betsson) before adding it back here, hit
+// https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds?apiKey=YOUR_KEY&bookmakers=KEY&markets=h2h
+// directly first — don't add a key on faith.
 const GLOBAL_BOOKMAKERS = [
   'pinnacle',
   'betfair_ex_eu',
@@ -21,12 +31,17 @@ const GLOBAL_BOOKMAKERS = [
   'marathonbet',
   'unibet_eu',
   'williamhill',
-  '1xbet',
-  'melbet',
 ].join(',');
-// Note: betway is requested separately or added back here if you drop one of
-// the above — currently at exactly 10 to stay within the 1-credit tier.
+// betway has NO data source at all — not in this list, and no scraper exists for
+// it (only sportybet/betano/msport are scraped). It's still flagged `accessible`
+// in BOOKS (a WA bettor really can use it), but it will never appear in scan
+// results until a scraper is added for it.
 // betfair_ex_uk dropped as redundant with betfair_ex_eu (same exchange, same odds).
+//
+// Net effect: the ONLY real sources of WA-accessible book data now are the 3
+// scrapers (sportybet, betano, msport). If those are unreliable (e.g. the
+// Betano 403 seen on AFCON), the WA section will legitimately have nothing to
+// show — that's a scraper problem, not a filtering bug in findBestOdds/findMiddles.
 
 // ─── WA SCRAPER CACHE (in-memory, 3 min TTL) ─────────────────────────────────
 const waCache = {};
@@ -67,6 +82,13 @@ async function getWAOdds(sportKey) {
     ...(betano.status    === 'fulfilled' ? betano.value?.events    || [] : []),
     ...(msport.status    === 'fulfilled' ? msport.value?.events    || [] : []),
   ];
+
+  // Surfaces the actual per-book event count for this sportKey — distinguishes
+  // "scraper reachable but found nothing for this sport" from a merge bug downstream.
+  console.log('[odds][WA]', sportKey, '-> sportybet:', sportybet.status === 'fulfilled' ? (sportybet.value?.events?.length ?? 0) : 'failed: ' + sportybet.reason?.message,
+    '| betano:', betano.status === 'fulfilled' ? (betano.value?.events?.length ?? 0) : 'failed: ' + betano.reason?.message,
+    '| msport:', msport.status === 'fulfilled' ? (msport.value?.events?.length ?? 0) : 'failed: ' + msport.reason?.message,
+    '| total:', results.length);
 
   const health = { sportybet: waHealth.sportybet, betano: waHealth.betano, msport: waHealth.msport };
   waCache[sportKey] = { data: results, health, ts: Date.now() };
@@ -202,6 +224,9 @@ export default async function handler(req, res) {
     ev._hasGlobal = books.some(b => !b._wa);
     ev._hasWA     = books.some(b =>  b._wa);
   });
+
+  console.log('[odds][merge]', sport, '-> globalEvents:', (globalData || []).length, '| waEvents in:', waEvents.length,
+    '| merged total:', merged.length, '| merged events carrying a WA book:', merged.filter(ev => ev._hasWA).length);
 
   // ── 6. Respond ────────────────────────────────────────────────────────────
   return res.status(200).json({
