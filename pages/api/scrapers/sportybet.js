@@ -26,6 +26,14 @@ const SPORTYBET_SPORT_MAP = {
   soccer_france_ligue_one:       { id: 'sr:sport:1', tournamentId: '34' },
   soccer_ghana_premiership:      { id: 'sr:sport:1', tournamentId: '1436'},
   soccer_africa_cup_of_nations:  { id: 'sr:sport:1', tournamentId: '5765'},
+  // TEMP 2026-06-21: tournamentId unknown — was completely missing before, which is
+  // why World Cup always returned 0 events with no error. Falling back to no filter
+  // (same pattern already used for MMA below) queries all of sr:sport:1 broadly,
+  // which should surface World Cup matches since it's the dominant event right now.
+  // Find the real tournamentId via the site's own network requests (browse to the
+  // World Cup section on sportybet.com/gh, inspect the publicEvents request) and
+  // replace this for a precise, smaller query.
+  soccer_fifa_world_cup:         { id: 'sr:sport:1', tournamentId: null },
   basketball_nba:                { id: 'sr:sport:2', tournamentId: '132'},
   tennis_atp_wimbledon:          { id: 'sr:sport:5', tournamentId: '270'},
   mma_mixed_martial_arts:        { id: 'sr:sport:117',tournamentId: null},
