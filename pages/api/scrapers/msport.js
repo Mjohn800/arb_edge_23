@@ -17,6 +17,13 @@ const MSPORT_SPORT_MAP = {
   soccer_france_ligue_one:      { sportId: 1, leagueId: '61'   },
   soccer_ghana_premiership:     { sportId: 1, leagueId: '288'  },
   soccer_africa_cup_of_nations: { sportId: 1, leagueId: '6'    },
+  // TEMP 2026-06-21: leagueId unknown â€” was completely missing before, which is why
+  // World Cup always returned 0 events with no error. Falling back to no filter
+  // (same pattern already used for MMA below) queries all of sportId 1 broadly.
+  // Find the real leagueId via the site's own network requests (browse to the World
+  // Cup section on msport.com/gh, inspect the /api/product/match/list request) and
+  // replace this for a precise, smaller query.
+  soccer_fifa_world_cup:        { sportId: 1, leagueId: null   },
   basketball_nba:               { sportId: 2, leagueId: '12'   },
   tennis_atp_wimbledon:         { sportId: 5, leagueId: '3'    },
   mma_mixed_martial_arts:       { sportId: 30, leagueId: null  },
