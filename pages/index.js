@@ -217,12 +217,16 @@ const MOCK = [
   { id: 'm5', sport: 'cricket_ipl', match: 'Mumbai Indians vs CSK', commenceTime: new Date(Date.now() + 12 * 3600000).toISOString(), margin: 1.5, outcomes: [{ label: 'Mumbai Indians', book: '1xbet', bookName: '1xBet', odds: 2.05 }, { label: 'CSK', book: 'betway', bookName: 'Betway', odds: 1.90 }] },
 ];
 
-function findArbs(events) {
+function findArbs(events, mode = 'global') {
   const arbs = [];
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
     const best = {};
     for (const bm of ev.bookmakers) {
+      // West Africa section: only consider accessible books when picking the best price
+      // per outcome, so a "WA arb" is actually placeable from WA — not just a global arb
+      // that happened to land on an accessible book for every leg by coincidence.
+      if (mode === 'wa' && !BOOKS[bm.key]?.accessible) continue;
       for (const mkt of (bm.markets || [])) {
         if (!['h2h', 'spreads', 'totals', 'outrights'].includes(mkt.key)) continue;
         for (const o of mkt.outcomes) {
@@ -532,6 +536,7 @@ const [apiKey, setApiKey] = useState('server');
   const [apiInput, setApiInput] = useState('');
   const [showSetup, setShowSetup] = useState(false);
   const [arbs, setArbs] = useState(MOCK);
+  const [arbsWAReal, setArbsWAReal] = useState([]); // properly computed WA-only arbs (not a post-filter of global picks)
   const [loading, setLoading] = useState(false);
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0, sport: '' });
   const [lastFetch, setLastFetch] = useState(null);
@@ -605,6 +610,11 @@ useEffect(() => {
     const sportsToScan = ALL_SPORTS.filter(s => selectedSports.includes(s.key));
     const all = [];
     let okCount = 0, lastFailStatus = null, lastFailBody = '';
+    // Aggregates WA scraper health across the ENTIRE scan, not just the last sport checked —
+    // previously setWaHealth() was called fresh on every iteration, so a 403 on sport #3
+    // would get silently overwritten by sport #20's "ok" status, making the "WA 3/3" badge
+    // lie about scrapers that actually failed partway through.
+    const waHealthAgg = {};
     for (let i = 0; i < sportsToScan.length; i++) {
       const sp = sportsToScan[i];
       setScanProgress({ current: i + 1, total: sportsToScan.length, sport: sp.label });
@@ -629,20 +639,39 @@ useEffect(() => {
         const json = await res.json();
 const data = json.data || json;
 if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests, keyIndex: json.keyIndex || 1 });
-if (json.waBookHealth) setWaHealth(json.waBookHealth);
+if (json.waBookHealth) {
+  Object.entries(json.waBookHealth).forEach(([book, h]) => {
+    if (!waHealthAgg[book]) waHealthAgg[book] = { ok: true, fetchedAt: h?.fetchedAt, failedSports: [] };
+    if (!h || !h.ok) {
+      waHealthAgg[book].ok = false;
+      waHealthAgg[book].failedSports.push(sp.key + (h?.reason ? ' (' + h.reason + ')' : ''));
+    }
+    waHealthAgg[book].fetchedAt = h?.fetchedAt || waHealthAgg[book].fetchedAt;
+  });
+}
 data.forEach(e => { e.sport_key = sp.key; });
 all.push(...data);
 if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map(b=>b.key)).filter((v,i,a)=>a.indexOf(v)===i).join(', '));
       } catch (err) { console.warn('Sport fetch threw for', sp.key, err); }
     }
+    // Finalize aggregated WA health into the {ok, reason, fetchedAt} shape the badge expects.
+    Object.keys(waHealthAgg).forEach(book => {
+      const b = waHealthAgg[book];
+      b.reason = b.ok
+        ? 'ok across all ' + sportsToScan.length + ' sports scanned'
+        : b.failedSports.length + '/' + sportsToScan.length + ' sports failed: ' + b.failedSports.slice(0, 3).join(', ') + (b.failedSports.length > 3 ? ' …' : '');
+    });
+    if (Object.keys(waHealthAgg).length > 0) setWaHealth(waHealthAgg);
     if (sportsToScan.length > 0 && okCount === 0) {
       setError('Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. Showing demo data below.');
     }
-    const found = findArbs(all);
+    const found = findArbs(all, 'global');
+    const foundArbsWA = findArbs(all, 'wa');
     const foundEV = findEVBets(all, minEV, 'global');
     const foundEVWA = findEVBets(all, minEV, 'wa');
     if (found.length > 0) { setArbs(found); setIsDemo(false); setLastFetch(new Date()); }
     else { setArbs(MOCK); setIsDemo(true); }
+    setArbsWAReal(foundArbsWA);
     if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
     else { setEvBets(MOCK_EV); setIsDemoEV(true); }
     setEvWA(foundEVWA);
@@ -756,18 +785,30 @@ const analyzeArb = async (arb) => {
 
   const [arbSection, setArbSection] = useState('all'); // 'all' | 'global' | 'wa'
 
-  const filteredArbs = arbs.filter(a => {
+  // 'wa' now pulls from arbsWAReal — arbs computed with every leg restricted to
+  // accessible books from the start, not a post-hoc filter of global-best picks
+  // (which almost never coincidentally land on WA books for every single leg).
+  const arbsBase = arbSection === 'wa' ? arbsWAReal : arbs;
+
+  const filteredArbs = arbsBase.filter(a => {
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
     if (accessOnly && !isFullyAccessible(a.outcomes)) return false;
-    if (arbSection === 'wa' && !isFullyAccessible(a.outcomes)) return false;
     if (arbSection === 'global' && isFullyAccessible(a.outcomes)) return false;
     return a.margin >= minMargin;
   });
 
-  const arbsWA     = filteredArbs.filter(a => isFullyAccessible(a.outcomes));
-  const arbsGlobal = filteredArbs.filter(a => !isFullyAccessible(a.outcomes));
+  // Independent totals for the metrics grid — each computed from its own properly-sourced
+  // array (not a partition of one mixed array), same pattern as Line Shopping/Middles/+EV.
+  const sameFilters = a => {
+    if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
+    if (wayFilter === '2' && a.outcomes.length !== 2) return false;
+    if (wayFilter === '3' && a.outcomes.length !== 3) return false;
+    return a.margin >= minMargin;
+  };
+  const arbsGlobal = arbs.filter(sameFilters);
+  const arbsWA     = arbsWAReal.filter(sameFilters);
 
   const calc = sel ? calcStakes(sel.outcomes, stake) : null;
 
