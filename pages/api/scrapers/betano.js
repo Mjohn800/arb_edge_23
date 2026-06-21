@@ -51,8 +51,10 @@ async function fetchBetanoOdds(sportKey) {
     });
 
     if (!res.ok) {
-      console.warn('[Betano] HTTP', res.status, 'for', sportKey);
-      return { events: [], status: { ok: false, reason: 'http_' + res.status, fetchedAt: new Date().toISOString() } };
+      let bodyText = '';
+      try { bodyText = (await res.text()).slice(0, 300); } catch {}
+      console.warn('[Betano] HTTP', res.status, 'for', sportKey, '| body:', bodyText);
+      return { events: [], status: { ok: false, reason: 'http_' + res.status + (bodyText ? ': ' + bodyText : ''), fetchedAt: new Date().toISOString() } };
     }
 
     const json = await res.json();
