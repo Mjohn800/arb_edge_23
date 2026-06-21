@@ -17,6 +17,13 @@ const BETANO_SPORT_MAP = {
   soccer_france_ligue_one:      { sportId: 4, leagueId: 9 },
   soccer_ghana_premiership:     { sportId: 4, leagueId: 557 },
   soccer_africa_cup_of_nations: { sportId: 4, leagueId: 422 },
+  // TEMP 2026-06-21: leagueId unknown — was completely missing before, which is why
+  // World Cup always returned 0 events with no error. Falling back to no filter
+  // (same pattern already used for MMA below) queries all of sportId 4 broadly.
+  // Find the real leagueId via the site's own network requests (browse to the World
+  // Cup section on betano.com.gh, inspect the /api/sports/events/ request) and
+  // replace this for a precise, smaller query.
+  soccer_fifa_world_cup:        { sportId: 4, leagueId: null },
   basketball_nba:               { sportId: 2, leagueId: 132 },
   tennis_atp_wimbledon:         { sportId: 5, leagueId: 270 },
   mma_mixed_martial_arts:       { sportId: 23, leagueId: null },
