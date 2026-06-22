@@ -1,64 +1,50 @@
 /**
  * scrapers/sportybet.js
  * Fetches live odds from SportyBet Ghana's internal API.
- * Returns data normalised to The Odds API bookmaker format so
- * it can be merged directly into the odds feed without any
- * changes to findArbs / findEVBets / findMiddles.
+ * Returns data normalised to The Odds API bookmaker format.
  *
- * SportyBet exposes a JSON endpoint used by their own web app —
- * no browser automation needed, just a plain fetch.
+ * ENDPOINT HISTORY:
+ * - publicEvents  → DEAD (bizCode 19001 "Resource not found" on all sports)
+ * - quickMarketList → LIVE (confirmed 200 via network capture 2026-06-22)
  *
- * Supported sport map (SportyBet category ID → our sport key):
- *   sr:sport:1  → soccer
- *   sr:sport:2  → basketball
- *   sr:sport:5  → tennis
- *   sr:sport:21 → cricket
- *   sr:sport:117→ mma
+ * FLOW:
+ * Step 1: GET /factsCenter/quickMarketList?block=E&sport=sr:sport:1
+ *         Returns all upcoming football events with basic h2h odds.
+ *         No tournamentId filter in the request — filtering is client-side.
+ *         We filter by tournament name keyword in the response instead.
+ *
+ * Step 2: If quickMarketList doesn't include odds (some variants don't),
+ *         collect event IDs and call /factsCenter/stale-odds/results to
+ *         get the actual prices. Falls back gracefully if stale-odds path differs.
  */
 
+// Tournament name keywords for client-side filtering
+// More resilient than numeric IDs which change per region/version
 const SPORTYBET_SPORT_MAP = {
-  soccer_epl:                    { id: 'sr:sport:1', tournamentId: '17' },
-  soccer_uefa_champs_league:     { id: 'sr:sport:1', tournamentId: '7'  },
-  soccer_uefa_europa_league:     { id: 'sr:sport:1', tournamentId: '679'},
-  soccer_spain_la_liga:          { id: 'sr:sport:1', tournamentId: '8'  },
-  soccer_germany_bundesliga:     { id: 'sr:sport:1', tournamentId: '35' },
-  soccer_italy_serie_a:          { id: 'sr:sport:1', tournamentId: '23' },
-  soccer_france_ligue_one:       { id: 'sr:sport:1', tournamentId: '34' },
-  soccer_ghana_premiership:      { id: 'sr:sport:1', tournamentId: '1436'},
-  soccer_africa_cup_of_nations:  { id: 'sr:sport:1', tournamentId: '5765'},
-  // TEMP 2026-06-21: tournamentId unknown — was completely missing before, which is
-  // why World Cup always returned 0 events with no error. Falling back to no filter
-  // (same pattern already used for MMA below) queries all of sr:sport:1 broadly,
-  // which should surface World Cup matches since it's the dominant event right now.
-  // Find the real tournamentId via the site's own network requests (browse to the
-  // World Cup section on sportybet.com/gh, inspect the publicEvents request) and
-  // replace this for a precise, smaller query.
-  soccer_fifa_world_cup:         { id: 'sr:sport:1', tournamentId: null },
-  basketball_nba:                { id: 'sr:sport:2', tournamentId: '132'},
-  tennis_atp_wimbledon:          { id: 'sr:sport:5', tournamentId: '270'},
-  mma_mixed_martial_arts:        { id: 'sr:sport:117',tournamentId: null},
+  soccer_epl:                   { sport: 'sr:sport:1', keywords: ['premier league', 'english premier'] },
+  soccer_uefa_champs_league:    { sport: 'sr:sport:1', keywords: ['champions league', 'uefa champions'] },
+  soccer_uefa_europa_league:    { sport: 'sr:sport:1', keywords: ['europa league'] },
+  soccer_spain_la_liga:         { sport: 'sr:sport:1', keywords: ['la liga', 'laliga', 'spain'] },
+  soccer_germany_bundesliga:    { sport: 'sr:sport:1', keywords: ['bundesliga'] },
+  soccer_italy_serie_a:         { sport: 'sr:sport:1', keywords: ['serie a', 'serie_a'] },
+  soccer_france_ligue_one:      { sport: 'sr:sport:1', keywords: ['ligue 1', 'ligue1', 'ligue one'] },
+  soccer_ghana_premiership:     { sport: 'sr:sport:1', keywords: ['ghana premier', 'gpl', 'ghana premiership'] },
+  soccer_africa_cup_of_nations: { sport: 'sr:sport:1', keywords: ['afcon', 'africa cup', 'cup of nations'] },
+  soccer_fifa_world_cup:        { sport: 'sr:sport:1', keywords: ['world cup', 'fifa world', 'coupe du monde'] },
+  basketball_nba:               { sport: 'sr:sport:2', keywords: ['nba'] },
+  tennis_atp_wimbledon:         { sport: 'sr:sport:5', keywords: ['wimbledon'] },
+  mma_mixed_martial_arts:       { sport: 'sr:sport:117', keywords: [] }, // no filter — fetch all MMA
 };
 
-// SportyBet market IDs → our market keys
-const MARKET_MAP = {
-  '1_1': 'h2h',      // Match Winner (1x2)
-  '1_2': 'h2h',      // Asian Handicap (treated as h2h for simplicity)
-  '18_1': 'totals',  // Total Goals Over/Under
-};
-
-const BASE_URL = 'https://www.sportybet.com/api/gh/factsCenter/publicEvents';
-const HEADERS  = {
-  'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36',
-  'Accept': 'application/json',
+const BASE = 'https://www.sportybet.com/api/gh/factsCenter';
+const HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+  'Accept': 'application/json, text/plain, */*',
+  'Accept-Language': 'en-GB,en;q=0.9',
   'Origin': 'https://www.sportybet.com',
-  'Referer': 'https://www.sportybet.com/gh/',
+  'Referer': 'https://www.sportybet.com/gh/m/sport/football',
 };
 
-/**
- * Fetches events for a given sport key from SportyBet GH.
- * @param {string} sportKey  - our internal sport key e.g. 'soccer_epl'
- * @returns {{ events: Array, status: { ok: boolean, reason: string|null, fetchedAt: string } }}
- */
 async function fetchSportybetOdds(sportKey) {
   const mapping = SPORTYBET_SPORT_MAP[sportKey];
   if (!mapping) {
@@ -66,31 +52,105 @@ async function fetchSportybetOdds(sportKey) {
   }
 
   try {
-    const params = new URLSearchParams({
-      sportId: mapping.id,
-      ...(mapping.tournamentId ? { tournamentId: mapping.tournamentId } : {}),
-      marketId: '1_1,18_1',
-      pageSize: '50',
-      pageNum: '1',
-    });
-
-    const res = await fetch(`${BASE_URL}?${params}`, {
+    // ── Step 1: fetch event list ──────────────────────────────────────────────
+    const listUrl = `${BASE}/quickMarketList?block=E&sport=${mapping.sport}`;
+    const listRes = await fetch(listUrl, {
       headers: HEADERS,
       signal: AbortSignal.timeout(8000),
     });
 
-    if (!res.ok) {
-      let bodyText = '';
-      try { bodyText = (await res.text()).slice(0, 300); } catch {}
-      console.warn('[SportyBet] HTTP', res.status, 'for', sportKey, '| body:', bodyText);
-      return { events: [], status: { ok: false, reason: 'http_' + res.status + (bodyText ? ': ' + bodyText : ''), fetchedAt: new Date().toISOString() } };
+    if (!listRes.ok) {
+      let body = '';
+      try { body = (await listRes.text()).slice(0, 300); } catch {}
+      console.warn('[SportyBet] quickMarketList', listRes.status, 'for', sportKey, '| body:', body);
+      return { events: [], status: { ok: false, reason: 'http_' + listRes.status + ': ' + body, fetchedAt: new Date().toISOString() } };
     }
 
-    const json = await res.json();
-    const events = json?.data?.events || json?.data?.tournamentEvents || [];
-    const normalised = events.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
+    const listJson = await listRes.json();
 
+    // Response may nest events under tournaments or directly
+    let allEvents = [];
+    const data = listJson?.data;
+    if (Array.isArray(data?.events)) {
+      allEvents = data.events;
+    } else if (Array.isArray(data?.tournamentEvents)) {
+      allEvents = data.tournamentEvents;
+    } else if (Array.isArray(data?.tournaments)) {
+      // Events nested inside tournament objects
+      data.tournaments.forEach(t => {
+        (t.events || t.matchList || []).forEach(ev => {
+          ev._tournamentName = t.tournamentName || t.name || '';
+          allEvents.push(ev);
+        });
+      });
+    } else if (Array.isArray(data)) {
+      allEvents = data;
+    }
+
+    // ── Step 2: filter by tournament keyword ──────────────────────────────────
+    const now = Date.now();
+    const keywords = mapping.keywords;
+    const filtered = allEvents.filter(ev => {
+      // Only upcoming events
+      const startMs = ev.estimateStartTime || (ev.startTime ? ev.startTime * 1000 : 0);
+      if (startMs && startMs < now) return false;
+
+      // No keyword restriction = take all (e.g. MMA)
+      if (!keywords || keywords.length === 0) return true;
+
+      const tName = (
+        ev._tournamentName ||
+        ev.tournamentName ||
+        ev.leagueName ||
+        ev.tournament?.name ||
+        ev.category?.name ||
+        ''
+      ).toLowerCase();
+
+      return keywords.some(kw => tName.includes(kw));
+    });
+
+    // ── Step 3: try to normalise directly from quickMarketList response ───────
+    let normalised = filtered.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
+
+    // ── Step 4: if quickMarketList gave no odds, fetch via stale-odds ─────────
+    if (normalised.length === 0 && filtered.length > 0) {
+      const eventIds = filtered
+        .map(e => e.eventId || e.id || e.matchId)
+        .filter(Boolean)
+        .join(',');
+
+      if (eventIds) {
+        try {
+          const oddsRes = await fetch(`${BASE}/stale-odds/results?eventIds=${eventIds}`, {
+            headers: HEADERS,
+            signal: AbortSignal.timeout(8000),
+          });
+          if (oddsRes.ok) {
+            const oddsJson = await oddsRes.json();
+            const oddsMap = {};
+            (oddsJson?.data || []).forEach(item => {
+              const id = item.eventId || item.id;
+              if (id) oddsMap[id] = item;
+            });
+            // Merge odds into events then normalise
+            normalised = filtered.map(ev => {
+              const id = ev.eventId || ev.id || ev.matchId;
+              const withOdds = { ...ev, ...(oddsMap[id] || {}) };
+              return normaliseEvent(withOdds, sportKey);
+            }).filter(Boolean);
+          } else {
+            console.warn('[SportyBet] stale-odds', oddsRes.status, 'for', sportKey);
+          }
+        } catch (err) {
+          console.warn('[SportyBet] stale-odds fetch error:', err.message);
+        }
+      }
+    }
+
+    console.log('[SportyBet]', sportKey, '→ allEvents:', allEvents.length, '| filtered:', filtered.length, '| normalised:', normalised.length);
     return { events: normalised, status: { ok: true, reason: null, fetchedAt: new Date().toISOString() } };
+
   } catch (err) {
     console.warn('[SportyBet] fetch error for', sportKey, err.message);
     return { events: [], status: { ok: false, reason: err.name === 'TimeoutError' ? 'timeout' : 'fetch_error: ' + err.message, fetchedAt: new Date().toISOString() } };
@@ -99,34 +159,39 @@ async function fetchSportybetOdds(sportKey) {
 
 function normaliseEvent(ev, sportKey) {
   try {
-    const homeTeam = ev.homeTeamName || ev.home?.name || 'Home';
-    const awayTeam = ev.awayTeamName || ev.away?.name  || 'Away';
-    const commenceTime = ev.estimateStartTime
-      ? new Date(ev.estimateStartTime).toISOString()
-      : new Date(ev.startTime * 1000).toISOString();
+    const homeTeam = ev.homeTeamName || ev.home?.name || ev.homeName || ev.homeTeam || 'Home';
+    const awayTeam = ev.awayTeamName || ev.away?.name  || ev.awayName || ev.awayTeam || 'Away';
 
-    // Build markets
+    const startMs = ev.estimateStartTime || (ev.startTime ? ev.startTime * 1000 : null);
+    if (!startMs) return null;
+    const commenceTime = new Date(startMs).toISOString();
+
     const markets = [];
-    const h2hOutcomes = [];
+    const h2hOutcomes   = [];
     const totalsOutcomes = [];
 
-    for (const market of (ev.markets || ev.odds || [])) {
-      const marketKey = MARKET_MAP[market.id] || MARKET_MAP[market.marketId];
-      if (!marketKey) continue;
+    const rawMarkets = ev.markets || ev.odds || ev.marketList || ev.quickMarkets || [];
 
-      for (const outcome of (market.outcomes || market.selections || [])) {
-        const odds = parseFloat(outcome.odds || outcome.price);
-        if (!odds || odds <= 1) continue;
+    for (const market of rawMarkets) {
+      const mKey = MARKET_MAP[market.id] || MARKET_MAP[market.marketId] || MARKET_MAP[String(market.marketType)];
+      if (!mKey) continue;
 
-        if (marketKey === 'h2h') {
-          // SportyBet outcome names: '1' = home, 'X' = draw, '2' = away
-          const name = outcome.name === '1' ? homeTeam
-                     : outcome.name === 'X' ? 'Draw'
-                     : awayTeam;
-          h2hOutcomes.push({ name, price: odds });
-        } else if (marketKey === 'totals') {
-          const name = outcome.name?.toLowerCase().includes('over') ? 'Over' : 'Under';
-          totalsOutcomes.push({ name, price: odds, point: parseFloat(outcome.handicap || outcome.line || 2.5) });
+      const selections = market.outcomes || market.selections || market.odds || [];
+      for (const o of selections) {
+        const price = parseFloat(o.odds || o.price || o.oddsValue);
+        if (!price || price <= 1.0) continue;
+
+        if (mKey === 'h2h') {
+          const name = o.name === '1' ? homeTeam
+                     : o.name === 'X' ? 'Draw'
+                     : o.name === '2' ? awayTeam
+                     : o.name || o.oddName;
+          if (name) h2hOutcomes.push({ name, price });
+        } else if (mKey === 'totals') {
+          const raw  = (o.name || o.oddName || '').toLowerCase();
+          const name = raw.includes('over') ? 'Over' : 'Under';
+          const point = parseFloat(o.handicap || o.line || o.point || 2.5);
+          totalsOutcomes.push({ name, price, point });
         }
       }
     }
@@ -136,22 +201,24 @@ function normaliseEvent(ev, sportKey) {
     if (markets.length === 0) return null;
 
     return {
-      id: 'sportybet_' + (ev.eventId || ev.id),
+      id: 'sportybet_' + (ev.eventId || ev.id || ev.matchId),
       sport_key: sportKey,
       home_team: homeTeam,
       away_team: awayTeam,
       commence_time: commenceTime,
-      // Injected as a bookmaker entry so existing findArbs/findEVBets work unchanged
-      bookmakers: [{
-        key: 'sportybet',
-        title: 'SportyBet',
-        markets,
-        _wa: true, // West Africa flag
-      }],
+      bookmakers: [{ key: 'sportybet', title: 'SportyBet', markets, _wa: true }],
     };
   } catch {
     return null;
   }
 }
+
+const MARKET_MAP = {
+  '1_1': 'h2h',
+  '1_2': 'h2h',
+  '18_1': 'totals',
+  '1': 'h2h',
+  '18': 'totals',
+};
 
 module.exports = { fetchSportybetOdds };
