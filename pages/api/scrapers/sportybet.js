@@ -90,9 +90,13 @@ async function fetchSportybetOdds(sportKey) {
 
     const now = Date.now();
     const upcoming = rawEvents.filter(ev => {
-      const ms = ev.estimateStartTime || (ev.startTime ? ev.startTime * 1000 : 0);
-      return !ms || ms > now;
+      let ms = ev.estimateStartTime || ev.startTime || ev.beginTime || 0;
+      // Handle seconds vs milliseconds - Sportradar timestamps are sometimes in seconds
+      if (ms && ms < 1e12) ms = ms * 1000;
+      if (ms === 0) return true; // no timestamp = include it
+      return ms > now - 3 * 60 * 60 * 1000; // allow up to 3hrs in past (live/just started)
     });
+    if (rawEvents.length > 0) console.log('[SportyBet] sample timestamp:', rawEvents[0]?.estimateStartTime, rawEvents[0]?.startTime);
 
     // Try normalising with inline odds first
     let normalised = upcoming.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
@@ -138,7 +142,8 @@ function normaliseEvent(ev, sportKey) {
   try {
     const homeTeam = ev.homeTeamName || ev.home?.name || ev.homeName || ev.homeTeam || 'Home';
     const awayTeam = ev.awayTeamName || ev.away?.name  || ev.awayName || ev.awayTeam || 'Away';
-    const startMs  = ev.estimateStartTime || (ev.startTime ? ev.startTime * 1000 : null);
+    let startMs = ev.estimateStartTime || ev.startTime || ev.beginTime || null;
+    if (startMs && startMs < 1e12) startMs = startMs * 1000;
     if (!startMs) return null;
 
     const h2hOutcomes = [], totalsOutcomes = [];
