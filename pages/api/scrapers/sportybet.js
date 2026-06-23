@@ -49,29 +49,51 @@ async function fetchSportybetOdds(sportKey) {
     let rawEvents = [];
 
     if (mapping.type === 'tournament') {
-      // ── Confirmed working endpoint ──────────────────────────────────────────
-      const url = `${BASE}/outrightEvents/sports/${mapping.sportId}/tournaments/${mapping.tournamentId}`;
-      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(8000) });
+      // Confirmed endpoint from network capture: POST /factsCenter/wapConfigurableEventsByOrder
+      // Payload not capturable via MobiDevTools (content script restriction on POST bodies)
+      // Trying common SportyBet API body patterns in order
+      const bodyAttempts = [
+        { sportId: mapping.sportId, tournamentId: mapping.tournamentId, marketId: '1_1,18_1', pageSize: 50, pageNum: 1 },
+        { sportId: mapping.sportId, leagueIds: [mapping.tournamentId], marketId: '1_1,18_1', pageSize: 50, pageNum: 1 },
+        { sportIds: [mapping.sportId], tournamentIds: [mapping.tournamentId], marketIds: ['1_1', '18_1'], pageSize: 50, pageNum: 1 },
+        { sport: mapping.sportId, tournament: mapping.tournamentId, markets: '1_1,18_1', size: 50, page: 1 },
+      ];
 
-      if (!res.ok) {
-        let body = '';
-        try { body = (await res.text()).slice(0, 300); } catch {}
-        console.warn('[SportyBet] outrightEvents', res.status, 'for', sportKey, '| body:', body);
-        return { events: [], status: { ok: false, reason: 'http_' + res.status + ': ' + body, fetchedAt: new Date().toISOString() } };
+      for (const attemptBody of bodyAttempts) {
+        try {
+          const res = await fetch(`${BASE}/wapConfigurableEventsByOrder`, {
+            method: 'POST',
+            headers: { ...HEADERS, 'Content-Type': 'application/json' },
+            body: JSON.stringify(attemptBody),
+            signal: AbortSignal.timeout(6000),
+          });
+
+          if (!res.ok) {
+            console.log('[SportyBet] wapConfigurableEventsByOrder', res.status, 'body:', JSON.stringify(attemptBody).slice(0, 100));
+            continue;
+          }
+
+          const json = await res.json();
+          if (json?.bizCode && json.bizCode !== 10000) {
+            console.log('[SportyBet] bizCode', json.bizCode, 'for body:', JSON.stringify(attemptBody).slice(0, 100));
+            continue;
+          }
+
+          const data = json?.data;
+          const candidates = data?.events || data?.tournamentEvents || data?.matchList || data?.list || (Array.isArray(data) ? data : []);
+          if (candidates.length > 0) {
+            console.log('[SportyBet] wapConfigurableEventsByOrder worked with body:', JSON.stringify(attemptBody).slice(0, 100), '→', candidates.length, 'events');
+            rawEvents = candidates;
+            break;
+          }
+          console.log('[SportyBet] wapConfigurableEventsByOrder returned 0 events, data keys:', Object.keys(data || {}), 'body:', JSON.stringify(attemptBody).slice(0, 80));
+        } catch (err) {
+          console.log('[SportyBet] wapConfigurableEventsByOrder error:', err.message);
+        }
       }
 
-      const json = await res.json();
-      const data = json?.data;
-
-      // Response shape: data.events[] or data.tournamentEvents[] or data[]
-      if (Array.isArray(data?.events)) {
-        rawEvents = data.events;
-      } else if (Array.isArray(data?.tournamentEvents)) {
-        rawEvents = data.tournamentEvents;
-      } else if (Array.isArray(data?.matchList)) {
-        rawEvents = data.matchList;
-      } else if (Array.isArray(data)) {
-        rawEvents = data;
+      if (rawEvents.length === 0) {
+        console.warn('[SportyBet] all payload attempts returned 0 events for', sportKey);
       }
 
     } else {
