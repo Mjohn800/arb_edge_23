@@ -14,19 +14,19 @@
  */
 
 const MSPORT_SPORT_MAP = {
-  soccer_epl:                   { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:17'   },
-  soccer_uefa_champs_league:    { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:7'    },
-  soccer_uefa_europa_league:    { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:679'  },
-  soccer_spain_la_liga:         { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:8'    },
-  soccer_germany_bundesliga:    { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:35'   },
-  soccer_italy_serie_a:         { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:23'   },
-  soccer_france_ligue_one:      { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:34'   },
-  soccer_ghana_premiership:     { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:1436' },
-  soccer_africa_cup_of_nations: { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:5765' },
-  soccer_fifa_world_cup:        { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:16'   }, // ✓ confirmed
-  basketball_nba:               { sportId: 'sr:sport:2',   tournamentId: 'sr:tournament:132'  },
-  tennis_atp_wimbledon:         { sportId: 'sr:sport:5',   tournamentId: 'sr:tournament:270'  },
-  mma_mixed_martial_arts:       { sportId: 'sr:sport:117', tournamentId: null                 },
+  soccer_epl:                   { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:17',   keywords: ['premier league', 'english premier'] },
+  soccer_uefa_champs_league:    { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:7',    keywords: ['champions league'] },
+  soccer_uefa_europa_league:    { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:679',  keywords: ['europa league'] },
+  soccer_spain_la_liga:         { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:8',    keywords: ['la liga', 'laliga'] },
+  soccer_germany_bundesliga:    { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:35',   keywords: ['bundesliga'] },
+  soccer_italy_serie_a:         { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:23',   keywords: ['serie a'] },
+  soccer_france_ligue_one:      { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:34',   keywords: ['ligue 1', 'ligue one'] },
+  soccer_ghana_premiership:     { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:1436', keywords: ['ghana premier', 'gpl'] },
+  soccer_africa_cup_of_nations: { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:5765', keywords: ['afcon', 'africa cup'] },
+  soccer_fifa_world_cup:        { sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:16',   keywords: ['world cup', 'fifa world', 'fifa w'] }, // ✓ confirmed
+  basketball_nba:               { sportId: 'sr:sport:2',   tournamentId: 'sr:tournament:132',  keywords: ['nba'] },
+  tennis_atp_wimbledon:         { sportId: 'sr:sport:5',   tournamentId: 'sr:tournament:270',  keywords: ['wimbledon'] },
+  mma_mixed_martial_arts:       { sportId: 'sr:sport:117', tournamentId: null,                 keywords: [] },
 };
 
 const BASE = 'https://www.msport.com/api/gh/facts-center/query/frontend';
@@ -45,17 +45,12 @@ async function fetchMsportOdds(sportKey) {
 
   try {
     // ── Step 1: POST to sports-matches-list ──────────────────────────────────
-    // We try multiple body shapes since we don't have the exact payload yet.
-    // tournamentIds (array) is the most common pattern for this style of API.
+    // Send sportId only — adding tournamentId to the body causes bizCode 19999 (server error).
+    // MSport filters client-side on their end; we keyword-filter here instead.
     const body = {
-      sportId: mapping.sportId,
-      ...(mapping.tournamentId ? {
-        tournamentIds: [mapping.tournamentId],
-        tournamentId: mapping.tournamentId,   // also try singular
-      } : {}),
       pageNum: 1,
-      pageSize: 50,
-      matchStatus: 0, // 0 = prematch
+      pageSize: 100,
+      matchStatus: 0,
     };
 
     const res = await fetch(`${BASE}/sports-matches-list?sportId=${mapping.sportId}`, {
@@ -82,9 +77,14 @@ async function fetchMsportOdds(sportKey) {
     );
 
     const now = Date.now();
+    const keywords = mapping.keywords || [];
+
     const upcoming = allEvents.filter(ev => {
       const ms = getStartMs(ev);
-      return !ms || ms > now;
+      if (ms && ms < now - 3 * 60 * 60 * 1000) return false; // exclude clearly past events
+      if (!keywords.length) return true;
+      const tName = (ev.tournamentName || ev.leagueName || ev.league?.name || ev.tournament?.name || ev.competitionName || '').toLowerCase();
+      return keywords.some(kw => tName.includes(kw));
     });
 
     let normalised = upcoming.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
