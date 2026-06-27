@@ -24,6 +24,28 @@ const BOOKS = {
   sportybet:     { name: 'SportyBet',    momo: true,  licensed: true,  manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.sportybet.com/gh/sport/football', sportUrls: { soccer: 'https://www.sportybet.com/gh/sport/football', basketball: 'https://www.sportybet.com/gh/sport/basketball', tennis: 'https://www.sportybet.com/gh/sport/tennis', cricket: 'https://www.sportybet.com/gh/sport/cricket', mma: 'https://www.sportybet.com/gh/sport/mma' } },
   betano:        { name: 'Betano',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.betano.com.gh/sport/football', sportUrls: { soccer: 'https://www.betano.com.gh/sport/football', basketball: 'https://www.betano.com.gh/sport/basketball', tennis: 'https://www.betano.com.gh/sport/tennis', cricket: 'https://www.betano.com.gh/sport/cricket', mma: 'https://www.betano.com.gh/sport/mma' } },
   msport:        { name: 'MSport',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.msport.com/gh/football', sportUrls: { soccer: 'https://www.msport.com/gh/football', basketball: 'https://www.msport.com/gh/basketball', tennis: 'https://www.msport.com/gh/tennis', cricket: 'https://www.msport.com/gh/cricket', mma: 'https://www.msport.com/gh/mma' } },
+
+  // ── West Africa — expanded (manual entry; GCG/NLRC licensed or widely used) ─
+  // 22Bet: GCG-licensed in Ghana (2026), MoMo deposits, 60+ sports, ~97% payout rate on football.
+  '22bet':       { name: '22Bet',        momo: true,  licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://22bet.com/gh/line/Football', sportUrls: { soccer: 'https://22bet.com/gh/line/Football', basketball: 'https://22bet.com/gh/line/Basketball', tennis: 'https://22bet.com/gh/line/Tennis', cricket: 'https://22bet.com/gh/line/Cricket', mma: 'https://22bet.com/gh/line/MMA' }, note: 'GCG-licensed 2026. MoMo + card. 60+ sports. Instant–6h withdrawals.' },
+
+  // Bet9ja: #1 Nigeria by market share. NLRC-licensed. No Ghana licence but widely used cross-border.
+  bet9ja:        { name: 'Bet9ja',       momo: false, licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://www.bet9ja.com/BetSlip/sportsbetting.aspx#/betslip/home', sportUrls: { soccer: 'https://sports.bet9ja.com/sport/Soccer', basketball: 'https://sports.bet9ja.com/sport/Basketball', tennis: 'https://sports.bet9ja.com/sport/Tennis', mma: 'https://sports.bet9ja.com/sport/MMA' }, note: 'Nigeria #1 by traffic. NLRC-licensed. Bank transfer + USSD. No MoMo.' },
+
+  // BetKing: Top-3 Nigeria, physical shops + online. Paystack/OPay local payments.
+  betking:       { name: 'BetKing',      momo: false, licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://www.betking.com/sports', sportUrls: { soccer: 'https://www.betking.com/sports/s/soccer/', basketball: 'https://www.betking.com/sports/s/basketball/', tennis: 'https://www.betking.com/sports/s/tennis/', mma: 'https://www.betking.com/sports/s/mma/' }, note: 'Nigeria NLRC-licensed. Physical shops + online. Paystack / OPay deposits.' },
+
+  // Paripesa: Lowest margins in WA (~97% football payout). Curacao + Nigeria licence. MoMo Ghana.
+  paripesa:      { name: 'Paripesa',     momo: true,  licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://paripesa.com/en/sports', sportUrls: { soccer: 'https://paripesa.com/en/sports/soccer', basketball: 'https://paripesa.com/en/sports/basketball', tennis: 'https://paripesa.com/en/sports/tennis', cricket: 'https://paripesa.com/en/sports/cricket', mma: 'https://paripesa.com/en/sports/mma' }, note: 'Best margins in WA (~97% on football). MoMo Ghana. Curacao + NG licence. No payout cap NG.' },
+
+  // BetWinner: MoMo Ghana (GHS 1 min), 50+ sports, instant–3d withdrawals.
+  betwinner:     { name: 'BetWinner',    momo: true,  licensed: false, manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://betwinner.com/en/sport/', sportUrls: { soccer: 'https://betwinner.com/en/sport/soccer', basketball: 'https://betwinner.com/en/sport/basketball', tennis: 'https://betwinner.com/en/sport/tennis', cricket: 'https://betwinner.com/en/sport/cricket', mma: 'https://betwinner.com/en/sport/mma' }, note: 'MoMo Ghana. GHS 1 min deposit. 200% welcome bonus. 50+ sports.' },
+
+  // PremierBet: Household WA brand, fast cashouts, MoMo, strong local presence Ghana/Senegal/Mali.
+  premierbet:    { name: 'PremierBet',   momo: true,  licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://www.premierbet.com.gh/sports', sportUrls: { soccer: 'https://www.premierbet.com.gh/sports/football', basketball: 'https://www.premierbet.com.gh/sports/basketball', tennis: 'https://www.premierbet.com.gh/sports/tennis' }, note: 'GCG-licensed. Strong across Ghana, Senegal, Mali. MoMo. Instant withdrawals.' },
+
+  // MozzartBet: Growing Nigeria presence. NLRC-licensed. Known for high accumulator limits.
+  mozzartbet:    { name: 'MozzartBet',   momo: false, licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://www.mozzartbet.com.ng/en#/sport/FOOTBALL', sportUrls: { soccer: 'https://www.mozzartbet.com.ng/en#/sport/FOOTBALL', basketball: 'https://www.mozzartbet.com.ng/en#/sport/BASKETBALL', tennis: 'https://www.mozzartbet.com.ng/en#/sport/TENNIS', mma: 'https://www.mozzartbet.com.ng/en#/sport/MMA' }, note: 'NLRC Nigeria. High acca limits. Fast live betting. Bank transfer + Paystack.' },
 };
 
 const API_BOOKS = Object.entries(BOOKS).filter(([,b]) => !b.manual).map(([k]) => k);
@@ -32,6 +54,19 @@ const ACCESSIBLE_BOOKS = Object.entries(BOOKS).filter(([,b]) => b.accessible).ma
 
 // Fully accessible = every leg of the arb is on a book accessible from West Africa
 const isFullyAccessible = (outcomes) => (outcomes || []).every(o => BOOKS[o.book] && BOOKS[o.book].accessible);
+
+// ─── AFFILIATE PROGRAMS ─────────────────────────────────────────────────────
+// Verified 2026-06-24 against each program's own official domain (not third-party
+// aggregator/reseller sites). SportyBet's GH-region partner path is inferred from
+// its consistent /{region}/... pattern used everywhere else on the site — the NG
+// path (sportybet.com/ng/partner) was directly confirmed live; double check the
+// /gh/ variant resolves the same way before relying on it, swap to whichever
+// region path actually works for you.
+const EARN_PROGRAMS = [
+  { key: 'sportybet', name: 'SportyBet Affiliates', commission: '20–40% revenue share, or $10–50 CPA per qualifying signup (GH)', signupUrl: 'https://www.sportybet.com/gh/partner' },
+  { key: 'betway',    name: 'Betway Partners',      commission: '25% flat revenue share (CPA negotiable), no negative carryover', signupUrl: 'https://www.betway.partners/' },
+  { key: '1xbet',     name: '1xPartners (1xBet)',   commission: '15–40% revenue share (scales up with volume), or CPA/Hybrid', signupUrl: 'https://1xpartners.com/' },
+];
 
 // Has at least one WA book in any leg
 const hasWABook = (outcomes) => (outcomes || []).some(o => BOOKS[o.book]?.wa);
@@ -268,14 +303,37 @@ function findEVBets(events, minEV = 2, mode = 'all') {
     const evBets = [];
     for (const ev of events) {
       if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
-      const sharpBm = ev.bookmakers.find(b => sharpBooks.includes(b.key));
-      if (!sharpBm) continue;
-      const sharpMkt = (sharpBm.markets || []).find(m => m.key === 'h2h');
-      if (!sharpMkt) continue;
-      const sharpOuts = sharpMkt.outcomes;
-      const rawImplied = sharpOuts.reduce((s, o) => s + 1 / o.price, 0);
+
+      // Sharp book consensus: average the de-vigged true probability across EVERY
+      // available sharp book for this event, not just whichever one happens to be
+      // first in the array. More sharp books agreeing on a price tightens the true-
+      // probability estimate — it's less exposed to any single book's own margin
+      // quirks or a temporarily stale/mispriced line.
+      const sharpBms = ev.bookmakers.filter(b => sharpBooks.includes(b.key));
+      if (sharpBms.length === 0) continue;
+
+      const probsByOutcome = {}; // outcome name -> [de-vigged prob from each sharp book]
+      const usedSharpKeys = [];
+      for (const sharpBm of sharpBms) {
+        const sharpMkt = (sharpBm.markets || []).find(m => m.key === 'h2h');
+        if (!sharpMkt) continue;
+        const sharpOuts = sharpMkt.outcomes;
+        const rawImplied = sharpOuts.reduce((s, o) => s + 1 / o.price, 0);
+        if (!rawImplied) continue;
+        usedSharpKeys.push(sharpBm.key);
+        sharpOuts.forEach(o => {
+          const p = (1 / o.price) / rawImplied;
+          (probsByOutcome[o.name] = probsByOutcome[o.name] || []).push(p);
+        });
+      }
+      if (usedSharpKeys.length === 0) continue;
+
       const trueProbs = {};
-      sharpOuts.forEach(o => { trueProbs[o.name] = (1 / o.price) / rawImplied; });
+      Object.keys(probsByOutcome).forEach(name => {
+        const arr = probsByOutcome[name];
+        trueProbs[name] = arr.reduce((s, p) => s + p, 0) / arr.length;
+      });
+
       for (const bm of ev.bookmakers) {
         if (sharpBooks.includes(bm.key)) continue;
         if (filterWA && !BOOKS[bm.key]?.accessible) continue;
@@ -288,6 +346,7 @@ function findEVBets(events, minEV = 2, mode = 'all') {
           if (ev_pct >= minEV) {
             evBets.push({
               id: ev.id + '_' + bm.key + '_' + o.name,
+              eventId: ev.id,
               sport: ev.sport_key,
               match: ev.home_team + ' vs ' + ev.away_team,
               commenceTime: ev.commence_time,
@@ -298,7 +357,8 @@ function findEVBets(events, minEV = 2, mode = 'all') {
               trueProb: parseFloat((prob * 100).toFixed(1)),
               fairOdds: parseFloat((1 / prob).toFixed(2)),
               ev_pct,
-              sharpRef: sharpBm.key,
+              sharpRef: usedSharpKeys.join('+'),
+              sharpBookCount: usedSharpKeys.length,
               // Tag WA if the book is accessible in West Africa
               _wa: !!BOOKS[bm.key]?.accessible,
             });
@@ -557,9 +617,32 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [wayFilter, setWayFilter] = useState('all');
   const [accessOnly, setAccessOnly] = useState(false);
   const [bets, setBets] = useState([]);
+  const betsRef = React.useRef(bets);
+  // Cash-out analyzer state
+  const [coStake, setCoStake] = useState('');
+  const [coOdds, setCoOdds] = useState('');
+  const [coCurrentOdds, setCoCurrentOdds] = useState('');
+  const [coOffer, setCoOffer] = useState('');
+  const [coLoadedBetId, setCoLoadedBetId] = useState(null);
+  useEffect(() => { betsRef.current = bets; }, [bets]);
   const [bankroll, setBankroll] = useState(() => { try { return parseFloat(localStorage.getItem('arb_bankroll') || '500'); } catch { return 500; } });
+  const [referrals, setReferrals] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('arb_referrals') || '{}'); } catch { return {}; }
+  });
+  useEffect(() => { try { localStorage.setItem('arb_referrals', JSON.stringify(referrals)); } catch {} }, [referrals]);
   const [trackerView, setTrackerView] = useState('bets'); // 'bets' | 'dashboard'
   const [clvInputs, setClvInputs] = useState({}); // betId -> closing odds string
+  // ── WALLET TRACKER ─────────────────────────────────────────────────────────
+  const [walletBalances, setWalletBalances] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('arb_wallets') || '{}'); } catch { return {}; }
+  });
+  useEffect(() => { try { localStorage.setItem('arb_wallets', JSON.stringify(walletBalances)); } catch {} }, [walletBalances]);
+  const [walletInput, setWalletInput] = useState({}); // bookKey -> string input value
+  // ── OVEREXPOSURE THRESHOLD ─────────────────────────────────────────────────
+  const [overExposurePct, setOverExposurePct] = useState(() => {
+    try { return parseFloat(localStorage.getItem('arb_overexp_pct') || '25'); } catch { return 25; }
+  });
+  useEffect(() => { try { localStorage.setItem('arb_overexp_pct', String(overExposurePct)); } catch {} }, [overExposurePct]);
   useEffect(() => { try { localStorage.setItem('arb_sports', JSON.stringify(selectedSports)); } catch {} }, [selectedSports]);
 
 useEffect(() => {
@@ -708,6 +791,47 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
       setWaDebug(debugInfo);
     })();
 
+    // ── AUTO-CLV CAPTURE ────────────────────────────────────────────────────────
+    // For pending EV bets: while the match hasn't kicked off, keep refreshing
+    // lastSeenOdds with whatever this same book is currently quoting for that
+    // outcome — that's our best running candidate for "the closing line." Once
+    // commence_time has passed (or the event drops out of the scan entirely,
+    // which also means it's started/no longer prematch), lock that last-seen
+    // value in as clvOdds permanently. This replaces having to remember to type
+    // in the closing odds yourself near kickoff.
+    const pendingEV = betsRef.current.filter(b => b.type === 'ev' && b.status === 'pending' && b.clvOdds == null);
+    if (pendingEV.length > 0) {
+      const updates = {}; // bet.id -> { lastSeenOdds?, clvOdds?, clvSource? }
+      for (const bet of pendingEV) {
+        const leg = bet.outcomes && bet.outcomes[0];
+        if (!leg) continue;
+        const matchEvent = all.find(e => e.id === bet.eventId);
+        const started = bet.commenceTime ? new Date(bet.commenceTime).getTime() <= Date.now() : false;
+
+        let currentOdds = null;
+        if (matchEvent) {
+          const bm = (matchEvent.bookmakers || []).find(b => b.key === leg.book);
+          const mkt = bm && (bm.markets || []).find(m => m.key === 'h2h');
+          const out = mkt && mkt.outcomes.find(o => o.name === leg.label);
+          if (out) currentOdds = out.price;
+        }
+
+        if (!started) {
+          // Still pre-kickoff — keep tracking the freshest price as the running candidate.
+          if (currentOdds != null) updates[bet.id] = { lastSeenOdds: currentOdds };
+        } else {
+          // Kickoff has passed — lock in whatever we've got: prefer a live odds read
+          // from this scan (book may briefly still show it), else fall back to the
+          // last pre-kickoff value we captured.
+          const finalOdds = currentOdds != null ? currentOdds : bet.lastSeenOdds;
+          if (finalOdds != null) updates[bet.id] = { clvOdds: finalOdds, clvSource: 'auto' };
+        }
+      }
+      if (Object.keys(updates).length > 0) {
+        setBets(prev => prev.map(b => updates[b.id] ? { ...b, ...updates[b.id] } : b));
+      }
+    }
+
     prevEventsRef.current = all;
     setLoading(false);
     setNextScanAt(Date.now() + 12 * 60 * 1000);
@@ -747,8 +871,32 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
   };
 
   const logEVBet = (bet, kellyStake, expectedProfit) => {
-    setBets(p => [{ id: Date.now(), match: bet.match, sport: bet.sport, margin: bet.ev_pct, stake: kellyStake, currency, profit: expectedProfit, date: new Date().toISOString(), status: 'pending', type: 'ev', clvOdds: null, placedOdds: bet.odds, outcomes: [{ label: bet.outcome, bookName: bet.bookName, book: bet.book, odds: bet.odds, stake: kellyStake, ret: parseFloat((kellyStake * bet.odds).toFixed(2)) }] }, ...p]);
+    setBets(p => [{ id: Date.now(), match: bet.match, sport: bet.sport, margin: bet.ev_pct, stake: kellyStake, currency, profit: expectedProfit, date: new Date().toISOString(), status: 'pending', type: 'ev', eventId: bet.eventId, commenceTime: bet.commenceTime, clvOdds: null, clvSource: null, lastSeenOdds: null, placedOdds: bet.odds, outcomes: [{ label: bet.outcome, bookName: bet.bookName, book: bet.book, odds: bet.odds, stake: kellyStake, ret: parseFloat((kellyStake * bet.odds).toFixed(2)) }] }, ...p]);
     setTab('tracker');
+  };
+
+  // Pre-fills the Cash-Out Analyzer from a pending tracked bet, and tries to
+  // auto-pull the SAME book+outcome's current price from the latest scan as a
+  // starting estimate of "what the market thinks now" — same lookup pattern as
+  // CLV auto-capture. Always editable afterward since live cash-out offers and
+  // the book's own live in-play price aren't something we can read directly.
+  const loadBetIntoCashout = (bet) => {
+    const leg = bet.outcomes && bet.outcomes[0];
+    if (!leg) return;
+    setCoLoadedBetId(bet.id);
+    setCoStake(String(bet.stake));
+    setCoOdds(String(leg.odds));
+    setCoOffer('');
+    let liveOdds = null;
+    if (bet.eventId) {
+      const ev = (prevEventsRef.current || []).find(e2 => e2.id === bet.eventId);
+      const bm = ev && (ev.bookmakers || []).find(b => b.key === leg.book);
+      const mkt = bm && (bm.markets || []).find(m => m.key === 'h2h');
+      const out = mkt && mkt.outcomes.find(o => o.name === leg.label);
+      if (out) liveOdds = out.price;
+    }
+    setCoCurrentOdds(liveOdds != null ? String(liveOdds) : '');
+    setTab('cashout');
   };
 
 const analyzeArb = async (arb) => {  
@@ -849,9 +997,276 @@ const analyzeArb = async (arb) => {
       )
     ),
     e('div', { style: st.tabs },
-      [['scanner','🔍 Scanner'], ['calculator','🧮 Calculator'], ['manual','✏️ Manual Arb'], ['ev','📈 +EV Bets'], ['edge','⚡ Edge Tools'], ['analyzer','🧠 Bet Analyzer'], ['tracker','📒 Bets (' + bets.length + ')'], ['guide','📚 Guide']].map(([k, l]) =>
+      [['scanner','🔍 Scanner'], ['calculator','🧮 Calculator'], ['manual','✏️ Manual Arb'], ['ev','📈 +EV Bets'], ['edge','⚡ Edge Tools'], ['analyzer','🧠 Bet Analyzer'], ['tracker','📒 Bets (' + bets.length + ')'], ['wallet','💼 Wallet'], ['cashout','💸 Cash Out'], ['earn','💰 Earn'], ['guide','📚 Guide']].map(([k, l]) =>
         e('button', { key: k, style: st.tab(tab === k), onClick: () => setTab(k) }, l)
       )
+    ),
+    // ── WALLET TRACKER ──
+    tab === 'wallet' && e('div', { style: st.section }, (() => {
+      const totalWallet = Object.values(walletBalances).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+      const allBooks = Object.entries(BOOKS);
+
+      // ── OVEREXPOSURE: pending bets grouped by outcome label (team/side) ──────
+      const pendingByOutcome = {};
+      bets.filter(b => b.status === 'pending').forEach(b => {
+        (b.outcomes || []).forEach(o => {
+          const key = o.label || o.name || 'Unknown';
+          if (!pendingByOutcome[key]) pendingByOutcome[key] = { totalStaked: 0, books: [], matches: [] };
+          pendingByOutcome[key].totalStaked += (o.stake || b.stake || 0);
+          pendingByOutcome[key].books.push(o.bookName || o.book || '?');
+          if (!pendingByOutcome[key].matches.includes(b.match)) pendingByOutcome[key].matches.push(b.match);
+        });
+      });
+      const pendingByBook = {};
+      bets.filter(b => b.status === 'pending').forEach(b => {
+        (b.outcomes || []).forEach(o => {
+          const bk = o.bookName || o.book || 'Unknown';
+          if (!pendingByBook[bk]) pendingByBook[bk] = 0;
+          pendingByBook[bk] += (o.stake || b.stake || 0);
+        });
+      });
+      const referencePool = bankroll > 0 ? bankroll : (totalWallet > 0 ? totalWallet : 1);
+      const overexposed = Object.entries(pendingByOutcome)
+        .map(([label, d]) => ({ label, ...d, pct: (d.totalStaked / referencePool) * 100 }))
+        .filter(x => x.pct >= overExposurePct)
+        .sort((a, b) => b.pct - a.pct);
+      const overexposedBooks = Object.entries(pendingByBook)
+        .map(([book, staked]) => ({ book, staked, pct: (staked / referencePool) * 100 }))
+        .filter(x => x.pct >= overExposurePct)
+        .sort((a, b) => b.pct - a.pct);
+
+      return e('div', null,
+        // ── OVEREXPOSURE WARNINGS ─────────────────────────────────────────────
+        (overexposed.length > 0 || overexposedBooks.length > 0) && e('div', { style: { marginBottom: 16 } },
+          e('div', { style: { fontSize: 15, fontWeight: 700, color: '#9a3412', marginBottom: 8 } }, '⚠️ Overexposure Warnings'),
+          overexposed.map((x, i) =>
+            e('div', { key: i, style: { background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '11px 14px', marginBottom: 8 } },
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
+                e('span', { style: { fontSize: 13, fontWeight: 700, color: '#9a3412' } }, '🎯 ' + x.label),
+                e('span', { style: { fontSize: 14, fontWeight: 800, color: x.pct >= 50 ? '#dc2626' : '#d97706' } }, x.pct.toFixed(1) + '% of bankroll')
+              ),
+              e('div', { style: { fontSize: 11, color: '#78350f' } }, currency + ' ' + x.totalStaked.toFixed(2) + ' pending across ' + x.books.length + ' leg(s) — ' + x.matches.slice(0, 2).join(', ') + (x.matches.length > 2 ? ' +' + (x.matches.length - 2) + ' more' : ''))
+            )
+          ),
+          overexposedBooks.map((x, i) =>
+            e('div', { key: 'bk' + i, style: { background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '11px 14px', marginBottom: 8 } },
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
+                e('span', { style: { fontSize: 13, fontWeight: 700, color: '#991b1b' } }, '🏦 ' + x.book),
+                e('span', { style: { fontSize: 14, fontWeight: 800, color: '#dc2626' } }, x.pct.toFixed(1) + '% on one book')
+              ),
+              e('div', { style: { fontSize: 11, color: '#7f1d1d' } }, currency + ' ' + x.staked.toFixed(2) + ' in pending bets on this book — account restriction risk')
+            )
+          )
+        ),
+
+        // ── THRESHOLD CONTROL ─────────────────────────────────────────────────
+        e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 14 } },
+          e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 } },
+            e('div', { style: { fontSize: 13, fontWeight: 700, color: C.text } }, '⚙️ Overexposure threshold'),
+            e('div', { style: { fontSize: 14, fontWeight: 800, color: C.purple } }, overExposurePct + '%')
+          ),
+          e('input', {
+            type: 'range', min: 5, max: 75, step: 5,
+            value: overExposurePct,
+            onChange: ev => setOverExposurePct(parseFloat(ev.target.value)),
+            style: { width: '100%', accentColor: C.purple }
+          }),
+          e('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 10, color: C.muted, marginTop: 2 } },
+            e('span', null, '5% (strict)'), e('span', null, '25% (default)'), e('span', null, '75% (loose)')
+          ),
+          e('div', { style: { fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.5 } },
+            'Warns when a single team/outcome or single book exceeds this % of your bankroll (' + currency + ' ' + (referencePool).toFixed(0) + ') in pending bets.'
+          )
+        ),
+
+        // ── TOTAL WALLET SUMMARY ──────────────────────────────────────────────
+        e('div', { style: { background: C.dark, borderRadius: 12, padding: '14px 16px', marginBottom: 14 } },
+          e('div', { style: { fontSize: 11, color: C.teal, fontWeight: 600, marginBottom: 4 } }, 'TOTAL ACROSS ALL BOOKS'),
+          e('div', { style: { fontSize: 28, fontWeight: 800, color: '#fff', marginBottom: 4 } }, currency + ' ' + totalWallet.toFixed(2)),
+          bankroll > 0 && e('div', { style: { fontSize: 12, color: '#9ca3af' } },
+            'Bankroll: ' + currency + ' ' + bankroll.toFixed(2) + (totalWallet > 0 ? ' · ' + ((totalWallet / bankroll) * 100).toFixed(0) + '% tracked' : '')
+          )
+        ),
+
+        // ── PER-BOOK BALANCES ─────────────────────────────────────────────────
+        e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10, marginTop: 4 } }, 'BOOK BALANCES'),
+        allBooks.map(([key, book]) => {
+          const bal = parseFloat(walletBalances[key]) || 0;
+          const staked = pendingByBook[book.name] || pendingByBook[key] || 0;
+          const available = bal - staked;
+          const pctOfTotal = totalWallet > 0 ? (bal / totalWallet) * 100 : 0;
+          const isActive = bal > 0;
+          if (!isActive && !book.accessible) return null; // hide inaccessible zero-balance global books to reduce clutter
+          return e('div', { key, style: { background: C.white, border: '1px solid ' + (isActive ? C.border : C.border), borderRadius: 10, padding: '11px 14px', marginBottom: 8, opacity: isActive ? 1 : 0.55 } },
+            e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isActive ? 8 : 0 } },
+              e('div', null,
+                e('div', { style: { fontSize: 13, fontWeight: 700, color: C.text } }, book.name),
+                e('div', { style: { display: 'flex', gap: 5, marginTop: 3, flexWrap: 'wrap' } },
+                  book.wa && e('span', { style: { fontSize: 10, fontWeight: 700, background: C.amberLight, color: '#78350f', padding: '1px 6px', borderRadius: 8 } }, '🇬🇭 WA'),
+                  book.momo && e('span', { style: { fontSize: 10, fontWeight: 700, background: '#fce7f3', color: '#9d174d', padding: '1px 6px', borderRadius: 8 } }, '📱 MoMo'),
+                  book.sharp && e('span', { style: { fontSize: 10, fontWeight: 700, background: C.blueLight, color: C.blue, padding: '1px 6px', borderRadius: 8 } }, '🔬 Sharp')
+                )
+              ),
+              e('div', { style: { textAlign: 'right' } },
+                e('div', { style: { fontSize: 16, fontWeight: 800, color: bal > 0 ? C.text : C.muted } }, currency + ' ' + bal.toFixed(2)),
+                isActive && totalWallet > 0 && e('div', { style: { fontSize: 10, color: C.muted } }, pctOfTotal.toFixed(0) + '% of total')
+              )
+            ),
+            isActive && staked > 0 && e('div', { style: { background: C.amberLight, borderRadius: 7, padding: '5px 9px', fontSize: 11, color: '#78350f', display: 'flex', justifyContent: 'space-between' } },
+              e('span', null, '⏳ ' + currency + ' ' + staked.toFixed(2) + ' in pending bets'),
+              e('span', { style: { fontWeight: 700 } }, 'Available: ' + currency + ' ' + Math.max(0, available).toFixed(2))
+            ),
+            isActive && pctOfTotal > 0 && e('div', { style: { height: 4, background: C.grayLight, borderRadius: 2, marginTop: 8, overflow: 'hidden' } },
+              e('div', { style: { height: '100%', width: pctOfTotal.toFixed(0) + '%', background: C.green, borderRadius: 2 } })
+            ),
+            // Balance input
+            e('div', { style: { display: 'flex', gap: 6, marginTop: 8 } },
+              e('input', {
+                type: 'number', min: 0, step: 0.01,
+                placeholder: 'Set balance...',
+                value: walletInput[key] !== undefined ? walletInput[key] : (bal > 0 ? String(bal) : ''),
+                onChange: ev => setWalletInput(p => ({ ...p, [key]: ev.target.value })),
+                style: { ...st.input, fontSize: 12, padding: '5px 9px', flex: 1 }
+              }),
+              e('button', {
+                onClick: () => {
+                  const val = parseFloat(walletInput[key]);
+                  if (!isNaN(val) && val >= 0) {
+                    setWalletBalances(p => ({ ...p, [key]: val }));
+                    setWalletInput(p => ({ ...p, [key]: undefined }));
+                  }
+                },
+                style: { ...st.btn('primary'), fontSize: 11, padding: '5px 12px', flexShrink: 0 }
+              }, 'Save'),
+              bal > 0 && e('button', {
+                onClick: () => { setWalletBalances(p => { const n = { ...p }; delete n[key]; return n; }); setWalletInput(p => ({ ...p, [key]: '' })); },
+                style: { ...st.btn('danger'), fontSize: 11, padding: '5px 10px', flexShrink: 0 }
+              }, '✕')
+            )
+          );
+        })
+      );
+    })()),
+    // ── CASH OUT ANALYZER ──
+    tab === 'cashout' && e('div', { style: st.section }, (() => {
+      const stakeN = parseFloat(coStake) || 0;
+      const oddsN = parseFloat(coOdds) || 0;
+      const curOddsN = parseFloat(coCurrentOdds) || 0;
+      const offerN = parseFloat(coOffer) || 0;
+      const potentialPayout = stakeN * oddsN;
+      const pWin = curOddsN > 0 ? 1 / curOddsN : 0;
+      const fairValue = potentialPayout * pWin;
+      const haveInputs = stakeN > 0 && oddsN > 0 && curOddsN > 0;
+      const margin = haveInputs && fairValue > 0 ? ((fairValue - offerN) / fairValue) * 100 : null;
+      const pendingBets = bets.filter(b => b.status === 'pending' && b.outcomes && b.outcomes[0]);
+
+      return [
+        e('div', { key: 'intro', style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1e3a8a', lineHeight: 1.6 } },
+          '💸 A cash-out offer locks in a result early instead of waiting for the bet to settle. This compares the offer against the bet\u2019s actual expected value right now — bookmakers typically build in extra margin on top of the normal vig, so cash-out offers are very often below fair value. Holding is the higher-EV move on average, but it carries variance that cashing out removes entirely — that trade-off is a real, personal risk-tolerance call, not just a math answer.'
+        ),
+
+        pendingBets.length > 0 && e('div', { key: 'loader', style: { marginBottom: 14 } },
+          e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 6 } }, 'LOAD FROM YOUR PENDING BETS'),
+          e('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+            pendingBets.map(b => e('button', {
+              key: b.id,
+              onClick: () => loadBetIntoCashout(b),
+              style: { ...st.btn(coLoadedBetId === b.id ? 'primary' : 'outline'), textAlign: 'left', fontSize: 12, padding: '8px 12px', justifyContent: 'flex-start' }
+            }, b.match + ' · ' + b.outcomes[0].label + ' @ ' + b.outcomes[0].odds + ' · stake ' + currency + b.stake))
+          )
+        ),
+
+        e('div', { key: 'inputs', style: { ...st.card(false), cursor: 'default', display: 'flex', flexDirection: 'column', gap: 10 } },
+          e('div', null,
+            e('label', { style: { fontSize: 11, color: C.muted } }, 'Stake (' + currency + ')'),
+            e('input', { type: 'number', value: coStake, onChange: ev => { setCoStake(ev.target.value); setCoLoadedBetId(null); }, style: st.input, placeholder: 'e.g. 50' })
+          ),
+          e('div', null,
+            e('label', { style: { fontSize: 11, color: C.muted } }, 'Odds you took'),
+            e('input', { type: 'number', step: 0.01, value: coOdds, onChange: ev => { setCoOdds(ev.target.value); setCoLoadedBetId(null); }, style: st.input, placeholder: 'e.g. 3.50' })
+          ),
+          e('div', null,
+            e('label', { style: { fontSize: 11, color: C.muted } }, 'Current odds for the SAME outcome, right now (any book — this estimates the market\u2019s current win probability)'),
+            e('input', { type: 'number', step: 0.01, value: coCurrentOdds, onChange: ev => setCoCurrentOdds(ev.target.value), style: st.input, placeholder: 'e.g. 2.20' })
+          ),
+          e('div', null,
+            e('label', { style: { fontSize: 11, color: C.muted } }, 'Cash-out offer shown in your betting app (' + currency + ')'),
+            e('input', { type: 'number', value: coOffer, onChange: ev => setCoOffer(ev.target.value), style: st.input, placeholder: 'e.g. 95' })
+          )
+        ),
+
+        haveInputs && e('div', { key: 'results', style: { marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 } },
+          e('div', { style: st.metricsGrid },
+            [
+              ['Payout if win', currency + potentialPayout.toFixed(2), null],
+              ['Implied win prob.', (pWin * 100).toFixed(1) + '%', null],
+              ['Fair value of holding', currency + fairValue.toFixed(2), C.blue],
+            ].map(([label, val, color]) =>
+              e('div', { key: label, style: st.metric },
+                e('div', { style: st.metricLabel }, label),
+                e('div', { style: st.metricVal(color) }, val)
+              )
+            )
+          ),
+          offerN > 0 && margin !== null && e('div', { style: { background: margin > 0 ? '#fff7ed' : C.greenLight, border: '1px solid ' + (margin > 0 ? '#fed7aa' : C.green), borderRadius: 10, padding: '12px 14px' } },
+            e('div', { style: { fontSize: 14, fontWeight: 700, color: margin > 0 ? '#9a3412' : C.greenDark, marginBottom: 4 } },
+              margin > 0
+                ? '📉 Offer is ' + Math.abs(margin).toFixed(1) + '% below fair value — the book is keeping a cut to cash you out'
+                : '📈 Offer is ' + Math.abs(margin).toFixed(1) + '% above fair value — better than holding, in EV terms'
+            ),
+            e('div', { style: { fontSize: 12, color: margin > 0 ? '#9a3412' : C.greenDark, lineHeight: 1.5 } },
+              margin > 0
+                ? 'Pure expected value says hold — but holding means risking the full stake for a payout that may not come. ' + currency + offerN.toFixed(2) + ' guaranteed now vs ' + currency + fairValue.toFixed(2) + ' expected (but not guaranteed) if you wait.'
+                : 'Cashing out now beats the bet\u2019s own expected value AND removes the risk entirely — this is the rare case where cash-out is the clearly better move both ways.'
+            )
+          )
+        )
+      ];
+    })()),
+
+    // ── EARN: affiliate referral program manager ──
+    tab === 'earn' && e('div', { style: st.section },
+      e('div', { style: { background: '#fdf4ff', border: '1px solid #e9d5ff', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#6b21a8', lineHeight: 1.6 } },
+        '💰 Each book below runs its own official affiliate program — you earn a cut of what referred players generate, paid by the book itself, not through this app. Sign up directly with each program, then paste your personal link/code here just to keep them organized and easy to share.'
+      ),
+      e('div', { style: { background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#9a3412', lineHeight: 1.6 } },
+        '⚠️ Revenue-share commissions are a cut of what referred players lose, not just sign-ups — that\u2019s how every one of these programs works, not a quirk of one book. Every program also requires you to promote responsibly (no targeting minors, no exaggerated claims, no incentivizing problem gambling) — that\u2019s a condition of staying enrolled, not just good practice.'
+      ),
+      EARN_PROGRAMS.map(p => {
+        const ref = referrals[p.key] || { link: '', code: '' };
+        const shareText = encodeURIComponent('Check out ' + p.name + (ref.code ? ' — use my code ' + ref.code : '') + (ref.link ? ': ' + ref.link : ''));
+        return e('div', { key: p.key, style: { ...st.card(false), cursor: 'default', marginBottom: 12 } },
+          e('div', { style: st.cardRow },
+            e('div', null,
+              e('div', { style: { fontSize: 15, fontWeight: 700 } }, p.name),
+              e('div', { style: { fontSize: 12, color: C.muted, marginTop: 2 } }, p.commission)
+            ),
+            e('a', { href: p.signupUrl, target: '_blank', rel: 'noopener noreferrer', style: { ...st.btn('outline'), fontSize: 12, padding: '6px 12px', textDecoration: 'none' } }, 'Join program ↗')
+          ),
+          e('div', { style: { marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 } },
+            e('input', {
+              placeholder: 'Your referral link (after signing up)', value: ref.link,
+              onChange: ev => setReferrals(prev => ({ ...prev, [p.key]: { ...ref, link: ev.target.value } })),
+              style: { ...st.input, fontSize: 12 }
+            }),
+            e('input', {
+              placeholder: 'Your referral/partner code (optional)', value: ref.code,
+              onChange: ev => setReferrals(prev => ({ ...prev, [p.key]: { ...ref, code: ev.target.value } })),
+              style: { ...st.input, fontSize: 12 }
+            })
+          ),
+          (ref.link || ref.code) && e('div', { style: { marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' } },
+            ref.link && e('button', {
+              onClick: () => navigator.clipboard && navigator.clipboard.writeText(ref.link),
+              style: { ...st.btn('outline'), fontSize: 11, padding: '5px 10px' }
+            }, '📋 Copy link'),
+            e('a', {
+              href: 'https://wa.me/?text=' + shareText, target: '_blank', rel: 'noopener noreferrer',
+              style: { ...st.btn('success'), fontSize: 11, padding: '5px 10px', textDecoration: 'none' }
+            }, '📲 Share via WhatsApp')
+          )
+        );
+      })
     ),
     tab === 'scanner' && e('div', { style: st.section },
       e('div', { style: st.metricsGrid },
@@ -1146,7 +1561,8 @@ const analyzeArb = async (arb) => {
                 e('div', { style: { fontSize: 13, color: C.text, marginTop: 3 } },
                   e('span', { style: { fontWeight: 700 } }, bet.outcome),
                   e('span', { style: { color: C.muted } }, ' · ' + bet.bookName),
-                  bet._wa && e('span', { style: { marginLeft: 6, fontSize: 11, background: C.greenLight, color: C.greenDark, padding: '1px 6px', borderRadius: 10 } }, '🇬🇭 WA')
+                  bet._wa && e('span', { style: { marginLeft: 6, fontSize: 11, background: C.greenLight, color: C.greenDark, padding: '1px 6px', borderRadius: 10 } }, '🇬🇭 WA'),
+                  bet.sharpBookCount > 1 && e('span', { style: { marginLeft: 6, fontSize: 11, background: '#ede9fe', color: '#6d28d9', padding: '1px 6px', borderRadius: 10 } }, '🎯 ' + bet.sharpBookCount + '-book consensus')
                 )
               ),
               e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
@@ -1562,15 +1978,32 @@ const analyzeArb = async (arb) => {
 
       // By book
       const byBook = {};
-      bets.forEach(b => (b.outcomes || []).forEach(o => { const bk = o.bookName || o.book || 'Unknown'; if (!byBook[bk]) byBook[bk] = { staked: 0, profit: 0, count: 0 }; byBook[bk].count++; }));
+      bets.forEach(b => (b.outcomes || []).forEach(o => { const bk = o.bookName || o.book || 'Unknown'; if (!byBook[bk]) byBook[bk] = { staked: 0, profit: 0, count: 0 }; byBook[bk].count++; byBook[bk].staked += b.stake; if (b.status === 'won') byBook[bk].profit += b.profit; if (b.status === 'lost') byBook[bk].profit -= b.stake; }));
+
+      // Average odds taken
+      const oddsList = bets.flatMap(b => (b.outcomes || []).map(o => o.odds)).filter(o => o > 0);
+      const avgOdds = oddsList.length > 0 ? (oddsList.reduce((s, o) => s + o, 0) / oddsList.length).toFixed(2) : '—';
+
+      // Monthly trends (grouped by calendar month of bet.date)
+      const byMonth = {};
+      bets.forEach(b => {
+        const m = new Date(b.date).toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
+        if (!byMonth[m]) byMonth[m] = { staked: 0, profit: 0, count: 0 };
+        byMonth[m].count++; byMonth[m].staked += b.stake;
+        if (b.status === 'won') byMonth[m].profit += b.profit;
+        if (b.status === 'lost') byMonth[m].profit -= b.stake;
+      });
+      const monthOrder = Object.keys(byMonth).sort((a, b) => new Date(a) - new Date(b));
 
       // By type
       const byType = { arb: { count: 0, profit: 0, staked: 0 }, ev: { count: 0, profit: 0, staked: 0 }, manual: { count: 0, profit: 0, staked: 0 } };
       bets.forEach(b => { const t = b.type || 'arb'; if (!byType[t]) byType[t] = { count: 0, profit: 0, staked: 0 }; byType[t].count++; byType[t].staked += b.stake; if (b.status === 'won') byType[t].profit += b.profit; if (b.status === 'lost') byType[t].profit -= b.stake; });
 
-      // CLV helper
+      // CLV helper — prefers the auto-captured closing line (persisted on the bet
+      // itself); falls back to a manually-typed value for bets where auto-capture
+      // hasn't run yet (e.g. added after the match already started).
       const clvBet = (bet) => {
-        const closing = parseFloat(clvInputs[bet.id]);
+        const closing = bet.clvOdds != null ? bet.clvOdds : parseFloat(clvInputs[bet.id]);
         if (!closing || !bet.placedOdds) return null;
         return ((bet.placedOdds / closing - 1) * 100).toFixed(1);
       };
@@ -1610,6 +2043,7 @@ const analyzeArb = async (arb) => {
             ['P&L', (bets[0] ? bets[0].currency : currency) + ' ' + realProfit.toFixed(2), realProfit >= 0 ? C.green : '#dc2626'],
             ['ROI', roi + '%', parseFloat(roi) >= 0 ? C.green : '#dc2626'],
             ['Win rate', winRate + (winRate !== '—' ? '%' : ''), null],
+            ['Avg odds', avgOdds, null],
           ].map(([l, v, c]) => e('div', { key: l, style: st.metric }, e('div', { style: st.metricLabel }, l), e('div', { style: st.metricVal(c) }, v)))
         ),
 
@@ -1692,8 +2126,71 @@ const analyzeArb = async (arb) => {
                 )
               );
             })
+          ),
+
+          // By bookmaker — diversification at a glance
+          Object.keys(byBook).length > 0 && e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, '🏦 By bookmaker'),
+            Object.entries(byBook).sort((a, b) => b[1].count - a[1].count).map(([book, v]) => {
+              const sharePct = bets.length > 0 ? ((v.count / bets.length) * 100).toFixed(0) : 0;
+              return e('div', { key: book, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
+                e('div', null,
+                  e('div', { style: { fontSize: 13, fontWeight: 600 } }, book),
+                  e('div', { style: { fontSize: 11, color: C.muted } }, v.count + ' bets (' + sharePct + '% of total) · ' + currency + ' ' + v.staked.toFixed(2) + ' staked')
+                ),
+                e('div', { style: { fontSize: 13, fontWeight: 700, color: v.profit >= 0 ? C.green : '#dc2626' } }, (v.profit >= 0 ? '+' : '') + currency + ' ' + v.profit.toFixed(2))
+              );
+            }),
+            Object.keys(byBook).length === 1 && e('div', { style: { fontSize: 11, color: '#9a3412', background: '#fff7ed', borderRadius: 6, padding: '6px 8px', marginTop: 4 } },
+              '⚠️ Every bet is on a single book — if it limits or restricts your account, you have no fallback. Spreading action across 2+ books protects you from that.'
+            )
+          ),
+
+          // Monthly trends
+          monthOrder.length > 0 && e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, '📅 Monthly trends'),
+            monthOrder.map(m => {
+              const v = byMonth[m];
+              return e('div', { key: m, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
+                e('div', null,
+                  e('div', { style: { fontSize: 13, fontWeight: 600 } }, m),
+                  e('div', { style: { fontSize: 11, color: C.muted } }, v.count + ' bets · ' + currency + ' ' + v.staked.toFixed(2) + ' staked')
+                ),
+                e('div', { style: { fontSize: 13, fontWeight: 700, color: v.profit >= 0 ? C.green : '#dc2626' } },
+                  (v.profit >= 0 ? '+' : '') + currency + ' ' + v.profit.toFixed(2),
+                  e('div', { style: { fontSize: 11, color: C.muted, textAlign: 'right' } }, v.staked > 0 ? ((v.profit / v.staked) * 100).toFixed(1) + '% ROI' : '')
+                )
+              );
+            })
           )
         ),
+
+        // ── OVEREXPOSURE INLINE ALERT (bets view) ─────────────────────────────
+        trackerView === 'bets' && (() => {
+          const referencePool = bankroll > 0 ? bankroll : 1;
+          const pendingByOutcomeT = {};
+          bets.filter(b => b.status === 'pending').forEach(b => {
+            (b.outcomes || []).forEach(o => {
+              const key = o.label || o.name || 'Unknown';
+              if (!pendingByOutcomeT[key]) pendingByOutcomeT[key] = 0;
+              pendingByOutcomeT[key] += (o.stake || b.stake || 0);
+            });
+          });
+          const alerts = Object.entries(pendingByOutcomeT)
+            .map(([label, staked]) => ({ label, staked, pct: (staked / referencePool) * 100 }))
+            .filter(x => x.pct >= overExposurePct);
+          if (alerts.length === 0) return null;
+          return e('div', { style: { background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '10px 13px', marginBottom: 12 } },
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: '#9a3412', marginBottom: 6 } }, '⚠️ Overexposure on ' + alerts.length + ' outcome' + (alerts.length > 1 ? 's' : '')),
+            alerts.map((x, i) =>
+              e('div', { key: i, style: { fontSize: 12, color: '#78350f', display: 'flex', justifyContent: 'space-between' } },
+                e('span', null, x.label),
+                e('span', { style: { fontWeight: 700 } }, x.pct.toFixed(1) + '% · ' + currency + ' ' + x.staked.toFixed(2))
+              )
+            ),
+            e('button', { onClick: () => setTab('wallet'), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 10px', marginTop: 6 } }, 'View in Wallet →')
+          );
+        })(),
 
         // ── BETS LIST VIEW ──
         trackerView === 'bets' && bets.length === 0 &&
@@ -1740,10 +2237,27 @@ const analyzeArb = async (arb) => {
               clv !== null && e('span', { style: { fontSize: 11, fontWeight: 700, color: parseFloat(clv) >= 0 ? C.green : '#dc2626', background: parseFloat(clv) >= 0 ? C.greenLight : '#fef2f2', padding: '2px 8px', borderRadius: 10 } }, 'CLV ' + (parseFloat(clv) >= 0 ? '+' : '') + clv + '%')
             ),
 
-            // CLV input (for EV bets — compare placed odds vs closing odds)
-            bet.type === 'ev' && bet.status !== 'pending' && e('div', { style: { marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' } },
+            // Closing odds (for EV bets — compare placed odds vs closing odds).
+            // Auto-captured during scans once the match kicks off; manual entry is
+            // only the fallback for bets added too late for auto-capture to catch,
+            // and now actually persists (previously lost on refresh).
+            bet.type === 'ev' && bet.status !== 'pending' && e('div', { style: { marginTop: 8, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
               e('span', { style: { fontSize: 11, color: C.muted, flexShrink: 0 } }, 'Closing odds:'),
-              e('input', { type: 'number', step: 0.01, placeholder: 'e.g. 14.50', value: clvInputs[bet.id] || '', onChange: ev => setClvInputs(p => ({ ...p, [bet.id]: ev.target.value })), style: { ...st.input, width: 100, fontSize: 12, padding: '4px 8px' } }),
+              bet.clvOdds != null
+                ? e('span', { style: { fontSize: 13, fontWeight: 700, color: C.text } }, bet.clvOdds.toFixed(2))
+                : e('input', {
+                    type: 'number', step: 0.01, placeholder: 'e.g. 14.50',
+                    value: clvInputs[bet.id] || '',
+                    onChange: ev => {
+                      const val = ev.target.value;
+                      setClvInputs(p => ({ ...p, [bet.id]: val }));
+                      const num = parseFloat(val);
+                      const valid = val !== '' && !isNaN(num);
+                      setBets(prev => prev.map(b => b.id === bet.id ? { ...b, clvOdds: valid ? num : null, clvSource: valid ? 'manual' : null } : b));
+                    },
+                    style: { ...st.input, width: 100, fontSize: 12, padding: '4px 8px' }
+                  }),
+              bet.clvSource === 'auto' && e('span', { style: { fontSize: 10, fontWeight: 700, color: '#6d28d9', background: '#ede9fe', padding: '1px 6px', borderRadius: 8 } }, '📡 auto-captured'),
               clv !== null && e('span', { style: { fontSize: 12, color: C.muted } }, 'You beat closing line by ' + clv + '%')
             )
           );
@@ -1751,17 +2265,20 @@ const analyzeArb = async (arb) => {
       );
     })()),
     tab === 'guide' && e('div', { style: st.section },
-      e('div', { style: st.guideH }, '🇬🇭 All Bookmakers in Ghana'),
+      e('div', { style: st.guideH }, '🇬🇭 All Bookmakers — West Africa & Global'),
       e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 } },
         Object.entries(BOOKS).map(([k, b]) =>
           e('div', { key: k, style: { background: b.manual ? C.purpleLight : C.grayLight, borderRadius: 10, padding: '11px 14px' } },
             e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
               e('a', { href: b.url, target: '_blank', rel: 'noreferrer', style: { fontSize: 14, fontWeight: 700, color: C.text, textDecoration: 'none' } }, b.name),
               e('div', { style: { display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' } },
+                b.wa && !b.manual && e('span', { style: { background: '#e0f2fe', color: '#0369a1', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🔄 Auto-scanned'),
                 b.manual && e('span', { style: { background: C.purpleLight, color: C.purple, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12, border: '1px solid #c4b5fd' } }, '✏️ Manual entry'),
-                !b.manual && e('span', { style: { background: '#e0f2fe', color: '#0369a1', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🔄 Auto-scanned'),
-                b.licensed && e('span', { style: { background: C.greenLight, color: C.greenDark, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '✓ GGC Licensed'),
-                b.momo && e('span', { style: { background: C.amberLight, color: '#78350f', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '📱 MoMo')
+                !b.wa && !b.manual && e('span', { style: { background: '#e0f2fe', color: '#0369a1', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🔄 Auto-scanned'),
+                b.licensed && e('span', { style: { background: C.greenLight, color: C.greenDark, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '✓ Licensed'),
+                b.momo && e('span', { style: { background: C.amberLight, color: '#78350f', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '📱 MoMo'),
+                b.wa && e('span', { style: { background: '#fce7f3', color: '#9d174d', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🌍 WA'),
+                b.sharp && e('span', { style: { background: C.blueLight, color: C.blue, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🔬 Sharp')
               )
             ),
             e('div', { style: { fontSize: 12, color: C.muted } }, b.note)
@@ -1769,7 +2286,7 @@ const analyzeArb = async (arb) => {
         )
       ),
       e('div', { style: { background: C.purpleLight, border: '1px solid #c4b5fd', borderRadius: 10, padding: '11px 14px', marginBottom: 16, fontSize: 12, color: C.purple, lineHeight: 1.6 } },
-        '✅ SportyBet, Betano and MSport are now auto-scanned via the West Africa scraper. Their odds feed directly into the 🇬🇭 West Africa section of the Scanner and +EV tabs. Manual entry is still available if the scraper misses a market.'
+        '✅ SportyBet, Betano and MSport are auto-scanned via the West Africa scraper. 22Bet, Bet9ja, BetKing, Paripesa, BetWinner, PremierBet and MozzartBet are added as manual-entry books — use the Calculator or Manual Arb tab to enter their odds and find arb opportunities across all WA books.'
       ),
       e('div', { style: st.guideH }, '🌍 Sports coverage'),
       e('div', { style: st.guideP }, 'ArbEdge scans ' + ALL_SPORTS.length + ' competitions worldwide — FIFA World Cup (Men & Women), AFCON, all Grand Slams (ATP & WTA), NBA, WNBA, NFL, UFC/MMA, ICC Cricket World Cup, Champions League, Copa América, IPL, and 80+ football leagues.'),
