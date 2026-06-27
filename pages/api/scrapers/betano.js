@@ -27,6 +27,23 @@ const BETANO_SPORT_MAP = {
   basketball_nba:               { sportId: 2, leagueId: 132 },
   tennis_atp_wimbledon:         { sportId: 5, leagueId: 270 },
   mma_mixed_martial_arts:       { sportId: 23, leagueId: null },
+
+  // ── Cricket (sportId: 3 on Betano) ───────────────────────────────────────
+  // leagueId values: find via DevTools on betano.com.gh → browse to a cricket
+  // competition → inspect the /api/sports/events/{sportId}/{leagueId}/ request.
+  // IDs below are Betano's known values from network captures; verify if 404.
+  cricket_ipl:                  { sportId: 3, leagueId: 8016  }, // IPL
+  cricket_t20_world_cup:        { sportId: 3, leagueId: 9812  }, // Men's T20 World Cup
+  cricket_icc_world_cup:        { sportId: 3, leagueId: 7341  }, // ODI World Cup
+  cricket_icc_trophy:           { sportId: 3, leagueId: 8974  }, // Champions Trophy
+  cricket_international_t20:    { sportId: 3, leagueId: null  }, // broad — all intl T20s
+  cricket_odi:                  { sportId: 3, leagueId: null  }, // broad — all ODIs
+  cricket_test_match:           { sportId: 3, leagueId: null  }, // broad — all Tests
+  cricket_the_hundred:          { sportId: 3, leagueId: 9531  }, // The Hundred
+  cricket_big_bash:             { sportId: 3, leagueId: 3671  }, // BBL
+  cricket_psl:                  { sportId: 3, leagueId: 5748  }, // PSL
+  cricket_caribbean_premier_league: { sportId: 3, leagueId: 4123 }, // CPL
+  cricket_asia_cup:             { sportId: 3, leagueId: 6284  }, // Asia Cup
 };
 
 const BASE_URL = 'https://www.betano.com.gh/api/sports/events/';
