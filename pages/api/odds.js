@@ -215,12 +215,31 @@ export default async function handler(req, res) {
     '| merged total:', merged.length, '| merged events carrying a WA book:', merged.filter(ev => ev._hasWA).length);
 
   // ── 6. Respond ────────────────────────────────────────────────────────────
+  // ── Detect user region from Vercel's geo header ───────────────────────────
+  // x-vercel-ip-country is a 2-letter ISO code injected by Vercel on every request.
+  // WA countries: Ghana (GH), Nigeria (NG), Senegal (SN), Ivory Coast (CI),
+  // Cameroon (CM), Kenya (KE), Tanzania (TZ), Uganda (UG), Rwanda (RW), Zambia (ZM),
+  // Ethiopia (ET), Mozambique (MZ), Sierra Leone (SL), Liberia (LR), Gambia (GM).
+  const WA_COUNTRIES = new Set(['GH','NG','SN','CI','CM','KE','TZ','UG','RW','ZM','ET','MZ','SL','LR','GM','BJ','BF','ML','NE','GN','TG','MR','MW','ZW','AO','CD','CG','GA','TD','BI','DJ','ER','SO','SD','SS']);
+  const userCountry = req.headers['x-vercel-ip-country'] || 'unknown';
+  const isWAUser = WA_COUNTRIES.has(userCountry);
+
+  // Books accessible to this user based on their detected region.
+  // WA users: sportybet, betano, msport, 1xbet, melbet, betway + new WA books
+  // Global users: all books accessible (Betfair, Pinnacle, Bet365, William Hill etc.)
+  const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','melbet','sportybet','betano','msport','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag'];
+  const WA_ACCESSIBLE     = ['1xbet','melbet','betway','sportybet','betano','msport','22bet','paripesa','betwinner','betking','bet9ja','1win','premierbet','mozzartbet'];
+  const userAccessibleBooks = isWAUser ? WA_ACCESSIBLE : GLOBAL_ACCESSIBLE;
+
   return res.status(200).json({
     data: merged,
     remainingRequests,
     usedRequests,
     keyIndex,
     waBookHealth,
+    userCountry,
+    isWAUser,
+    userAccessibleBooks,
     meta: {
       sport,
       totalEvents:  merged.length,
