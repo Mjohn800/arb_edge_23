@@ -27,6 +27,20 @@ const MSPORT_SPORT_MAP = {
   basketball_nba:               { sportId: 'sr:sport:2',   tournamentId: 'sr:tournament:132',  keywords: ['nba'] },
   tennis_atp_wimbledon:         { sportId: 'sr:sport:5',   tournamentId: 'sr:tournament:270',  keywords: ['wimbledon'] },
   mma_mixed_martial_arts:       { sportId: 'sr:sport:117', tournamentId: null,                 keywords: [] },
+
+  // ── Cricket (sr:sport:21) ────────────────────────────────────────────────
+  cricket_ipl:                  { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:26638', keywords: ['ipl', 'indian premier'] },
+  cricket_t20_world_cup:        { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:98732', keywords: ['t20 world cup', 't20wc'] },
+  cricket_icc_world_cup:        { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:73476', keywords: ['world cup', 'icc world'] },
+  cricket_icc_trophy:           { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:89765', keywords: ['champions trophy', 'icc trophy'] },
+  cricket_international_t20:    { sportId: 'sr:sport:21',  tournamentId: null,                  keywords: ['t20i', 'twenty20 international', 't20 international'] },
+  cricket_odi:                  { sportId: 'sr:sport:21',  tournamentId: null,                  keywords: ['odi', 'one day international'] },
+  cricket_test_match:           { sportId: 'sr:sport:21',  tournamentId: null,                  keywords: ['test match', ' test ', 'test series'] },
+  cricket_the_hundred:          { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:97531', keywords: ['hundred'] },
+  cricket_big_bash:             { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:36716', keywords: ['big bash', 'bbl'] },
+  cricket_psl:                  { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:57483', keywords: ['psl', 'pakistan super'] },
+  cricket_caribbean_premier_league: { sportId: 'sr:sport:21', tournamentId: 'sr:tournament:41234', keywords: ['cpl', 'caribbean premier'] },
+  cricket_asia_cup:             { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:62841', keywords: ['asia cup'] },
 };
 
 const BASE = 'https://www.msport.com/api/gh/facts-center/query/frontend';
