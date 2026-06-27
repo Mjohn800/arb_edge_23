@@ -28,6 +28,22 @@ const SPORTYBET_SPORT_MAP = {
   basketball_nba:               { type: 'tournament', sportId: 'sr:sport:2',   tournamentId: 'sr:tournament:132'  },
   tennis_atp_wimbledon:         { type: 'tournament', sportId: 'sr:sport:5',   tournamentId: 'sr:tournament:270'  },
   mma_mixed_martial_arts:       { type: 'sport',      sportId: 'sr:sport:117', tournamentId: null                 },
+
+  // ── Cricket (sr:sport:21) ────────────────────────────────────────────────
+  // Sportradar cricket tournament IDs confirmed via public SR docs + community captures.
+  // T20 Blast / The Hundred / CPL active Jun–Sep 2026; ICC events vary by year.
+  cricket_ipl:                  { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:26638' }, // IPL 2026 (finished May 31; use for next season)
+  cricket_t20_world_cup:        { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:98732' }, // Men's T20 WC (India/SL host — confirm ID via DevTools)
+  cricket_icc_world_cup:        { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:73476' }, // ODI World Cup
+  cricket_icc_trophy:           { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:89765' }, // ICC Champions Trophy
+  cricket_international_t20:    { type: 'sport',      sportId: 'sr:sport:21',  tournamentId: null                 }, // broad — catches all intl T20s
+  cricket_odi:                  { type: 'sport',      sportId: 'sr:sport:21',  tournamentId: null                 }, // broad — catches all ODIs
+  cricket_test_match:           { type: 'sport',      sportId: 'sr:sport:21',  tournamentId: null                 }, // broad — catches all Tests
+  cricket_the_hundred:          { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:97531' }, // The Hundred 2026 (starts Jul 2026)
+  cricket_big_bash:             { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:36716' }, // BBL (Dec–Jan season)
+  cricket_psl:                  { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:57483' }, // PSL
+  cricket_caribbean_premier_league: { type: 'tournament', sportId: 'sr:sport:21', tournamentId: 'sr:tournament:41234' }, // CPL (Aug–Sep 2026)
+  cricket_asia_cup:             { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:62841' }, // Asia Cup
 };
 
 const BASE = 'https://www.sportybet.com/api/gh/factsCenter';
