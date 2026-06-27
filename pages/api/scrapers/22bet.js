@@ -40,6 +40,20 @@ const TWENTYTWOBET_SPORT_MAP = {
   basketball_nba:               { sportId: 2,   competitionId: 199  },
   tennis_atp_wimbledon:         { sportId: 5,   competitionId: 1510 },
   mma_mixed_martial_arts:       { sportId: 36,  competitionId: null }, // broad sport query
+
+  // ── Cricket (BetConstruct sportId: 3) ───────────────────────────────────
+  cricket_ipl:                  { sportId: 3, competitionId: 8016  },
+  cricket_t20_world_cup:        { sportId: 3, competitionId: 9812  },
+  cricket_icc_world_cup:        { sportId: 3, competitionId: 7341  },
+  cricket_icc_trophy:           { sportId: 3, competitionId: 8974  },
+  cricket_international_t20:    { sportId: 3, competitionId: null  },
+  cricket_odi:                  { sportId: 3, competitionId: null  },
+  cricket_test_match:           { sportId: 3, competitionId: null  },
+  cricket_the_hundred:          { sportId: 3, competitionId: 9531  },
+  cricket_big_bash:             { sportId: 3, competitionId: 3671  },
+  cricket_psl:                  { sportId: 3, competitionId: 5748  },
+  cricket_caribbean_premier_league: { sportId: 3, competitionId: 4123 },
+  cricket_asia_cup:             { sportId: 3, competitionId: 6284  },
 };
 
 const BASE = 'https://22bet.gh';
