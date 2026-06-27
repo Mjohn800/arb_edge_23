@@ -4,34 +4,20 @@ import { fetchMsportOdds }    from './scrapers/msport';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
-export const SHARP_BOOKS_WESTAFRICA = ['1xbet', 'singbet', 'sbobet']; // 1xbet confirmed dead (no data) — harmless to leave here since findEVBets just won't match it, but singbet/sbobet are the real reference books now
+export const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet', '1xbet']; // same Pinnacle reference as global, output filtered to WA-accessible books client-side
 export const WA_BOOKS               = ['sportybet', 'betano', 'msport', 'melbet', 'betway'];
 
 // Real Odds-API bookmaker keys we actually compare for the GLOBAL feed.
-// Specifying these by name instead of `regions=eu,uk` costs 1 credit per scan
-// (up to 10 bookmakers = 1 credit) instead of 2 credits for two regions —
-// roughly half the quota burn, since none of the other EU/UK books in those
-// regions are used anywhere in the app anyway.
-//
-// 1xbet and melbet were REMOVED 2026-06-20 after a direct API test confirmed
-// they return `"bookmakers":[]` on every fixture (verified on live FIFA World
-// Cup matches, with Pinnacle returning fully priced odds on the same
-// fixtures as a control) — they are not in this account's bookmaker
-// coverage at all. This is not a credits/plan-tier issue; buying more
-// requests will not make their data appear. If you want to test a
-// replacement key (e.g. betclic, betsson) before adding it back here, hit
-// https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds?apiKey=YOUR_KEY&bookmakers=KEY&markets=h2h
-// directly first — don't add a key on faith.
-const GLOBAL_BOOKMAKERS = [
-  'pinnacle',
-  'betfair_ex_eu',
-  'singbet',
-  'sbobet',
-  'bet365',
-  'marathonbet',
-  'unibet_eu',
-  'williamhill',
-].join(',');
+// NOTE: We use regions= instead of bookmakers= because the bookmakers= param
+// only returns events where ALL listed books have data — if Singbet/SBOBet
+// don't price a market, the whole event drops out even if Pinnacle has full odds.
+// regions= returns all books in those regions, giving us Pinnacle + soft books
+// on every event that has any coverage. Small credit cost difference is worth it.
+// Confirmed regions that include our key books:
+//   eu  → Pinnacle, Bet365, Unibet, William Hill, MarathonBet, Betfair
+//   uk  → Betfair UK, William Hill UK
+//   us  → DraftKings, FanDuel (not needed)
+const GLOBAL_REGIONS = 'eu,uk';
 // betway has NO data source at all — not in this list, and no scraper exists for
 // it (only sportybet/betano/msport are scraped). It's still flagged `accessible`
 // in BOOKS (a WA bettor really can use it), but it will never appear in scan
@@ -144,7 +130,7 @@ export default async function handler(req, res) {
   ].filter(Boolean);
 
   console.log('[odds] keys loaded:', keys.map((k, i) => `KEY_${i+1}=${k ? k.slice(0,8)+'...' : 'MISSING'}`));
-  console.log('[odds] requesting sport:', sport, 'bookmakers:', GLOBAL_BOOKMAKERS, 'markets:', markets);
+  console.log('[odds] requesting sport:', sport, 'regions:', GLOBAL_REGIONS, 'markets:', markets);
 
   let lastError = null;
   let lastErrorDetail = null;
@@ -155,7 +141,7 @@ export default async function handler(req, res) {
 
   // ── 1. Try each API key until one succeeds ────────────────────────────────
   for (const key of keys) {
-    const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${key}&bookmakers=${GLOBAL_BOOKMAKERS}&markets=${markets}&oddsFormat=decimal`;
+    const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${key}&regions=${GLOBAL_REGIONS}&markets=${markets}&oddsFormat=decimal`;
     try {
       const response = await fetch(url);
       console.log(`[odds] key ${keys.indexOf(key)+1} → status ${response.status}`);
