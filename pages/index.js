@@ -24,36 +24,22 @@ const BOOKS = {
   sportybet:     { name: 'SportyBet',    momo: true,  licensed: true,  manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.sportybet.com/gh/sport/football', sportUrls: { soccer: 'https://www.sportybet.com/gh/sport/football', basketball: 'https://www.sportybet.com/gh/sport/basketball', tennis: 'https://www.sportybet.com/gh/sport/tennis', cricket: 'https://www.sportybet.com/gh/sport/cricket', mma: 'https://www.sportybet.com/gh/sport/mma' } },
   betano:        { name: 'Betano',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.betano.com.gh/sport/football', sportUrls: { soccer: 'https://www.betano.com.gh/sport/football', basketball: 'https://www.betano.com.gh/sport/basketball', tennis: 'https://www.betano.com.gh/sport/tennis', cricket: 'https://www.betano.com.gh/sport/cricket', mma: 'https://www.betano.com.gh/sport/mma' } },
   msport:        { name: 'MSport',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.msport.com/gh/football', sportUrls: { soccer: 'https://www.msport.com/gh/football', basketball: 'https://www.msport.com/gh/basketball', tennis: 'https://www.msport.com/gh/tennis', cricket: 'https://www.msport.com/gh/cricket', mma: 'https://www.msport.com/gh/mma' } },
-
-  // ── West Africa — expanded (manual entry; GCG/NLRC licensed or widely used) ─
-  // 22Bet: GCG-licensed in Ghana (2026), MoMo deposits, 60+ sports, ~97% payout rate on football.
-  '22bet':       { name: '22Bet',        momo: true,  licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://22bet.com/gh/line/Football', sportUrls: { soccer: 'https://22bet.com/gh/line/Football', basketball: 'https://22bet.com/gh/line/Basketball', tennis: 'https://22bet.com/gh/line/Tennis', cricket: 'https://22bet.com/gh/line/Cricket', mma: 'https://22bet.com/gh/line/MMA' }, note: 'GCG-licensed 2026. MoMo + card. 60+ sports. Instant–6h withdrawals.' },
-
-  // Bet9ja: #1 Nigeria by market share. NLRC-licensed. No Ghana licence but widely used cross-border.
-  bet9ja:        { name: 'Bet9ja',       momo: false, licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://www.bet9ja.com/BetSlip/sportsbetting.aspx#/betslip/home', sportUrls: { soccer: 'https://sports.bet9ja.com/sport/Soccer', basketball: 'https://sports.bet9ja.com/sport/Basketball', tennis: 'https://sports.bet9ja.com/sport/Tennis', mma: 'https://sports.bet9ja.com/sport/MMA' }, note: 'Nigeria #1 by traffic. NLRC-licensed. Bank transfer + USSD. No MoMo.' },
-
-  // BetKing: Top-3 Nigeria, physical shops + online. Paystack/OPay local payments.
-  betking:       { name: 'BetKing',      momo: false, licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://www.betking.com/sports', sportUrls: { soccer: 'https://www.betking.com/sports/s/soccer/', basketball: 'https://www.betking.com/sports/s/basketball/', tennis: 'https://www.betking.com/sports/s/tennis/', mma: 'https://www.betking.com/sports/s/mma/' }, note: 'Nigeria NLRC-licensed. Physical shops + online. Paystack / OPay deposits.' },
-
-  // Paripesa: Lowest margins in WA (~97% football payout). Curacao + Nigeria licence. MoMo Ghana.
-  paripesa:      { name: 'Paripesa',     momo: true,  licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://paripesa.com/en/sports', sportUrls: { soccer: 'https://paripesa.com/en/sports/soccer', basketball: 'https://paripesa.com/en/sports/basketball', tennis: 'https://paripesa.com/en/sports/tennis', cricket: 'https://paripesa.com/en/sports/cricket', mma: 'https://paripesa.com/en/sports/mma' }, note: 'Best margins in WA (~97% on football). MoMo Ghana. Curacao + NG licence. No payout cap NG.' },
-
-  // BetWinner: MoMo Ghana (GHS 1 min), 50+ sports, instant–3d withdrawals.
-  betwinner:     { name: 'BetWinner',    momo: true,  licensed: false, manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://betwinner.com/en/sport/', sportUrls: { soccer: 'https://betwinner.com/en/sport/soccer', basketball: 'https://betwinner.com/en/sport/basketball', tennis: 'https://betwinner.com/en/sport/tennis', cricket: 'https://betwinner.com/en/sport/cricket', mma: 'https://betwinner.com/en/sport/mma' }, note: 'MoMo Ghana. GHS 1 min deposit. 200% welcome bonus. 50+ sports.' },
-
-  // PremierBet: Household WA brand, fast cashouts, MoMo, strong local presence Ghana/Senegal/Mali.
-  premierbet:    { name: 'PremierBet',   momo: true,  licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://www.premierbet.com.gh/sports', sportUrls: { soccer: 'https://www.premierbet.com.gh/sports/football', basketball: 'https://www.premierbet.com.gh/sports/basketball', tennis: 'https://www.premierbet.com.gh/sports/tennis' }, note: 'GCG-licensed. Strong across Ghana, Senegal, Mali. MoMo. Instant withdrawals.' },
-
-  // MozzartBet: Growing Nigeria presence. NLRC-licensed. Known for high accumulator limits.
-  mozzartbet:    { name: 'MozzartBet',   momo: false, licensed: true,  manual: true,  accessible: true,  sharp: false, wa: true,  url: 'https://www.mozzartbet.com.ng/en#/sport/FOOTBALL', sportUrls: { soccer: 'https://www.mozzartbet.com.ng/en#/sport/FOOTBALL', basketball: 'https://www.mozzartbet.com.ng/en#/sport/BASKETBALL', tennis: 'https://www.mozzartbet.com.ng/en#/sport/TENNIS', mma: 'https://www.mozzartbet.com.ng/en#/sport/MMA' }, note: 'NLRC Nigeria. High acca limits. Fast live betting. Bank transfer + Paystack.' },
 };
 
 const API_BOOKS = Object.entries(BOOKS).filter(([,b]) => !b.manual).map(([k]) => k);
 const MANUAL_BOOKS = Object.entries(BOOKS).filter(([,b]) => b.manual);
 const ACCESSIBLE_BOOKS = Object.entries(BOOKS).filter(([,b]) => b.accessible).map(([k]) => k);
 
-// Fully accessible = every leg of the arb is on a book accessible from West Africa
-const isFullyAccessible = (outcomes) => (outcomes || []).every(o => BOOKS[o.book] && BOOKS[o.book].accessible);
+// Runtime accessibility check — uses server-detected region if available,
+// falls back to the static BOOKS.accessible flag (WA default) otherwise.
+// Components call this instead of BOOKS[key]?.accessible directly.
+const isBookAccessible = (bookKey, userRegion) => {
+  if (userRegion?.accessibleBooks) return userRegion.accessibleBooks.includes(bookKey);
+  return !!BOOKS[bookKey]?.accessible;
+};
+
+// Fully accessible = every leg of the arb is on a book accessible to this user
+const isFullyAccessible = (outcomes, userRegion) => (outcomes || []).every(o => isBookAccessible(o.book, userRegion));
 
 // ─── AFFILIATE PROGRAMS ─────────────────────────────────────────────────────
 // Verified 2026-06-24 against each program's own official domain (not third-party
@@ -252,7 +238,7 @@ const MOCK = [
   { id: 'm5', sport: 'cricket_ipl', match: 'Mumbai Indians vs CSK', commenceTime: new Date(Date.now() + 12 * 3600000).toISOString(), margin: 1.5, outcomes: [{ label: 'Mumbai Indians', book: '1xbet', bookName: '1xBet', odds: 2.05 }, { label: 'CSK', book: 'betway', bookName: 'Betway', odds: 1.90 }] },
 ];
 
-function findArbs(events, mode = 'global') {
+function findArbs(events, mode = 'global', userRegion = null) {
   const arbs = [];
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
@@ -261,7 +247,7 @@ function findArbs(events, mode = 'global') {
       // West Africa section: only consider accessible books when picking the best price
       // per outcome, so a "WA arb" is actually placeable from WA — not just a global arb
       // that happened to land on an accessible book for every leg by coincidence.
-      if (mode === 'wa' && !BOOKS[bm.key]?.accessible) continue;
+      if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
       for (const mkt of (bm.markets || [])) {
         if (!['h2h', 'spreads', 'totals', 'outrights'].includes(mkt.key)) continue;
         for (const o of mkt.outcomes) {
@@ -280,10 +266,11 @@ function findArbs(events, mode = 'global') {
 
 // ── Sharp reference books by region ─────────────────────────────────────────
 // Global (RoW): Pinnacle/Betfair are the gold standard sharp references.
-// West Africa:  1xBet and Singbet are accessible and sharp enough to use as
-//               the fair-odds baseline when Pinnacle is unavailable.
+// West Africa:  Use Pinnacle/Betfair as reference (same as global) but filter
+//               OUTPUT to WA-accessible books only. 1xBet/Singbet stay as
+//               supplementary references when Pinnacle is absent from the feed.
 const SHARP_BOOKS_GLOBAL    = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
-const SHARP_BOOKS_WESTAFRICA = ['1xbet', 'singbet', 'sbobet'];
+const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet', '1xbet'];
 
 // Legacy alias — kept so existing steam/middles code that references it still works
 const SHARP_REFERENCE_BOOKS = SHARP_BOOKS_GLOBAL;
@@ -298,7 +285,7 @@ const WA_BOOK_KEYS = Object.entries(BOOKS).filter(([,b]) => b.wa).map(([k]) => k
  * mode = 'wa'        → uses 1xBet/Singbet as reference, only shows WA-accessible books
  * mode = 'all'       → runs both and merges (default, deduped by id)
  */
-function findEVBets(events, minEV = 2, mode = 'all') {
+function findEVBets(events, minEV = 2, mode = 'all', userRegion = null) {
   const runMode = (sharpBooks, filterWA) => {
     const evBets = [];
     for (const ev of events) {
@@ -336,7 +323,7 @@ function findEVBets(events, minEV = 2, mode = 'all') {
 
       for (const bm of ev.bookmakers) {
         if (sharpBooks.includes(bm.key)) continue;
-        if (filterWA && !BOOKS[bm.key]?.accessible) continue;
+        if (filterWA && !isBookAccessible(bm.key, userRegion)) continue;
         const mkt = (bm.markets || []).find(m => m.key === 'h2h');
         if (!mkt) continue;
         for (const o of mkt.outcomes) {
@@ -360,7 +347,7 @@ function findEVBets(events, minEV = 2, mode = 'all') {
               sharpRef: usedSharpKeys.join('+'),
               sharpBookCount: usedSharpKeys.length,
               // Tag WA if the book is accessible in West Africa
-              _wa: !!BOOKS[bm.key]?.accessible,
+              _wa: !!isBookAccessible(bm.key, userRegion),
             });
           }
         }
@@ -384,7 +371,7 @@ function findEVBets(events, minEV = 2, mode = 'all') {
 // A middle exists when two books have different spreads/totals lines on the same
 // event such that there is a range of outcomes where BOTH bets win.
 // e.g. Book A: Team -3.5  Book B: Team +4.5 → middle window = 1 point (score of 4)
-function findMiddles(events, mode = 'global') {
+function findMiddles(events, mode = 'global', userRegion = null) {
   const middles = [];
   // West Africa section: a middle is only placeable if BOTH legs are on WA-accessible books.
   const legsOk = (bookA, bookB) => mode !== 'wa' || (BOOKS[bookA]?.accessible && BOOKS[bookB]?.accessible);
@@ -488,7 +475,7 @@ function findSteam(prevEvents, currEvents, threshold = 0.04) {
 // ── LINE SHOPPING ───────────────────────────────────────────────────────────
 // For every event, show the best available price per outcome across all books,
 // and how much better it is vs the worst price — the "leaving money on the table" gap.
-function findBestOdds(events, mode = 'global') {
+function findBestOdds(events, mode = 'global', userRegion = null) {
   const results = [];
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
@@ -496,7 +483,7 @@ function findBestOdds(events, mode = 'global') {
     for (const bm of ev.bookmakers) {
       // West Africa section: only compare books actually accessible from WA —
       // otherwise the "gap" is theoretical (e.g. vs Pinnacle, which WA bettors can't use).
-      if (mode === 'wa' && !BOOKS[bm.key]?.accessible) continue;
+      if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
       const mkt = (bm.markets || []).find(m => m.key === 'h2h');
       if (!mkt) continue;
       for (const o of mkt.outcomes) {
@@ -632,17 +619,6 @@ const [selectedSports, setSelectedSports] = useState(() => {
   useEffect(() => { try { localStorage.setItem('arb_referrals', JSON.stringify(referrals)); } catch {} }, [referrals]);
   const [trackerView, setTrackerView] = useState('bets'); // 'bets' | 'dashboard'
   const [clvInputs, setClvInputs] = useState({}); // betId -> closing odds string
-  // ── WALLET TRACKER ─────────────────────────────────────────────────────────
-  const [walletBalances, setWalletBalances] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('arb_wallets') || '{}'); } catch { return {}; }
-  });
-  useEffect(() => { try { localStorage.setItem('arb_wallets', JSON.stringify(walletBalances)); } catch {} }, [walletBalances]);
-  const [walletInput, setWalletInput] = useState({}); // bookKey -> string input value
-  // ── OVEREXPOSURE THRESHOLD ─────────────────────────────────────────────────
-  const [overExposurePct, setOverExposurePct] = useState(() => {
-    try { return parseFloat(localStorage.getItem('arb_overexp_pct') || '25'); } catch { return 25; }
-  });
-  useEffect(() => { try { localStorage.setItem('arb_overexp_pct', String(overExposurePct)); } catch {} }, [overExposurePct]);
   useEffect(() => { try { localStorage.setItem('arb_sports', JSON.stringify(selectedSports)); } catch {} }, [selectedSports]);
 
 useEffect(() => {
@@ -660,7 +636,7 @@ useEffect(() => {
   const [manualStake, setManualStake] = useState(500);
   const [manualResult, setManualResult] = useState(null);
   const [evBets, setEvBets] = useState(MOCK_EV);
-  const [evWA, setEvWA] = useState([]); // West Africa EV bets using 1xBet as reference
+  const [evWA, setEvWA] = useState([]); // West Africa EV bets — Pinnacle reference, WA-accessible books only
   const [evSection, setEvSection] = useState('global'); // 'global' | 'wa'
   const [minEV, setMinEV] = useState(2);
   const [evStake, setEvStake] = useState(500);
@@ -672,6 +648,7 @@ useEffect(() => {
   const [analyzingGameId, setAnalyzingGameId] = useState(null);
   const [analyzerLoaded, setAnalyzerLoaded] = useState(false);
   const [quota, setQuota] = useState({ remaining: null, used: null, keyIndex: 1 });
+  const [userRegion, setUserRegion] = useState({ country: null, isWA: true, accessibleBooks: null }); // default WA until detected
   const [nextScanAt, setNextScanAt] = useState(null);
   const [countdown, setCountdown] = useState(0);
   const [cardAnalysis, setCardAnalysis] = useState({});
@@ -722,6 +699,9 @@ useEffect(() => {
         const json = await res.json();
 const data = json.data || json;
 if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests, keyIndex: json.keyIndex || 1 });
+if (json.userAccessibleBooks) {
+  setUserRegion({ country: json.userCountry, isWA: json.isWAUser, accessibleBooks: json.userAccessibleBooks });
+}
 if (json.waBookHealth) {
   Object.entries(json.waBookHealth).forEach(([book, h]) => {
     if (!waHealthAgg[book]) waHealthAgg[book] = { ok: true, fetchedAt: h?.fetchedAt, failedSports: [] };
@@ -748,22 +728,23 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     if (sportsToScan.length > 0 && okCount === 0) {
       setError('Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. Showing demo data below.');
     }
-    const found = findArbs(all, 'global');
-    const foundArbsWA = findArbs(all, 'wa');
-    const foundEV = findEVBets(all, minEV, 'global');
-    const foundEVWA = findEVBets(all, minEV, 'wa');
+    const found = findArbs(all, 'global', userRegion);
+    const foundArbsWA = findArbs(all, 'wa', userRegion);
+    const foundEV = findEVBets(all, minEV, 'global', userRegion);
+    const foundEVWA = findEVBets(all, minEV, 'wa', userRegion);
     if (found.length > 0) { setArbs(found); setIsDemo(false); setLastFetch(new Date()); }
     else { setArbs(MOCK); setIsDemo(true); }
     setArbsWAReal(foundArbsWA);
     if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
-    else { setEvBets(MOCK_EV); setIsDemoEV(true); }
+    else if (okCount === 0) { setEvBets(MOCK_EV); setIsDemoEV(true); } // scan failed entirely
+    else { setEvBets([]); setIsDemoEV(false); } // scan worked, genuinely no +EV right now
     setEvWA(foundEVWA);
-    const middlesWAResult = findMiddles(all, 'wa');
-    const bestOddsWAResult = findBestOdds(all, 'wa');
-    setMiddles(findMiddles(all, 'global'));
+    const middlesWAResult = findMiddles(all, 'wa', userRegion);
+    const bestOddsWAResult = findBestOdds(all, 'wa', userRegion);
+    setMiddles(findMiddles(all, 'global', userRegion));
     setMiddlesWA(middlesWAResult);
     setSteam(findSteam(prevEventsRef.current, all));
-    setBestOdds(findBestOdds(all, 'global'));
+    setBestOdds(findBestOdds(all, 'global', userRegion));
     setBestOddsWA(bestOddsWAResult);
 
     // ── TEMP DEBUG: diagnose why the WA section is empty ──────────────────────
@@ -773,10 +754,10 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
       all.forEach(ev => (ev.bookmakers || []).forEach(bm => {
         keyCounts[bm.key] = (keyCounts[bm.key] || 0) + 1;
       }));
-      const accessibleSeen = Object.keys(keyCounts).filter(k => BOOKS[k]?.accessible);
+      const accessibleSeen = Object.keys(keyCounts).filter(k => isBookAccessible(k, userRegion));
       const unknownKeys = Object.keys(keyCounts).filter(k => !BOOKS[k]);
       const eventsWith2PlusAccessible = all.filter(ev =>
-        (ev.bookmakers || []).filter(bm => BOOKS[bm.key]?.accessible).length >= 2
+        (ev.bookmakers || []).filter(bm => isBookAccessible(bm.key, userRegion)).length >= 2
       ).length;
       const debugInfo = {
         totalEvents: all.length,
@@ -942,8 +923,8 @@ const analyzeArb = async (arb) => {
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
-    if (accessOnly && !isFullyAccessible(a.outcomes)) return false;
-    if (arbSection === 'global' && isFullyAccessible(a.outcomes)) return false;
+    if (accessOnly && !isFullyAccessible(a.outcomes, userRegion)) return false;
+    if (arbSection === 'global' && isFullyAccessible(a.outcomes, userRegion)) return false;
     return a.margin >= minMargin;
   });
 
@@ -997,156 +978,10 @@ const analyzeArb = async (arb) => {
       )
     ),
     e('div', { style: st.tabs },
-      [['scanner','🔍 Scanner'], ['calculator','🧮 Calculator'], ['manual','✏️ Manual Arb'], ['ev','📈 +EV Bets'], ['edge','⚡ Edge Tools'], ['analyzer','🧠 Bet Analyzer'], ['tracker','📒 Bets (' + bets.length + ')'], ['wallet','💼 Wallet'], ['cashout','💸 Cash Out'], ['earn','💰 Earn'], ['guide','📚 Guide']].map(([k, l]) =>
+      [['scanner','🔍 Scanner'], ['calculator','🧮 Calculator'], ['manual','✏️ Manual Arb'], ['ev','📈 +EV Bets'], ['edge','⚡ Edge Tools'], ['analyzer','🧠 Bet Analyzer'], ['tracker','📒 Bets (' + bets.length + ')'], ['cashout','💸 Cash Out'], ['earn','💰 Earn'], ['guide','📚 Guide']].map(([k, l]) =>
         e('button', { key: k, style: st.tab(tab === k), onClick: () => setTab(k) }, l)
       )
     ),
-    // ── WALLET TRACKER ──
-    tab === 'wallet' && e('div', { style: st.section }, (() => {
-      const totalWallet = Object.values(walletBalances).reduce((s, v) => s + (parseFloat(v) || 0), 0);
-      const allBooks = Object.entries(BOOKS);
-
-      // ── OVEREXPOSURE: pending bets grouped by outcome label (team/side) ──────
-      const pendingByOutcome = {};
-      bets.filter(b => b.status === 'pending').forEach(b => {
-        (b.outcomes || []).forEach(o => {
-          const key = o.label || o.name || 'Unknown';
-          if (!pendingByOutcome[key]) pendingByOutcome[key] = { totalStaked: 0, books: [], matches: [] };
-          pendingByOutcome[key].totalStaked += (o.stake || b.stake || 0);
-          pendingByOutcome[key].books.push(o.bookName || o.book || '?');
-          if (!pendingByOutcome[key].matches.includes(b.match)) pendingByOutcome[key].matches.push(b.match);
-        });
-      });
-      const pendingByBook = {};
-      bets.filter(b => b.status === 'pending').forEach(b => {
-        (b.outcomes || []).forEach(o => {
-          const bk = o.bookName || o.book || 'Unknown';
-          if (!pendingByBook[bk]) pendingByBook[bk] = 0;
-          pendingByBook[bk] += (o.stake || b.stake || 0);
-        });
-      });
-      const referencePool = bankroll > 0 ? bankroll : (totalWallet > 0 ? totalWallet : 1);
-      const overexposed = Object.entries(pendingByOutcome)
-        .map(([label, d]) => ({ label, ...d, pct: (d.totalStaked / referencePool) * 100 }))
-        .filter(x => x.pct >= overExposurePct)
-        .sort((a, b) => b.pct - a.pct);
-      const overexposedBooks = Object.entries(pendingByBook)
-        .map(([book, staked]) => ({ book, staked, pct: (staked / referencePool) * 100 }))
-        .filter(x => x.pct >= overExposurePct)
-        .sort((a, b) => b.pct - a.pct);
-
-      return e('div', null,
-        // ── OVEREXPOSURE WARNINGS ─────────────────────────────────────────────
-        (overexposed.length > 0 || overexposedBooks.length > 0) && e('div', { style: { marginBottom: 16 } },
-          e('div', { style: { fontSize: 15, fontWeight: 700, color: '#9a3412', marginBottom: 8 } }, '⚠️ Overexposure Warnings'),
-          overexposed.map((x, i) =>
-            e('div', { key: i, style: { background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '11px 14px', marginBottom: 8 } },
-              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
-                e('span', { style: { fontSize: 13, fontWeight: 700, color: '#9a3412' } }, '🎯 ' + x.label),
-                e('span', { style: { fontSize: 14, fontWeight: 800, color: x.pct >= 50 ? '#dc2626' : '#d97706' } }, x.pct.toFixed(1) + '% of bankroll')
-              ),
-              e('div', { style: { fontSize: 11, color: '#78350f' } }, currency + ' ' + x.totalStaked.toFixed(2) + ' pending across ' + x.books.length + ' leg(s) — ' + x.matches.slice(0, 2).join(', ') + (x.matches.length > 2 ? ' +' + (x.matches.length - 2) + ' more' : ''))
-            )
-          ),
-          overexposedBooks.map((x, i) =>
-            e('div', { key: 'bk' + i, style: { background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '11px 14px', marginBottom: 8 } },
-              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
-                e('span', { style: { fontSize: 13, fontWeight: 700, color: '#991b1b' } }, '🏦 ' + x.book),
-                e('span', { style: { fontSize: 14, fontWeight: 800, color: '#dc2626' } }, x.pct.toFixed(1) + '% on one book')
-              ),
-              e('div', { style: { fontSize: 11, color: '#7f1d1d' } }, currency + ' ' + x.staked.toFixed(2) + ' in pending bets on this book — account restriction risk')
-            )
-          )
-        ),
-
-        // ── THRESHOLD CONTROL ─────────────────────────────────────────────────
-        e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 14 } },
-          e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 } },
-            e('div', { style: { fontSize: 13, fontWeight: 700, color: C.text } }, '⚙️ Overexposure threshold'),
-            e('div', { style: { fontSize: 14, fontWeight: 800, color: C.purple } }, overExposurePct + '%')
-          ),
-          e('input', {
-            type: 'range', min: 5, max: 75, step: 5,
-            value: overExposurePct,
-            onChange: ev => setOverExposurePct(parseFloat(ev.target.value)),
-            style: { width: '100%', accentColor: C.purple }
-          }),
-          e('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 10, color: C.muted, marginTop: 2 } },
-            e('span', null, '5% (strict)'), e('span', null, '25% (default)'), e('span', null, '75% (loose)')
-          ),
-          e('div', { style: { fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.5 } },
-            'Warns when a single team/outcome or single book exceeds this % of your bankroll (' + currency + ' ' + (referencePool).toFixed(0) + ') in pending bets.'
-          )
-        ),
-
-        // ── TOTAL WALLET SUMMARY ──────────────────────────────────────────────
-        e('div', { style: { background: C.dark, borderRadius: 12, padding: '14px 16px', marginBottom: 14 } },
-          e('div', { style: { fontSize: 11, color: C.teal, fontWeight: 600, marginBottom: 4 } }, 'TOTAL ACROSS ALL BOOKS'),
-          e('div', { style: { fontSize: 28, fontWeight: 800, color: '#fff', marginBottom: 4 } }, currency + ' ' + totalWallet.toFixed(2)),
-          bankroll > 0 && e('div', { style: { fontSize: 12, color: '#9ca3af' } },
-            'Bankroll: ' + currency + ' ' + bankroll.toFixed(2) + (totalWallet > 0 ? ' · ' + ((totalWallet / bankroll) * 100).toFixed(0) + '% tracked' : '')
-          )
-        ),
-
-        // ── PER-BOOK BALANCES ─────────────────────────────────────────────────
-        e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10, marginTop: 4 } }, 'BOOK BALANCES'),
-        allBooks.map(([key, book]) => {
-          const bal = parseFloat(walletBalances[key]) || 0;
-          const staked = pendingByBook[book.name] || pendingByBook[key] || 0;
-          const available = bal - staked;
-          const pctOfTotal = totalWallet > 0 ? (bal / totalWallet) * 100 : 0;
-          const isActive = bal > 0;
-          if (!isActive && !book.accessible) return null; // hide inaccessible zero-balance global books to reduce clutter
-          return e('div', { key, style: { background: C.white, border: '1px solid ' + (isActive ? C.border : C.border), borderRadius: 10, padding: '11px 14px', marginBottom: 8, opacity: isActive ? 1 : 0.55 } },
-            e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isActive ? 8 : 0 } },
-              e('div', null,
-                e('div', { style: { fontSize: 13, fontWeight: 700, color: C.text } }, book.name),
-                e('div', { style: { display: 'flex', gap: 5, marginTop: 3, flexWrap: 'wrap' } },
-                  book.wa && e('span', { style: { fontSize: 10, fontWeight: 700, background: C.amberLight, color: '#78350f', padding: '1px 6px', borderRadius: 8 } }, '🇬🇭 WA'),
-                  book.momo && e('span', { style: { fontSize: 10, fontWeight: 700, background: '#fce7f3', color: '#9d174d', padding: '1px 6px', borderRadius: 8 } }, '📱 MoMo'),
-                  book.sharp && e('span', { style: { fontSize: 10, fontWeight: 700, background: C.blueLight, color: C.blue, padding: '1px 6px', borderRadius: 8 } }, '🔬 Sharp')
-                )
-              ),
-              e('div', { style: { textAlign: 'right' } },
-                e('div', { style: { fontSize: 16, fontWeight: 800, color: bal > 0 ? C.text : C.muted } }, currency + ' ' + bal.toFixed(2)),
-                isActive && totalWallet > 0 && e('div', { style: { fontSize: 10, color: C.muted } }, pctOfTotal.toFixed(0) + '% of total')
-              )
-            ),
-            isActive && staked > 0 && e('div', { style: { background: C.amberLight, borderRadius: 7, padding: '5px 9px', fontSize: 11, color: '#78350f', display: 'flex', justifyContent: 'space-between' } },
-              e('span', null, '⏳ ' + currency + ' ' + staked.toFixed(2) + ' in pending bets'),
-              e('span', { style: { fontWeight: 700 } }, 'Available: ' + currency + ' ' + Math.max(0, available).toFixed(2))
-            ),
-            isActive && pctOfTotal > 0 && e('div', { style: { height: 4, background: C.grayLight, borderRadius: 2, marginTop: 8, overflow: 'hidden' } },
-              e('div', { style: { height: '100%', width: pctOfTotal.toFixed(0) + '%', background: C.green, borderRadius: 2 } })
-            ),
-            // Balance input
-            e('div', { style: { display: 'flex', gap: 6, marginTop: 8 } },
-              e('input', {
-                type: 'number', min: 0, step: 0.01,
-                placeholder: 'Set balance...',
-                value: walletInput[key] !== undefined ? walletInput[key] : (bal > 0 ? String(bal) : ''),
-                onChange: ev => setWalletInput(p => ({ ...p, [key]: ev.target.value })),
-                style: { ...st.input, fontSize: 12, padding: '5px 9px', flex: 1 }
-              }),
-              e('button', {
-                onClick: () => {
-                  const val = parseFloat(walletInput[key]);
-                  if (!isNaN(val) && val >= 0) {
-                    setWalletBalances(p => ({ ...p, [key]: val }));
-                    setWalletInput(p => ({ ...p, [key]: undefined }));
-                  }
-                },
-                style: { ...st.btn('primary'), fontSize: 11, padding: '5px 12px', flexShrink: 0 }
-              }, 'Save'),
-              bal > 0 && e('button', {
-                onClick: () => { setWalletBalances(p => { const n = { ...p }; delete n[key]; return n; }); setWalletInput(p => ({ ...p, [key]: '' })); },
-                style: { ...st.btn('danger'), fontSize: 11, padding: '5px 10px', flexShrink: 0 }
-              }, '✕')
-            )
-          );
-        })
-      );
-    })()),
     // ── CASH OUT ANALYZER ──
     tab === 'cashout' && e('div', { style: st.section }, (() => {
       const stakeN = parseFloat(coStake) || 0;
@@ -1340,7 +1175,7 @@ const analyzeArb = async (arb) => {
             e('div', null, e('div', { style: st.sportLabel }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(arb.commenceTime)), e('div', { style: st.matchTitle }, arb.match)),
             e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
               isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, 'DEMO'),
-              !isFullyAccessible(arb.outcomes) && e('span', { style: st.badge('#7f1d1d', '#fecaca') }, '🚫 Not all books accessible'),
+              !isFullyAccessible(arb.outcomes, userRegion) && e('span', { style: st.badge('#7f1d1d', '#fecaca') }, '🚫 Not all books accessible'),
               e('span', { style: st.profitBadge(arb.margin) }, '+' + arb.margin.toFixed(1) + '%')
             )
           ),
@@ -1348,7 +1183,7 @@ const analyzeArb = async (arb) => {
             arb.outcomes.map((o, i) => e('div', { key: i, style: st.oddsCell },
               e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 2 } }, o.label),
               e('div', { style: { fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 1 } }, o.bookName),
-              !(BOOKS[o.book] && BOOKS[o.book].accessible) && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b91c1c', marginBottom: 1 } }, '🚫 Not accessible'),
+              !isBookAccessible(o.book, userRegion) && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b91c1c', marginBottom: 1 } }, '🚫 Not accessible'),
               e('div', { style: { fontSize: 14, fontWeight: 700, color: C.green } }, o.odds.toFixed(2)),
               e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportUrls[arb.sport.split('_')[0]]) || (BOOKS[o.book] && BOOKS[o.book].url) || '#', target: '_blank', style: { display: 'block', marginTop: 4, fontSize: 10, fontWeight: 700, color: '#fff', background: C.green, borderRadius: 6, padding: '3px 6px', textDecoration: 'none', textAlign: 'center' } }, 'Bet Now →')
             ))
@@ -1503,7 +1338,7 @@ const analyzeArb = async (arb) => {
     ),
     tab === 'ev' && e('div', { style: st.section },
       e('div', { style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1e3a8a', lineHeight: 1.6 } },
-        '📈 +EV bets are NOT guaranteed profit. They are bets where the bookmaker\'s odds exceed the true probability — profitable long-term over hundreds of bets. 🌍 Global uses Pinnacle/Betfair as reference. 🇬🇭 West Africa uses 1xBet as reference (accessible books only).'
+        '📈 +EV bets are NOT guaranteed profit. They are bets where the bookmaker\'s odds exceed the true probability — profitable long-term over hundreds of bets. 🌍 Global uses Pinnacle/Betfair as reference. 🇬🇭 West Africa uses Pinnacle/Betfair as reference too — but only shows bets on WA-accessible books.'
       ),
       // Region section toggle
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
@@ -1514,7 +1349,7 @@ const analyzeArb = async (arb) => {
       // Reference book info banner
       e('div', { style: { background: evSection === 'wa' ? '#dcfce7' : '#eff6ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: evSection === 'wa' ? C.greenDark : '#1e3a8a' } },
         evSection === 'wa'
-          ? '🇬🇭 Using 1xBet as sharp reference — showing only books accessible in West Africa (Betway, SportyBet, Betano, MSport, MelBet)'
+          ? '🇬🇭 Using Pinnacle / Betfair as sharp reference — showing only WA-accessible books (Betway, SportyBet, Betano, MSport, 1xBet, MelBet)'
           : '🌍 Using Pinnacle / Betfair as sharp reference — showing all books globally'
       ),
       e('div', { style: st.metricsGrid },
@@ -1543,10 +1378,18 @@ const analyzeArb = async (arb) => {
       (() => {
         const activeBets = (evSection === 'wa' ? evWA : evBets)
           .filter(b => (evFilter === 'all' || b.sport === evFilter));
-        if (activeBets.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
-          evSection === 'wa'
-            ? 'No West Africa +EV bets found. 1xBet odds may be close to market — try lowering Min EV or run a fresh scan.'
-            : 'No +EV bets found at this threshold. Lower Min EV or connect a live API key.'
+        if (activeBets.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
+          e('div', { style: { fontSize: 28, marginBottom: 10 } }, isDemoEV ? '📡' : '✅'),
+          e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } },
+            isDemoEV ? 'Scan failed — showing demo data' : 'No +EV opportunities right now'
+          ),
+          e('div', { style: { fontSize: 12, lineHeight: 1.6 } },
+            isDemoEV
+              ? 'The odds API could not be reached. Check your API key or connection.'
+              : evSection === 'wa'
+                ? 'Scan completed successfully. No WA-accessible bets cleared the +EV threshold. Most likely cause: off-season (European leagues restart August). Try lowering Min EV or switching to Global.'
+                : 'Scan completed successfully — odds data loaded but no edges found at this threshold. Most likely cause: off-season. European leagues restart August 15–22. Try cricket or MMA in the scanner for active markets.'
+          )
         );
         return e('div', null, activeBets.map(bet => {
           const kelly = kellyCriterion(bet.odds, bet.trueProb);
@@ -1656,14 +1499,14 @@ const analyzeArb = async (arb) => {
               e('div', { style: { fontSize: 11, color: C.muted, marginTop: 2 } }, 'Max gap: up to ' + ev.maxGap.toFixed(1) + '% better odds available')
             ),
             ev.outcomes.map(o => {
-              const bestAccessible = o.all.find(bk => BOOKS[bk.book] && BOOKS[bk.book].accessible);
+              const bestAccessible = o.all.find(bk => isBookAccessible(bk.book, userRegion));
               return e('div', { key: o.name, style: { marginBottom: 10 } },
                 e('div', { style: { fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 } }, o.name),
                 bestAccessible && bestAccessible.book !== o.all[0].book &&
                   e('div', { style: { fontSize: 11, color: C.greenDark, background: C.greenLight, borderRadius: 6, padding: '4px 8px', marginBottom: 4 } }, '✓ Best you can actually place: ' + bestAccessible.bookName + ' @ ' + bestAccessible.odds.toFixed(2)),
                 e('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
                   o.all.map((bk, idx) => {
-                    const accessible = BOOKS[bk.book] && BOOKS[bk.book].accessible;
+                    const accessible = isBookAccessible(bk.book, userRegion);
                     return e('div', { key: bk.book, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', borderRadius: 8, background: idx === 0 ? C.greenLight : C.grayLight, opacity: accessible ? 1 : 0.55 } },
                       e('span', { style: { fontSize: 12, color: idx === 0 ? C.greenDark : C.muted } }, bk.bookName + (accessible ? '' : ' 🚫')),
                       e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
@@ -1724,7 +1567,7 @@ const analyzeArb = async (arb) => {
             ),
             e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 } },
               [m.legA, m.legB].map((leg, i) => {
-                const accessible = BOOKS[leg.book] && BOOKS[leg.book].accessible;
+                const accessible = isBookAccessible(leg.book, userRegion);
                 return e('div', { key: i, style: { background: C.grayLight, borderRadius: 8, padding: '8px 10px', opacity: accessible ? 1 : 0.55 } },
                   e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 3 } }, 'Leg ' + (i + 1)),
                   e('div', { style: { fontSize: 13, fontWeight: 700 } }, leg.bookName + (accessible ? '' : ' 🚫')),
@@ -1779,7 +1622,7 @@ const analyzeArb = async (arb) => {
             ),
             e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 6 } }, '📖 Lagging soft books (act fast):'),
             s.laggingBooks.map(bk => {
-              const accessible = BOOKS[bk.book] && BOOKS[bk.book].accessible;
+              const accessible = isBookAccessible(bk.book, userRegion);
               return e('div', { key: bk.book, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff7ed', borderRadius: 8, padding: '6px 10px', marginBottom: 4, opacity: accessible ? 1 : 0.55 } },
                 e('span', { style: { fontSize: 13, fontWeight: 600 } }, bk.bookName + (accessible ? '' : ' 🚫')),
                 e('div', { style: { display: 'flex', gap: 10, alignItems: 'center' } },
@@ -2165,33 +2008,6 @@ const analyzeArb = async (arb) => {
           )
         ),
 
-        // ── OVEREXPOSURE INLINE ALERT (bets view) ─────────────────────────────
-        trackerView === 'bets' && (() => {
-          const referencePool = bankroll > 0 ? bankroll : 1;
-          const pendingByOutcomeT = {};
-          bets.filter(b => b.status === 'pending').forEach(b => {
-            (b.outcomes || []).forEach(o => {
-              const key = o.label || o.name || 'Unknown';
-              if (!pendingByOutcomeT[key]) pendingByOutcomeT[key] = 0;
-              pendingByOutcomeT[key] += (o.stake || b.stake || 0);
-            });
-          });
-          const alerts = Object.entries(pendingByOutcomeT)
-            .map(([label, staked]) => ({ label, staked, pct: (staked / referencePool) * 100 }))
-            .filter(x => x.pct >= overExposurePct);
-          if (alerts.length === 0) return null;
-          return e('div', { style: { background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '10px 13px', marginBottom: 12 } },
-            e('div', { style: { fontSize: 12, fontWeight: 700, color: '#9a3412', marginBottom: 6 } }, '⚠️ Overexposure on ' + alerts.length + ' outcome' + (alerts.length > 1 ? 's' : '')),
-            alerts.map((x, i) =>
-              e('div', { key: i, style: { fontSize: 12, color: '#78350f', display: 'flex', justifyContent: 'space-between' } },
-                e('span', null, x.label),
-                e('span', { style: { fontWeight: 700 } }, x.pct.toFixed(1) + '% · ' + currency + ' ' + x.staked.toFixed(2))
-              )
-            ),
-            e('button', { onClick: () => setTab('wallet'), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 10px', marginTop: 6 } }, 'View in Wallet →')
-          );
-        })(),
-
         // ── BETS LIST VIEW ──
         trackerView === 'bets' && bets.length === 0 &&
           e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
@@ -2265,20 +2081,17 @@ const analyzeArb = async (arb) => {
       );
     })()),
     tab === 'guide' && e('div', { style: st.section },
-      e('div', { style: st.guideH }, '🇬🇭 All Bookmakers — West Africa & Global'),
+      e('div', { style: st.guideH }, '🇬🇭 All Bookmakers in Ghana'),
       e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 } },
         Object.entries(BOOKS).map(([k, b]) =>
           e('div', { key: k, style: { background: b.manual ? C.purpleLight : C.grayLight, borderRadius: 10, padding: '11px 14px' } },
             e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
               e('a', { href: b.url, target: '_blank', rel: 'noreferrer', style: { fontSize: 14, fontWeight: 700, color: C.text, textDecoration: 'none' } }, b.name),
               e('div', { style: { display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' } },
-                b.wa && !b.manual && e('span', { style: { background: '#e0f2fe', color: '#0369a1', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🔄 Auto-scanned'),
                 b.manual && e('span', { style: { background: C.purpleLight, color: C.purple, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12, border: '1px solid #c4b5fd' } }, '✏️ Manual entry'),
-                !b.wa && !b.manual && e('span', { style: { background: '#e0f2fe', color: '#0369a1', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🔄 Auto-scanned'),
-                b.licensed && e('span', { style: { background: C.greenLight, color: C.greenDark, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '✓ Licensed'),
-                b.momo && e('span', { style: { background: C.amberLight, color: '#78350f', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '📱 MoMo'),
-                b.wa && e('span', { style: { background: '#fce7f3', color: '#9d174d', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🌍 WA'),
-                b.sharp && e('span', { style: { background: C.blueLight, color: C.blue, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🔬 Sharp')
+                !b.manual && e('span', { style: { background: '#e0f2fe', color: '#0369a1', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🔄 Auto-scanned'),
+                b.licensed && e('span', { style: { background: C.greenLight, color: C.greenDark, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '✓ GGC Licensed'),
+                b.momo && e('span', { style: { background: C.amberLight, color: '#78350f', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '📱 MoMo')
               )
             ),
             e('div', { style: { fontSize: 12, color: C.muted } }, b.note)
@@ -2286,7 +2099,7 @@ const analyzeArb = async (arb) => {
         )
       ),
       e('div', { style: { background: C.purpleLight, border: '1px solid #c4b5fd', borderRadius: 10, padding: '11px 14px', marginBottom: 16, fontSize: 12, color: C.purple, lineHeight: 1.6 } },
-        '✅ SportyBet, Betano and MSport are auto-scanned via the West Africa scraper. 22Bet, Bet9ja, BetKing, Paripesa, BetWinner, PremierBet and MozzartBet are added as manual-entry books — use the Calculator or Manual Arb tab to enter their odds and find arb opportunities across all WA books.'
+        '✅ SportyBet, Betano and MSport are now auto-scanned via the West Africa scraper. Their odds feed directly into the 🇬🇭 West Africa section of the Scanner and +EV tabs. Manual entry is still available if the scraper misses a market.'
       ),
       e('div', { style: st.guideH }, '🌍 Sports coverage'),
       e('div', { style: st.guideP }, 'ArbEdge scans ' + ALL_SPORTS.length + ' competitions worldwide — FIFA World Cup (Men & Women), AFCON, all Grand Slams (ATP & WTA), NBA, WNBA, NFL, UFC/MMA, ICC Cricket World Cup, Champions League, Copa América, IPL, and 80+ football leagues.'),
