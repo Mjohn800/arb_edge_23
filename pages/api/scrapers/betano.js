@@ -23,7 +23,9 @@ const BETANO_SPORT_MAP = {
   // Find the real leagueId via the site's own network requests (browse to the World
   // Cup section on betano.com.gh, inspect the /api/sports/events/ request) and
   // replace this for a precise, smaller query.
-  soccer_fifa_world_cup:        { sportId: 4, leagueId: null },
+  // ✅ CONFIRMED via DevTools 30 Jun 2026:
+  // URL: /api/sport/football/competitions/world-cup/189813/?req=la,s,stnf,c,mb
+  soccer_fifa_world_cup:        { sportId: 4, leagueId: 189813, customPath: 'https://www.betano.com.gh/api/sport/football/competitions/world-cup/189813/?req=la,s,stnf,c,mb' },
   basketball_nba:               { sportId: 2, leagueId: 132 },
   tennis_atp_wimbledon:         { sportId: 5, leagueId: 270 },
   mma_mixed_martial_arts:       { sportId: 23, leagueId: null },
@@ -61,7 +63,9 @@ async function fetchBetanoOdds(sportKey) {
   }
 
   try {
-    const url = `${BASE_URL}${mapping.sportId}/${mapping.leagueId ? mapping.leagueId + '/' : ''}?bf=1&page=1`;
+    // Use confirmed custom path if available, otherwise build standard URL
+    const url = mapping.customPath ||
+      `${BASE_URL}${mapping.sportId}/${mapping.leagueId ? mapping.leagueId + '/' : ''}?req=la,s,stnf,c,mb`;
     const res = await fetch(url, {
       headers: HEADERS,
       signal: AbortSignal.timeout(8000),
