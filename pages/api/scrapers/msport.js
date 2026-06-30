@@ -29,18 +29,20 @@ const MSPORT_SPORT_MAP = {
   mma_mixed_martial_arts:       { sportId: 'sr:sport:117', tournamentId: null,                 keywords: [] },
 
   // ── Cricket (sr:sport:21) ────────────────────────────────────────────────
-  cricket_ipl:                  { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:26638', keywords: ['ipl', 'indian premier'] },
-  cricket_t20_world_cup:        { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:98732', keywords: ['t20 world cup', 't20wc'] },
-  cricket_icc_world_cup:        { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:73476', keywords: ['world cup', 'icc world'] },
-  cricket_icc_trophy:           { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:89765', keywords: ['champions trophy', 'icc trophy'] },
-  cricket_international_t20:    { sportId: 'sr:sport:21',  tournamentId: null,                  keywords: ['t20i', 'twenty20 international', 't20 international'] },
-  cricket_odi:                  { sportId: 'sr:sport:21',  tournamentId: null,                  keywords: ['odi', 'one day international'] },
-  cricket_test_match:           { sportId: 'sr:sport:21',  tournamentId: null,                  keywords: ['test match', ' test ', 'test series'] },
-  cricket_the_hundred:          { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:97531', keywords: ['hundred'] },
-  cricket_big_bash:             { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:36716', keywords: ['big bash', 'bbl'] },
-  cricket_psl:                  { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:57483', keywords: ['psl', 'pakistan super'] },
-  cricket_caribbean_premier_league: { sportId: 'sr:sport:21', tournamentId: 'sr:tournament:41234', keywords: ['cpl', 'caribbean premier'] },
-  cricket_asia_cup:             { sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:62841', keywords: ['asia cup'] },
+  // tournamentId: null → broad sport query (works without DevTools confirmation).
+  // Keywords filter results to the right competition client-side.
+  cricket_ipl:                  { sportId: 'sr:sport:21', tournamentId: null, keywords: ['ipl', 'indian premier'] },
+  cricket_t20_world_cup:        { sportId: 'sr:sport:21', tournamentId: null, keywords: ['t20 world cup', 't20wc'] },
+  cricket_icc_world_cup:        { sportId: 'sr:sport:21', tournamentId: null, keywords: ['world cup', 'icc world'] },
+  cricket_icc_trophy:           { sportId: 'sr:sport:21', tournamentId: null, keywords: ['champions trophy', 'icc trophy'] },
+  cricket_international_t20:    { sportId: 'sr:sport:21', tournamentId: null, keywords: ['t20i', 'twenty20 international', 't20 international'] },
+  cricket_odi:                  { sportId: 'sr:sport:21', tournamentId: null, keywords: ['odi', 'one day international'] },
+  cricket_test_match:           { sportId: 'sr:sport:21', tournamentId: null, keywords: ['test match', ' test ', 'test series'] },
+  cricket_the_hundred:          { sportId: 'sr:sport:21', tournamentId: null, keywords: ['hundred'] },
+  cricket_big_bash:             { sportId: 'sr:sport:21', tournamentId: null, keywords: ['big bash', 'bbl'] },
+  cricket_psl:                  { sportId: 'sr:sport:21', tournamentId: null, keywords: ['psl', 'pakistan super'] },
+  cricket_caribbean_premier_league: { sportId: 'sr:sport:21', tournamentId: null, keywords: ['cpl', 'caribbean premier'] },
+  cricket_asia_cup:             { sportId: 'sr:sport:21', tournamentId: null, keywords: ['asia cup'] },
 };
 
 const BASE = 'https://www.msport.com/api/gh/facts-center/query/frontend';
@@ -59,13 +61,12 @@ async function fetchMsportOdds(sportKey) {
 
   try {
     // ── Step 1: POST to sports-matches-list ──────────────────────────────────
-    // Send sportId only — adding tournamentId to the body causes bizCode 19999 (server error).
-    // MSport filters client-side on their end; we keyword-filter here instead.
-    const body = {
-      pageNum: 1,
-      pageSize: 100,
-      matchStatus: 0,
-    };
+    // ✅ CONFIRMED payload from DevTools (30 Jun 2026):
+    // Body: ["sr:tournament:16"] for tournament queries
+    // Body: {} with sportId in query string for broad sport queries
+    const body = mapping.tournamentId
+      ? [mapping.tournamentId]
+      : { pageNum: 1, pageSize: 100, matchStatus: 0 };
 
     const res = await fetch(`${BASE}/sports-matches-list?sportId=${mapping.sportId}`, {
       method: 'POST',
