@@ -30,20 +30,20 @@ const SPORTYBET_SPORT_MAP = {
   mma_mixed_martial_arts:       { type: 'sport',      sportId: 'sr:sport:117', tournamentId: null                 },
 
   // ── Cricket (sr:sport:21) ────────────────────────────────────────────────
-  // Sportradar cricket tournament IDs confirmed via public SR docs + community captures.
-  // T20 Blast / The Hundred / CPL active Jun–Sep 2026; ICC events vary by year.
-  cricket_ipl:                  { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:26638' }, // IPL 2026 (finished May 31; use for next season)
-  cricket_t20_world_cup:        { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:98732' }, // Men's T20 WC (India/SL host — confirm ID via DevTools)
-  cricket_icc_world_cup:        { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:73476' }, // ODI World Cup
-  cricket_icc_trophy:           { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:89765' }, // ICC Champions Trophy
-  cricket_international_t20:    { type: 'sport',      sportId: 'sr:sport:21',  tournamentId: null                 }, // broad — catches all intl T20s
-  cricket_odi:                  { type: 'sport',      sportId: 'sr:sport:21',  tournamentId: null                 }, // broad — catches all ODIs
-  cricket_test_match:           { type: 'sport',      sportId: 'sr:sport:21',  tournamentId: null                 }, // broad — catches all Tests
-  cricket_the_hundred:          { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:97531' }, // The Hundred 2026 (starts Jul 2026)
-  cricket_big_bash:             { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:36716' }, // BBL (Dec–Jan season)
-  cricket_psl:                  { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:57483' }, // PSL
-  cricket_caribbean_premier_league: { type: 'tournament', sportId: 'sr:sport:21', tournamentId: 'sr:tournament:41234' }, // CPL (Aug–Sep 2026)
-  cricket_asia_cup:             { type: 'tournament', sportId: 'sr:sport:21',  tournamentId: 'sr:tournament:62841' }, // Asia Cup
+  // Using type:'sport' + quickMarketList (same working endpoint as MMA) until
+  // tournament IDs are confirmed via DevTools. Returns all cricket on SportyBet.
+  cricket_ipl:                  { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
+  cricket_t20_world_cup:        { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
+  cricket_icc_world_cup:        { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
+  cricket_icc_trophy:           { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
+  cricket_international_t20:    { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
+  cricket_odi:                  { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
+  cricket_test_match:           { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
+  cricket_the_hundred:          { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
+  cricket_big_bash:             { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
+  cricket_psl:                  { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
+  cricket_caribbean_premier_league: { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
+  cricket_asia_cup:             { type: 'sport', sportId: 'sr:sport:21', tournamentId: null },
 };
 
 const BASE = 'https://www.sportybet.com/api/gh/factsCenter';
@@ -65,51 +65,34 @@ async function fetchSportybetOdds(sportKey) {
     let rawEvents = [];
 
     if (mapping.type === 'tournament') {
-      // Confirmed endpoint from network capture: POST /factsCenter/wapConfigurableEventsByOrder
-      // Payload not capturable via MobiDevTools (content script restriction on POST bodies)
-      // Trying common SportyBet API body patterns in order
-      const bodyAttempts = [
-        { sportId: mapping.sportId, tournamentId: mapping.tournamentId, marketId: '1_1,18_1', pageSize: 50, pageNum: 1 },
-        { sportId: mapping.sportId, leagueIds: [mapping.tournamentId], marketId: '1_1,18_1', pageSize: 50, pageNum: 1 },
-        { sportIds: [mapping.sportId], tournamentIds: [mapping.tournamentId], marketIds: ['1_1', '18_1'], pageSize: 50, pageNum: 1 },
-        { sport: mapping.sportId, tournament: mapping.tournamentId, markets: '1_1,18_1', size: 50, page: 1 },
-      ];
+      // ✅ CONFIRMED endpoint from DevTools capture (30 Jun 2026):
+      // POST /api/gh/factsCenter/pcEvents
+      // Body: [{"sportId":"sr:sport:1","marketId":"1,18,10,29,11,26,36,14","tournamentId":[["sr:tournament:16"]]}]
+      const body = [{
+        sportId: mapping.sportId,
+        marketId: '1,18,10,29,11,26,36,14',
+        tournamentId: [[mapping.tournamentId]],
+      }];
 
-      for (const attemptBody of bodyAttempts) {
-        try {
-          const res = await fetch(`${BASE}/wapConfigurableEventsByOrder`, {
-            method: 'POST',
-            headers: { ...HEADERS, 'Content-Type': 'application/json' },
-            body: JSON.stringify(attemptBody),
-            signal: AbortSignal.timeout(6000),
-          });
+      try {
+        const res = await fetch(`${BASE}/pcEvents`, {
+          method: 'POST',
+          headers: { ...HEADERS, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(8000),
+        });
 
-          if (!res.ok) {
-            console.log('[SportyBet] wapConfigurableEventsByOrder', res.status, 'body:', JSON.stringify(attemptBody).slice(0, 100));
-            continue;
-          }
-
+        if (!res.ok) {
+          const errBody = await res.text().catch(() => '');
+          console.warn('[SportyBet] pcEvents', res.status, 'for', sportKey, errBody.slice(0, 200));
+        } else {
           const json = await res.json();
-          if (json?.bizCode && json.bizCode !== 10000) {
-            console.log('[SportyBet] bizCode', json.bizCode, 'for body:', JSON.stringify(attemptBody).slice(0, 100));
-            continue;
-          }
-
           const data = json?.data;
-          const candidates = data?.events || data?.tournamentEvents || data?.matchList || data?.list || (Array.isArray(data) ? data : []);
-          if (candidates.length > 0) {
-            console.log('[SportyBet] wapConfigurableEventsByOrder worked with body:', JSON.stringify(attemptBody).slice(0, 100), '→', candidates.length, 'events');
-            rawEvents = candidates;
-            break;
-          }
-          console.log('[SportyBet] wapConfigurableEventsByOrder returned 0 events, data keys:', Object.keys(data || {}), 'body:', JSON.stringify(attemptBody).slice(0, 80));
-        } catch (err) {
-          console.log('[SportyBet] wapConfigurableEventsByOrder error:', err.message);
+          rawEvents = data?.events || data?.tournamentEvents || data?.matchList || data?.list || (Array.isArray(data) ? data : []);
+          console.log('[SportyBet] pcEvents →', rawEvents.length, 'events for', sportKey);
         }
-      }
-
-      if (rawEvents.length === 0) {
-        console.warn('[SportyBet] all payload attempts returned 0 events for', sportKey);
+      } catch (err) {
+        console.warn('[SportyBet] pcEvents error:', err.message);
       }
 
     } else {
