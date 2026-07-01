@@ -230,6 +230,257 @@ const SPORT_GROUPS = [
 
 const ALL_SPORTS = SPORT_GROUPS.flatMap(g => g.sports);
 
+// ─── DRAW VALUE — historical draw tendency by team, Top-5 European leagues ────
+// Source: 2025-26 final league tables (38-game season, verified via league
+// standings). Used as CONTEXT alongside live sharp-book pricing in findEVBets —
+// it does not by itself decide value. A team drawing a lot historically only
+// matters if the market is currently pricing the draw below that tendency.
+//
+// ⚠️ Only soccer_epl is populated with verified 2025-26 W-D-L data right now.
+// La Liga / Bundesliga / Serie A / Ligue 1 are stubbed out below — add their
+// final W-D-L rows the same way (see EPL block) before relying on draw
+// context badges for those leagues. Until then getDrawStat() returns null
+// for them and the UI simply omits the badge, so nothing is fabricated.
+const DRAW_STATS = {
+  soccer_epl: {
+    season: '2025-26',
+    teams: {
+      'arsenal':               { w: 26, d: 7,  l: 5  },
+      'manchester city':       { w: 23, d: 9,  l: 6  },
+      'manchester united':     { w: 20, d: 11, l: 7  },
+      'aston villa':           { w: 19, d: 8,  l: 11 },
+      'liverpool':             { w: 17, d: 9,  l: 12 },
+      'bournemouth':           { w: 13, d: 18, l: 7  }, // PL record for draws in a season
+      'sunderland':            { w: 14, d: 12, l: 12 },
+      'brighton and hove albion': { w: 14, d: 11, l: 13 },
+      'brentford':             { w: 14, d: 11, l: 13 },
+      'chelsea':               { w: 14, d: 10, l: 14 },
+      'fulham':                { w: 15, d: 7,  l: 16 },
+      'newcastle united':      { w: 14, d: 7,  l: 17 },
+      'everton':               { w: 13, d: 10, l: 15 },
+      'leeds united':          { w: 11, d: 14, l: 13 },
+      'crystal palace':        { w: 11, d: 12, l: 15 },
+      'nottingham forest':     { w: 11, d: 11, l: 16 },
+      'tottenham hotspur':     { w: 10, d: 11, l: 17 },
+      'west ham united':       { w: 10, d: 9,  l: 19 },
+      'burnley':               { w: 4,  d: 10, l: 24 },
+      'wolverhampton wanderers': { w: 3, d: 11, l: 24 },
+    },
+  },
+  soccer_spain_la_liga: {
+    season: '2025-26',
+    teams: {
+      'barcelona':              { w: 31, d: 1,  l: 6  },
+      'real madrid':             { w: 27, d: 5,  l: 6  },
+      'villarreal':              { w: 22, d: 6,  l: 10 },
+      'atletico madrid':         { w: 21, d: 6,  l: 11 },
+      'real betis':              { w: 15, d: 15, l: 8  },
+      'celta vigo':              { w: 14, d: 12, l: 12 },
+      'getafe':                  { w: 15, d: 6,  l: 17 },
+      'rayo vallecano':          { w: 12, d: 14, l: 12 },
+      'valencia':                { w: 13, d: 10, l: 15 },
+      'real sociedad':           { w: 11, d: 13, l: 14 },
+      'espanyol':                { w: 12, d: 10, l: 16 },
+      'athletic club':           { w: 13, d: 6,  l: 19 },
+      'sevilla':                 { w: 12, d: 7,  l: 19 },
+      'alaves':                  { w: 11, d: 10, l: 17 },
+      'elche':                   { w: 10, d: 13, l: 15 },
+      'levante':                 { w: 11, d: 9,  l: 18 },
+      'osasuna':                 { w: 11, d: 9,  l: 18 },
+      'mallorca':                { w: 11, d: 9,  l: 18 },
+      'girona':                  { w: 9,  d: 14, l: 15 },
+      'real oviedo':             { w: 6,  d: 11, l: 21 },
+    },
+  },
+  soccer_germany_bundesliga: {
+    season: '2025-26',
+    teams: {
+      'bayern munich':           { w: 28, d: 5,  l: 1  },
+      'borussia dortmund':       { w: 22, d: 7,  l: 5  },
+      'rb leipzig':              { w: 20, d: 5,  l: 9  },
+      'vfb stuttgart':           { w: 18, d: 8,  l: 8  },
+      'tsg hoffenheim':          { w: 18, d: 7,  l: 9  },
+      'bayer leverkusen':        { w: 17, d: 8,  l: 9  },
+      'sc freiburg':             { w: 13, d: 8,  l: 13 },
+      'eintracht frankfurt':     { w: 11, d: 11, l: 12 },
+      'fc augsburg':             { w: 12, d: 7,  l: 15 },
+      'mainz 05':                { w: 10, d: 10, l: 14 },
+      'union berlin':            { w: 10, d: 9,  l: 15 },
+      'borussia monchengladbach': { w: 9, d: 11, l: 14 },
+      'hamburger sv':            { w: 9,  d: 11, l: 14 },
+      'fc koln':                 { w: 7,  d: 11, l: 16 },
+      'werder bremen':           { w: 8,  d: 8,  l: 18 },
+      'vfl wolfsburg':           { w: 7,  d: 8,  l: 19 },
+      'fc heidenheim':           { w: 6,  d: 8,  l: 20 },
+      'st pauli':                { w: 6,  d: 8,  l: 20 },
+    },
+  },
+  soccer_italy_serie_a: {
+    season: '2025-26',
+    teams: {
+      'inter milan':             { w: 27, d: 6,  l: 5  },
+      'napoli':                  { w: 23, d: 7,  l: 8  },
+      'roma':                    { w: 23, d: 4,  l: 11 },
+      'como':                    { w: 20, d: 11, l: 7  },
+      'ac milan':                { w: 20, d: 10, l: 8  },
+      'juventus':                { w: 19, d: 12, l: 7  },
+      'atalanta':                { w: 15, d: 14, l: 9  },
+      'bologna':                 { w: 16, d: 8,  l: 14 },
+      'lazio':                   { w: 14, d: 12, l: 12 },
+      'udinese':                 { w: 14, d: 8,  l: 16 },
+      'sassuolo':                { w: 14, d: 7,  l: 17 },
+      'torino':                  { w: 12, d: 9,  l: 17 },
+      'parma':                   { w: 11, d: 12, l: 15 },
+      'cagliari':                { w: 11, d: 10, l: 17 },
+      'fiorentina':              { w: 9,  d: 15, l: 14 },
+      'genoa':                   { w: 10, d: 11, l: 17 },
+      'lecce':                   { w: 10, d: 8,  l: 20 },
+      'cremonese':               { w: 8,  d: 10, l: 20 },
+      'hellas verona':           { w: 3,  d: 12, l: 23 },
+      'pisa':                    { w: 2,  d: 12, l: 24 },
+    },
+  },
+  // Ligue 1: only near-final (matchday ~32-33 of 34) data was verifiable at
+  // research time, not the confirmed final table — left empty rather than
+  // risk a wrong "final" draw rate. Populate once a confirmed final 2025-26
+  // Ligue 1 table (34 games, all 18 teams) is available.
+  soccer_france_ligue_one:     { season: '2025-26', teams: {} }, // TODO: populate
+};
+
+// Normalise a team name for DRAW_STATS lookup — lowercase, strip punctuation,
+// collapse common naming variants ("Man City" vs "Manchester City" etc.).
+function normaliseTeamName(name) {
+  if (!name) return '';
+  let n = name.trim().toLowerCase()
+    .replace(/^afc\s+|^fc\s+|^1\.\s*fc\s+|^ss\s+|^ssc\s+|^as\s+/, '')
+    .replace(/[öø]/g, 'o').replace(/[üù]/g, 'u').replace(/[ä]/g, 'a').replace(/[éè]/g, 'e')
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9 ]/g, '')
+    .trim();
+  // Exact/whole-name disambiguation first — these must NOT chain into each
+  // other (e.g. "inter" -> "inter milan" must not then get re-matched by a
+  // generic "milan" rule and become "inter ac milan").
+  if (/^internazionale$|^inter$/.test(n)) return 'inter milan';
+  if (/^milan$|^ac milan$/.test(n)) return 'ac milan';
+  if (/^roma$|^as roma$/.test(n)) return 'roma';
+  n = n
+    .replace(/\bman(chester)?\s*utd\b/, 'manchester united')
+    .replace(/\bman(chester)?\s*city\b/, 'manchester city')
+    .replace(/\bspurs\b/, 'tottenham hotspur')
+    .replace(/\bwolves\b/, 'wolverhampton wanderers')
+    .replace(/\bbrighton\b(?!.*albion)/, 'brighton and hove albion')
+    .replace(/\bnottm forest\b|\bforest\b/, 'nottingham forest')
+    .replace(/\bathletic bilbao\b/, 'athletic club')
+    .replace(/\bfsv mainz( 05)?\b|\bmainz\b/, 'mainz 05')
+    .replace(/\b1\s*fc\s*koln\b|\bcologne\b/, 'fc koln')
+    .replace(/\bunion berlin\b|\b1 fc union berlin\b/, 'union berlin')
+    .replace(/\bmonchengladbach\b|\bgladbach\b|\bborussia mgladbach\b/, 'borussia monchengladbach')
+    .replace(/\bheidenheim\b/, 'fc heidenheim')
+    .replace(/\bst pauli\b|\bfc st pauli\b/, 'st pauli');
+  return n.trim();
+}
+
+// getDrawStat — returns { drawRate, draws, played } for a team in a given
+// sport/league, or null if we don't have verified data for that league/team
+// yet. drawRate is 0-1.
+function getDrawStat(sportKey, teamName) {
+  const league = DRAW_STATS[sportKey];
+  if (!league) return null;
+  const key = normaliseTeamName(teamName);
+  const row = league.teams[key];
+  if (!row) return null;
+  const played = row.w + row.d + row.l;
+  if (!played) return null;
+  return { draws: row.d, played, drawRate: row.d / played, season: league.season };
+}
+
+// getDrawContext — combined home+away signal for a fixture, used to badge
+// +EV Draw bets with "both sides are historically draw-prone" context.
+// Purely informational — does not change the EV math, which already comes
+// from the sharp-book de-vig in findEVBets.
+function getDrawContext(sportKey, homeTeam, awayTeam) {
+  const home = getDrawStat(sportKey, homeTeam);
+  const away = getDrawStat(sportKey, awayTeam);
+  if (!home && !away) return null;
+  const rates = [home, away].filter(Boolean).map(s => s.drawRate);
+  const avgRate = rates.reduce((s, r) => s + r, 0) / rates.length;
+  return { home, away, avgRate, season: (home || away).season };
+}
+
+// ─── FORM DIVERGENCE — "good team, bad recent stretch" mispricing signal ─────
+// The pattern this catches: a genuinely strong team (high PPG over a longer
+// baseline window) goes through a rough patch — a manager change, injuries,
+// a tough run of fixtures — and the market (square books especially) keeps
+// pricing them off that recent form rather than their underlying quality.
+// If the baseline PPG is meaningfully higher than the recent-form PPG, that
+// team's odds may still be inflated relative to their true strength — a
+// potential rebound spot.
+//
+// This needs chronological match-by-match results per team (points earned
+// per game, oldest first), which the current odds feed does NOT provide —
+// /api/odds only returns bookmaker prices, not results history. TEAM_FORM
+// below is therefore an empty, ready-to-fill structure rather than seeded
+// data: populate it once a results-history source is wired in (e.g. a new
+// odds.js endpoint backed by a scores API), one sport at a time.
+//
+// Expected shape once populated:
+//   TEAM_FORM.soccer_epl['arsenal'] = [3, 3, 1, 0, 3, 1, ...]  // points per
+//   game, OLDEST FIRST, one entry per match played this season.
+const TEAM_FORM = {
+  soccer_epl: {},
+  soccer_spain_la_liga: {},
+  soccer_germany_bundesliga: {},
+  soccer_italy_serie_a: {},
+  soccer_france_ligue_one: {},
+};
+
+const FORM_RECENT_WINDOW = 10;   // "recent form" sample size
+const FORM_BASELINE_WINDOW = 30; // "true quality" baseline sample size
+const FORM_DIVERGENCE_THRESHOLD = 0.5; // min PPG gap worth flagging
+
+function avgPPG(games) {
+  if (!games || games.length === 0) return null;
+  return games.reduce((s, p) => s + p, 0) / games.length;
+}
+
+// getFormDivergence — returns null if we don't have enough games logged for
+// this team yet (needs at least FORM_RECENT_WINDOW games; baseline uses
+// whatever's available up to FORM_BASELINE_WINDOW, so it degrades gracefully
+// early in a season rather than demanding a full 30 games before saying
+// anything).
+function getFormDivergence(sportKey, teamName, teamForm) {
+  const source = teamForm || TEAM_FORM; // fall back to empty constant if not yet loaded
+  const league = source[sportKey];
+  if (!league) return null;
+  const key = normaliseTeamName(teamName);
+  const games = league[key];
+  if (!games || games.length < FORM_RECENT_WINDOW) return null;
+
+  const recent = games.slice(-FORM_RECENT_WINDOW);
+  const baseline = games.slice(-FORM_BASELINE_WINDOW);
+  const recentPPG = avgPPG(recent);
+  const baselinePPG = avgPPG(baseline);
+  // Positive divergence = baseline (true quality) running hotter than recent
+  // form — the "market may still be sleeping on a slump" case described above.
+  const divergence = parseFloat((baselinePPG - recentPPG).toFixed(2));
+
+  return {
+    recentPPG: parseFloat(recentPPG.toFixed(2)),
+    baselinePPG: parseFloat(baselinePPG.toFixed(2)),
+    divergence,
+    gamesLogged: games.length,
+    isRebound: divergence >= FORM_DIVERGENCE_THRESHOLD, // baseline > recent form
+    isSlide: divergence <= -FORM_DIVERGENCE_THRESHOLD,  // recent form > baseline (heating up)
+  };
+}
+
+// getFormContextForOutcome — only meaningful for a bet on a specific team
+// (not the Draw), so this is looked up per-outcome in findEVBets using
+// whichever side (home/away) the outcome actually refers to.
+function getFormContextForOutcome(sportKey, teamName, teamForm) {
+  return getFormDivergence(sportKey, teamName, teamForm);
+}
+
 const MOCK = [
   { id: 'm1', sport: 'soccer_epl', match: 'Arsenal vs Chelsea', commenceTime: new Date(Date.now() + 3 * 3600000).toISOString(), margin: 3.7, outcomes: [{ label: 'Arsenal', book: 'betway', bookName: 'Betway', odds: 2.50 }, { label: 'Draw', book: '1xbet', bookName: '1xBet', odds: 4.10 }, { label: 'Chelsea', book: 'bet365', bookName: 'Bet365', odds: 3.40 }] },
   { id: 'm2', sport: 'soccer_uefa_champs_league', match: 'Real Madrid vs Man City', commenceTime: new Date(Date.now() + 26 * 3600000).toISOString(), margin: 2.1, outcomes: [{ label: 'Real Madrid', book: 'pinnacle', bookName: 'Pinnacle', odds: 2.20 }, { label: 'Draw', book: 'marathonbet', bookName: 'MarathonBet', odds: 3.80 }, { label: 'Man City', book: '1xbet', bookName: '1xBet', odds: 3.40 }] },
@@ -285,7 +536,18 @@ const WA_BOOK_KEYS = Object.entries(BOOKS).filter(([,b]) => b.wa).map(([k]) => k
  * mode = 'wa'        → uses 1xBet/Singbet as reference, only shows WA-accessible books
  * mode = 'all'       → runs both and merges (default, deduped by id)
  */
-function findEVBets(events, minEV = 2, mode = 'all', userRegion = null) {
+// Normalise outcome names so "Draw", "draw", "X", "The Draw" all match.
+// Home/Away names vary widely by book so we normalise those too.
+function normaliseOutcome(name, homeTeam, awayTeam) {
+  if (!name) return '';
+  const n = name.trim().toLowerCase();
+  if (n === 'draw' || n === 'x' || n === 'the draw' || n === 'tie') return '__draw__';
+  if (homeTeam && (n === homeTeam.toLowerCase() || n === '1' || n === 'home')) return '__home__';
+  if (awayTeam && (n === awayTeam.toLowerCase() || n === '2' || n === 'away')) return '__away__';
+  return n; // fallback — keeps original normalised
+}
+
+function findEVBets(events, minEV = 2, mode = 'all', userRegion = null, teamForm = null) {
   const runMode = (sharpBooks, filterWA) => {
     const evBets = [];
     for (const ev of events) {
@@ -309,8 +571,9 @@ function findEVBets(events, minEV = 2, mode = 'all', userRegion = null) {
         if (!rawImplied) continue;
         usedSharpKeys.push(sharpBm.key);
         sharpOuts.forEach(o => {
+          const key = normaliseOutcome(o.name, ev.home_team, ev.away_team);
           const p = (1 / o.price) / rawImplied;
-          (probsByOutcome[o.name] = probsByOutcome[o.name] || []).push(p);
+          (probsByOutcome[key] = probsByOutcome[key] || []).push(p);
         });
       }
       if (usedSharpKeys.length === 0) continue;
@@ -327,10 +590,17 @@ function findEVBets(events, minEV = 2, mode = 'all', userRegion = null) {
         const mkt = (bm.markets || []).find(m => m.key === 'h2h');
         if (!mkt) continue;
         for (const o of mkt.outcomes) {
-          const prob = trueProbs[o.name];
+          const normKey = normaliseOutcome(o.name, ev.home_team, ev.away_team);
+          const prob = trueProbs[normKey];
           if (!prob) continue;
           const ev_pct = parseFloat(((o.price * prob - 1) * 100).toFixed(2));
           if (ev_pct >= minEV) {
+            const isDraw = normKey === '__draw__';
+            // Which team (if any) this outcome actually refers to, so form
+            // context is only attached to the side it's relevant for.
+            const outcomeTeam = normKey === '__home__' ? ev.home_team
+                               : normKey === '__away__' ? ev.away_team
+                               : (!isDraw ? o.name : null); // fallback for books using team names directly
             evBets.push({
               id: ev.id + '_' + bm.key + '_' + o.name,
               eventId: ev.id,
@@ -348,6 +618,16 @@ function findEVBets(events, minEV = 2, mode = 'all', userRegion = null) {
               sharpBookCount: usedSharpKeys.length,
               // Tag WA if the book is accessible in West Africa
               _wa: !!isBookAccessible(bm.key, userRegion),
+              // Draw-value context: only ever attached to Draw outcomes, and
+              // only when we have verified historical draw stats for the
+              // league (see DRAW_STATS). null for everything else — the UI
+              // treats null as "no badge", never as "0% draw rate".
+              isDraw,
+              drawContext: isDraw ? getDrawContext(ev.sport_key, ev.home_team, ev.away_team) : null,
+              // Form-divergence context: only attached to team-outcome bets
+              // (not Draw), and only once TEAM_FORM has real match history
+              // logged for that team — null otherwise, never a fabricated 0.
+              formContext: (!isDraw && outcomeTeam) ? getFormContextForOutcome(ev.sport_key, outcomeTeam, teamForm) : null,
             });
           }
         }
@@ -641,6 +921,8 @@ useEffect(() => {
   const [minEV, setMinEV] = useState(2);
   const [evStake, setEvStake] = useState(500);
   const [evFilter, setEvFilter] = useState('all');
+  const [drawOnly, setDrawOnly] = useState(false); // 🎯 Draw Value filter — +EV tab
+  const [reboundOnly, setReboundOnly] = useState(false); // 🔄 Form rebound filter — +EV tab
   const [analyzerGames, setAnalyzerGames] = useState([]);
   const [analyzerLoading, setAnalyzerLoading] = useState(false);
   const [analyzerSportFilter, setAnalyzerSportFilter] = useState('all');
@@ -663,6 +945,7 @@ useEffect(() => {
   const [lineshopSection, setLineshopSection] = useState('global'); // 'global' | 'wa'
   const [edgeTab, setEdgeTab] = useState('lineshop'); // 'lineshop' | 'middle' | 'steam'
   const prevEventsRef = React.useRef([]);
+  const teamFormRef = React.useRef(TEAM_FORM);
 
   const fetchOdds = useCallback(async (key) => {
   if (!key) return;
@@ -730,8 +1013,8 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     }
     const found = findArbs(all, 'global', userRegion);
     const foundArbsWA = findArbs(all, 'wa', userRegion);
-    const foundEV = findEVBets(all, minEV, 'global', userRegion);
-    const foundEVWA = findEVBets(all, minEV, 'wa', userRegion);
+    const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
+    const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
     if (found.length > 0) { setArbs(found); setIsDemo(false); setLastFetch(new Date()); }
     else { setArbs(MOCK); setIsDemo(true); }
     setArbsWAReal(foundArbsWA);
@@ -831,7 +1114,56 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
   const id = setInterval(() => { if (apiKey) fetchOdds(apiKey); }, 12 * 60 * 1000);
   return () => clearInterval(id);
 }, [apiKey, fetchOdds]);
-  
+
+  // ── TEAM FORM ────────────────────────────────────────────────────────────────
+  // Fetches from /api/team-form (backed by API-Football) once on mount, then
+  // every 6 hours — matching the server-side cache TTL so we never hammer the
+  // upstream API. Falls back gracefully to the empty TEAM_FORM skeleton if the
+  // endpoint isn't configured yet (API_FOOTBALL_KEY not set in Vercel env).
+  const [teamForm, setTeamForm] = useState(TEAM_FORM);
+  const [teamFormLoading, setTeamFormLoading] = useState(false);
+  const [teamFormError, setTeamFormError] = useState('');
+
+  const fetchTeamForm = useCallback(async () => {
+    setTeamFormLoading(true);
+    setTeamFormError('');
+    try {
+      // ?season=2025 because the 2026 season has no finished fixtures yet.
+      // Swap to 2026 (or remove the param) once the new season kicks off in Aug.
+      const res = await fetch('/api/team-form?sport=all&season=2025');
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.warn('[team-form] fetch failed', res.status, body);
+        setTeamFormError('Team form unavailable (' + res.status + ')');
+        return;
+      }
+      const json = await res.json();
+      if (!json.TEAM_FORM) {
+        console.warn('[team-form] unexpected response shape', json);
+        setTeamFormError('Team form unavailable (bad response)');
+        return;
+      }
+      // Merge into the skeleton so missing leagues stay as {} not undefined
+      setTeamForm(prev => {
+        const merged = { ...prev, ...json.TEAM_FORM };
+        teamFormRef.current = merged; // keep ref in sync for fetchOdds
+        return merged;
+      });
+      console.log('[team-form] loaded', Object.keys(json.TEAM_FORM).length, 'leagues, season', json.season);
+    } catch (err) {
+      console.warn('[team-form] fetch threw', err);
+      setTeamFormError('Team form unavailable');
+    } finally {
+      setTeamFormLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTeamForm();
+    const id = setInterval(fetchTeamForm, 6 * 60 * 60 * 1000); // refresh every 6h
+    return () => clearInterval(id);
+  }, [fetchTeamForm]);
+
   useEffect(() => { try { localStorage.setItem('arb_bets', JSON.stringify(bets)); } catch {} }, [bets]);
   useEffect(() => { try { localStorage.setItem('arb_bankroll', bankroll.toString()); } catch {} }, [bankroll]);
 
@@ -1338,7 +1670,7 @@ const analyzeArb = async (arb) => {
     ),
     tab === 'ev' && e('div', { style: st.section },
       e('div', { style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1e3a8a', lineHeight: 1.6 } },
-        '📈 +EV bets are NOT guaranteed profit. They are bets where the bookmaker\'s odds exceed the true probability — profitable long-term over hundreds of bets. 🌍 Global uses Pinnacle/Betfair as reference. 🇬🇭 West Africa uses Pinnacle/Betfair as reference too — but only shows bets on WA-accessible books.'
+        '📈 +EV bets are NOT guaranteed profit. They are bets where the bookmaker\'s odds exceed the true probability — profitable long-term over hundreds of bets. 🌍 Global uses Pinnacle/Betfair as reference. 🇬🇭 West Africa uses Pinnacle/Betfair as reference too — but only shows bets on WA-accessible books. 🎯 Draw Value shows only +EV Draw bets, badged with trailing draw rate (EPL, La Liga, Bundesliga, Serie A verified; Ligue 1 pending). 🔄 Rebounds flags teams whose longer-run form is stronger than their last 10 games — needs match-history data not yet wired in, so it will show nothing until that\'s populated.'
       ),
       // Region section toggle
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
@@ -1374,14 +1706,24 @@ const analyzeArb = async (arb) => {
           e('span', { style: { fontSize: 12, color: C.muted } }, 'Bankroll:'),
           e('input', { type: 'number', value: evStake, min: 50, step: 50, onChange: ev => setEvStake(Math.max(50, parseFloat(ev.target.value) || 500)), style: { ...st.input, width: 100 } })
         ),
+        e('button', {
+          onClick: () => setDrawOnly(d => !d),
+          style: { ...st.btn(drawOnly ? 'primary' : 'outline'), fontSize: 12, padding: '7px 12px' }
+        }, '🎯 Draw Value'),
+        e('button', {
+          onClick: () => setReboundOnly(r => !r),
+          style: { ...st.btn(reboundOnly ? 'primary' : 'outline'), fontSize: 12, padding: '7px 12px' }
+        }, '🔄 Rebounds'),
       ),
       (() => {
         const activeBets = (evSection === 'wa' ? evWA : evBets)
-          .filter(b => (evFilter === 'all' || b.sport === evFilter));
+          .filter(b => (evFilter === 'all' || b.sport === evFilter))
+          .filter(b => !drawOnly || b.isDraw)
+          .filter(b => !reboundOnly || (b.formContext && b.formContext.isRebound));
         if (activeBets.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
-          e('div', { style: { fontSize: 28, marginBottom: 10 } }, isDemoEV ? '📡' : '✅'),
+          e('div', { style: { fontSize: 28, marginBottom: 10 } }, isDemoEV ? '📡' : drawOnly ? '🎯' : reboundOnly ? '🔄' : '✅'),
           e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } },
-            isDemoEV ? 'Scan failed — showing demo data' : 'No +EV opportunities right now'
+            isDemoEV ? 'Scan failed — showing demo data' : drawOnly ? 'No +EV draws right now' : reboundOnly ? 'No rebound-signal bets right now' : 'No +EV opportunities right now'
           ),
           e('div', { style: { fontSize: 12, lineHeight: 1.6 } },
             isDemoEV
@@ -1405,7 +1747,16 @@ const analyzeArb = async (arb) => {
                   e('span', { style: { fontWeight: 700 } }, bet.outcome),
                   e('span', { style: { color: C.muted } }, ' · ' + bet.bookName),
                   bet._wa && e('span', { style: { marginLeft: 6, fontSize: 11, background: C.greenLight, color: C.greenDark, padding: '1px 6px', borderRadius: 10 } }, '🇬🇭 WA'),
-                  bet.sharpBookCount > 1 && e('span', { style: { marginLeft: 6, fontSize: 11, background: '#ede9fe', color: '#6d28d9', padding: '1px 6px', borderRadius: 10 } }, '🎯 ' + bet.sharpBookCount + '-book consensus')
+                  bet.sharpBookCount > 1 && e('span', { style: { marginLeft: 6, fontSize: 11, background: '#ede9fe', color: '#6d28d9', padding: '1px 6px', borderRadius: 10 } }, '🎯 ' + bet.sharpBookCount + '-book consensus'),
+                  bet.isDraw && bet.drawContext && e('span', {
+                    style: { marginLeft: 6, fontSize: 11, background: '#fef3c7', color: '#78350f', padding: '1px 6px', borderRadius: 10 },
+                    title: (bet.drawContext.home ? bet.drawContext.home.draws + '/' + bet.drawContext.home.played + ' home team draws' : '') +
+                           (bet.drawContext.away ? ' · ' + bet.drawContext.away.draws + '/' + bet.drawContext.away.played + ' away team draws' : '')
+                  }, '🤝 ' + (bet.drawContext.avgRate * 100).toFixed(0) + '% draw rate (' + bet.drawContext.season + ')'),
+                  bet.formContext && bet.formContext.isRebound && e('span', {
+                    style: { marginLeft: 6, fontSize: 11, background: '#dbeafe', color: '#1e3a8a', padding: '1px 6px', borderRadius: 10 },
+                    title: 'Baseline ' + bet.formContext.baselinePPG + ' PPG vs recent ' + bet.formContext.recentPPG + ' PPG over last ' + FORM_RECENT_WINDOW + ' games — market may still be pricing off the slump'
+                  }, '🔄 rebound signal (+' + bet.formContext.divergence + ' PPG)')
                 )
               ),
               e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
