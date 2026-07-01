@@ -871,6 +871,8 @@ const [apiKey, setApiKey] = useState('server');
   const [isDemo, setIsDemo] = useState(true);
   const [isDemoEV, setIsDemoEV] = useState(true);
   const [waHealth, setWaHealth] = useState(null);
+  const [scanHealth, setScanHealth] = useState(null); // WA book coverage from last scan
+  const [showScanHealth, setShowScanHealth] = useState(false); // expand/collapse detail panel
   const [sel, setSel] = useState(null);
   const [stake, setStake] = useState(500);
   const [currency, setCurrency] = useState('GHS');
@@ -937,7 +939,6 @@ useEffect(() => {
   const [analyzingId, setAnalyzingId] = useState(null);
   const [middles, setMiddles] = useState([]);
   const [middlesWA, setMiddlesWA] = useState([]); // West Africa middles — both legs accessible
-  const [waDebug, setWaDebug] = useState(null); // TEMP: on-screen WA diagnostics (no dev tools needed)
   const [middleSection, setMiddleSection] = useState('global'); // 'global' | 'wa'
   const [steam, setSteam] = useState([]);
   const [bestOdds, setBestOdds] = useState([]);
@@ -1030,30 +1031,25 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     setBestOdds(findBestOdds(all, 'global', userRegion));
     setBestOddsWA(bestOddsWAResult);
 
-    // ── TEMP DEBUG: diagnose why the WA section is empty ──────────────────────
-    // Remove once the root cause is confirmed.
-    (() => {
-      const keyCounts = {};
-      all.forEach(ev => (ev.bookmakers || []).forEach(bm => {
-        keyCounts[bm.key] = (keyCounts[bm.key] || 0) + 1;
-      }));
-      const accessibleSeen = Object.keys(keyCounts).filter(k => isBookAccessible(k, userRegion));
-      const unknownKeys = Object.keys(keyCounts).filter(k => !BOOKS[k]);
-      const eventsWith2PlusAccessible = all.filter(ev =>
-        (ev.bookmakers || []).filter(bm => isBookAccessible(bm.key, userRegion)).length >= 2
-      ).length;
-      const debugInfo = {
-        totalEvents: all.length,
-        keyCounts,
-        accessibleSeen,
-        unknownKeys,
-        eventsWith2PlusAccessible,
-        bestOddsWACount: bestOddsWAResult.length,
-        middlesWACount: middlesWAResult.length,
-      };
-      console.log('[WA debug]', debugInfo);
-      setWaDebug(debugInfo);
-    })();
+    // ── SCAN HEALTH ─────────────────────────────────────────────────────────────
+    // Track which WA-accessible books were actually seen in this scan, and how
+    // many events had enough coverage to produce arbs/EV for West Africa users.
+    const WA_BOOKS = Object.entries(BOOKS).filter(([,b]) => b.wa).map(([k]) => k);
+    const seenKeys = new Set(all.flatMap(ev => (ev.bookmakers || []).map(b => b.key)));
+    const waBookStatus = WA_BOOKS.map(key => ({
+      key,
+      name: BOOKS[key].name,
+      seen: seenKeys.has(key),
+    }));
+    const eventsWithWACoverage = all.filter(ev =>
+      (ev.bookmakers || []).filter(bm => isBookAccessible(bm.key, userRegion)).length >= 2
+    ).length;
+    setScanHealth({
+      waBooks: waBookStatus,
+      eventsScanned: all.length,
+      eventsWithWACoverage,
+      scannedAt: new Date().toISOString(),
+    });
 
     // ── AUTO-CLV CAPTURE ────────────────────────────────────────────────────────
     // For pending EV bets: while the match hasn't kicked off, keep refreshing
@@ -1128,9 +1124,10 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     setTeamFormLoading(true);
     setTeamFormError('');
     try {
-      // ?season=2025 because the 2026 season has no finished fixtures yet.
-      // Swap to 2026 (or remove the param) once the new season kicks off in Aug.
-      const res = await fetch('/api/team-form?sport=all&season=2025');
+      // season=2024 = the 2024/25 season (API-Football keys by start year).
+      // The 2025/26 season just ended but API-Football hasn't published its
+      // finished fixtures yet under season=2025 — switch to 2025 once they do.
+      const res = await fetch('/api/team-form?sport=all&season=2024');
       if (!res.ok) {
         const body = await res.text().catch(() => '');
         console.warn('[team-form] fetch failed', res.status, body);
@@ -1286,18 +1283,19 @@ const analyzeArb = async (arb) => {
         e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ ' + scanProgress.sport + '...' : '● ' + filteredArbs.length + ' arbs'),
         lastFetch && e('span', { style: st.badge('#1f2937', '#9ca3af') }, lastFetch.toLocaleTimeString()),
         isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, '⚠ Demo'),
-        waHealth && (() => {
-          const books = Object.entries(waHealth);
-          const upCount = books.filter(([, h]) => h && h.ok).length;
-          const allUp = upCount === books.length;
-          const allDown = upCount === 0;
+        scanHealth && (() => {
+          const { waBooks, eventsWithWACoverage, eventsScanned } = scanHealth;
+          const seenCount = waBooks.filter(b => b.seen).length;
+          const allUp = seenCount === waBooks.length;
+          const allDown = seenCount === 0;
           const bg = allUp ? '#052e16' : allDown ? '#450a0a' : '#451a03';
           const fg = allUp ? '#6ee7b7' : allDown ? '#fca5a5' : '#fcd34d';
           const icon = allUp ? '✓' : allDown ? '✕' : '⚠';
           return e('span', {
-            style: st.badge(bg, fg),
-            title: books.map(([name, h]) => name + ': ' + (h && h.ok ? 'live' : (h && h.reason) || 'unknown')).join(' · '),
-          }, icon + ' WA ' + upCount + '/' + books.length);
+            onClick: () => setShowScanHealth(v => !v),
+            style: { ...st.badge(bg, fg), cursor: 'pointer' },
+            title: 'Tap to see scan health details',
+          }, icon + ' WA ' + seenCount + '/' + waBooks.length);
         })(),
         e('button', { onClick: () => setShowSetup(v => !v), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 10px' } }, apiKey ? '⚙ Connected' : 'Connect Live ↗')
       ),
@@ -1306,6 +1304,30 @@ const analyzeArb = async (arb) => {
         e('div', { style: { display: 'flex', gap: 8 } },
           e('input', { value: apiInput, onChange: ev => setApiInput(ev.target.value), placeholder: 'Paste Odds API key...', style: { ...st.input, flex: 1, background: '#1f2937', borderColor: '#374151', color: '#f9fafb' } }),
           e('button', { onClick: saveKey, style: st.btn('primary') }, 'Save')
+        )
+      ),
+      showScanHealth && scanHealth && e('div', { style: { background: '#111827', borderTop: '1px solid #1f2937', padding: '10px 14px' } },
+        e('div', { style: { fontSize: 12, fontWeight: 700, color: '#9ca3af', marginBottom: 8, display: 'flex', justifyContent: 'space-between' } },
+          e('span', null, '🇬🇭 WA Scan Health'),
+          e('span', { style: { fontSize: 11 } }, 'Last scan: ' + new Date(scanHealth.scannedAt).toLocaleTimeString())
+        ),
+        e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 } },
+          scanHealth.waBooks.map(b =>
+            e('div', { key: b.key, style: { display: 'flex', alignItems: 'center', gap: 6, background: b.seen ? '#052e16' : '#1f2937', borderRadius: 8, padding: '5px 8px' } },
+              e('span', null, b.seen ? '✅' : '⬜'),
+              e('span', { style: { fontSize: 12, color: b.seen ? '#6ee7b7' : '#6b7280', fontWeight: b.seen ? 600 : 400 } }, b.name)
+            )
+          )
+        ),
+        e('div', { style: { display: 'flex', gap: 8 } },
+          e('div', { style: { flex: 1, background: '#1f2937', borderRadius: 8, padding: '8px 10px', textAlign: 'center' } },
+            e('div', { style: { fontSize: 20, fontWeight: 700, color: '#f9fafb' } }, scanHealth.eventsScanned),
+            e('div', { style: { fontSize: 11, color: '#6b7280' } }, 'total events')
+          ),
+          e('div', { style: { flex: 1, background: scanHealth.eventsWithWACoverage > 0 ? '#052e16' : '#1f2937', borderRadius: 8, padding: '8px 10px', textAlign: 'center' } },
+            e('div', { style: { fontSize: 20, fontWeight: 700, color: scanHealth.eventsWithWACoverage > 0 ? '#6ee7b7' : '#6b7280' } }, scanHealth.eventsWithWACoverage),
+            e('div', { style: { fontSize: 11, color: '#6b7280' } }, 'with WA coverage')
+          )
         )
       )
     ),
@@ -1798,15 +1820,36 @@ const analyzeArb = async (arb) => {
     })()
     ),
     tab === 'edge' && e('div', { style: st.section },
-      // ── TEMP: on-screen WA debug panel (no dev tools needed) ───────────────
-      waDebug && e('div', { style: { background: '#1f2937', borderRadius: 10, padding: '10px 12px', marginBottom: 12, fontSize: 11, color: '#e5e7eb', lineHeight: 1.6, fontFamily: 'monospace' } },
-        e('div', { style: { fontWeight: 700, color: '#6ee7b7', marginBottom: 6 } }, '🔎 WA DEBUG (run a scan to refresh)'),
-        e('div', null, 'Total events: ' + waDebug.totalEvents),
-        e('div', null, 'Events with 2+ accessible books: ' + waDebug.eventsWith2PlusAccessible),
-        e('div', null, 'bestOddsWA results: ' + waDebug.bestOddsWACount + ' | middlesWA results: ' + waDebug.middlesWACount),
-        e('div', { style: { marginTop: 6, color: '#fcd34d' } }, 'Accessible keys seen: ' + (waDebug.accessibleSeen.join(', ') || '(none)')),
-        e('div', { style: { marginTop: 4, color: '#fca5a5' } }, 'Unknown keys (not in BOOKS): ' + (waDebug.unknownKeys.join(', ') || '(none)')),
-        e('div', { style: { marginTop: 6, color: '#9ca3af' } }, 'All key counts: ' + JSON.stringify(waDebug.keyCounts))
+      // ── Scan Health Panel ───────────────────────────────────────────────────
+      scanHealth && e('div', { style: { background: '#1f2937', borderRadius: 12, padding: '12px 14px', marginBottom: 14 } },
+        e('div', { style: { fontSize: 13, fontWeight: 700, color: '#f9fafb', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+          e('span', null, '🇬🇭 West Africa Scan Health'),
+          e('span', { style: { fontSize: 11, color: '#6b7280' } }, new Date(scanHealth.scannedAt).toLocaleTimeString())
+        ),
+        e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 } },
+          scanHealth.waBooks.map(b =>
+            e('div', { key: b.key, style: { display: 'flex', alignItems: 'center', gap: 6, background: b.seen ? '#052e16' : '#111827', borderRadius: 8, padding: '6px 10px' } },
+              e('span', null, b.seen ? '✅' : '⬜'),
+              e('div', null,
+                e('div', { style: { fontSize: 12, fontWeight: 600, color: b.seen ? '#6ee7b7' : '#6b7280' } }, b.name),
+                e('div', { style: { fontSize: 10, color: b.seen ? '#4ade80' : '#4b5563' } }, b.seen ? 'Live in scan' : 'Not seen')
+              )
+            )
+          )
+        ),
+        e('div', { style: { display: 'flex', gap: 8 } },
+          e('div', { style: { flex: 1, background: '#111827', borderRadius: 8, padding: '8px 10px', textAlign: 'center' } },
+            e('div', { style: { fontSize: 22, fontWeight: 700, color: '#f9fafb' } }, scanHealth.eventsScanned),
+            e('div', { style: { fontSize: 11, color: '#6b7280', marginTop: 2 } }, 'total events scanned')
+          ),
+          e('div', { style: { flex: 1, background: scanHealth.eventsWithWACoverage > 0 ? '#052e16' : '#111827', borderRadius: 8, padding: '8px 10px', textAlign: 'center' } },
+            e('div', { style: { fontSize: 22, fontWeight: 700, color: scanHealth.eventsWithWACoverage > 0 ? '#6ee7b7' : '#6b7280' } }, scanHealth.eventsWithWACoverage),
+            e('div', { style: { fontSize: 11, color: '#6b7280', marginTop: 2 } }, 'events with WA coverage')
+          )
+        ),
+        scanHealth.eventsWithWACoverage === 0 && e('div', { style: { marginTop: 10, fontSize: 12, color: '#f59e0b', background: '#451a03', borderRadius: 8, padding: '8px 10px' } },
+          '⚠ No events had 2+ WA books priced. This means Betway/1xBet/MelBet aren\'t appearing in the Odds API feed for your selected sports right now — likely off-season or those books aren\'t covered for the current leagues.'
+        )
       ),
       // Sub-tab nav
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
