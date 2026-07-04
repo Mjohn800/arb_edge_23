@@ -77,7 +77,7 @@ async function fetchParipesaOdds(sportKey) {
     if (!finalRes.ok || finalRes.headers.get('content-type')?.includes('text/html')) {
       const scraperKey = process.env.SCRAPER_API_KEY;
       if (scraperKey) {
-        const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&country_code=gh`;
+        const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&country_code=gh&premium=true`;
         console.log('[Paripesa] geo-blocked, retrying via ScraperAPI...');
         finalRes = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
       } else {
