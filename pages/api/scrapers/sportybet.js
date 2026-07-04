@@ -117,7 +117,21 @@ async function fetchSportybetOdds(sportKey) {
       if (ms === 0) return true; // no timestamp = include it
       return ms > now - 3 * 60 * 60 * 1000; // allow up to 3hrs in past (live/just started)
     });
-    if (rawEvents.length > 0) console.log('[SportyBet] sample timestamp:', rawEvents[0]?.estimateStartTime, rawEvents[0]?.startTime);
+    if (rawEvents.length > 0) {
+      const sample = rawEvents[0];
+      console.log('[SportyBet] sample timestamp fields:', JSON.stringify({
+        estimateStartTime: sample.estimateStartTime,
+        startTime: sample.startTime,
+        beginTime: sample.beginTime,
+        kickOff: sample.kickOff,
+        matchTime: sample.matchTime,
+        date: sample.date,
+        startDate: sample.startDate,
+        start: sample.start,
+        eventTime: sample.eventTime,
+      }));
+      console.log('[SportyBet] sample raw keys:', Object.keys(sample).join(', '));
+    }
 
     // Try normalising with inline odds first
     let normalised = upcoming.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
