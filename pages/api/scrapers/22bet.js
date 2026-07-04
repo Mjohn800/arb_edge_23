@@ -118,12 +118,16 @@ function normalise22BetEvent(ev, sportKey) {
 
     const h2hOutcomes = [];
     const totalsOutcomes = [];
+    const ahOutcomes = [];
+    const bttsOutcomes = [];
 
     const markets = ev.markets || ev.market || ev.odds || ev.factors || [];
     for (const mkt of (Array.isArray(markets) ? markets : Object.values(markets))) {
       const mktType = String(mkt.type || mkt.market_type || mkt.name || mkt.factorType || '');
-      const isH2H = /^(1x2|match result|moneyline|full.time|1_1|factor.*1$)/i.test(mktType) || mkt.key === '1x2';
+      const isH2H    = /^(1x2|match result|moneyline|full.time|1_1|factor.*1$)/i.test(mktType) || mkt.key === '1x2';
       const isTotals = /^(total|over.under|goals)/i.test(mktType);
+      const isAH     = /^(asian.handicap|handicap|spread)/i.test(mktType);
+      const isBTTS   = /^(both.teams|btts|gg|gg.ng)/i.test(mktType);
 
       const outcomes = mkt.outcomes || mkt.selections || mkt.event || mkt.values || [];
       for (const o of (Array.isArray(outcomes) ? outcomes : Object.values(outcomes))) {
@@ -141,18 +145,23 @@ function normalise22BetEvent(ev, sportKey) {
         } else if (isTotals) {
           const rawName = String(o.name || o.type || '').toLowerCase();
           const point = parseFloat(o.base || o.handicap || o.line || o.point || 2.5);
-          totalsOutcomes.push({
-            name: rawName.includes('over') || rawName === 'more' ? 'Over' : 'Under',
-            price,
-            point,
-          });
+          totalsOutcomes.push({ name: rawName.includes('over') || rawName === 'more' ? 'Over' : 'Under', price, point });
+        } else if (isAH) {
+          const rawName = String(o.name || o.type || '').toLowerCase();
+          const isHome = rawName === '1' || rawName === 'w1' || rawName.includes('home');
+          ahOutcomes.push({ name: isHome ? homeTeam : awayTeam, price, point: parseFloat(o.base || o.handicap || o.line || 0) });
+        } else if (isBTTS) {
+          const rawName = String(o.name || o.type || '').toLowerCase();
+          bttsOutcomes.push({ name: rawName.includes('yes') || rawName === 'gg' ? 'Yes' : 'No', price });
         }
       }
     }
 
     const normMarkets = [];
-    if (h2hOutcomes.length >= 2) normMarkets.push({ key: 'h2h', outcomes: h2hOutcomes });
-    if (totalsOutcomes.length >= 2) normMarkets.push({ key: 'totals', outcomes: totalsOutcomes });
+    if (h2hOutcomes.length >= 2)   normMarkets.push({ key: 'h2h',     outcomes: h2hOutcomes });
+    if (totalsOutcomes.length >= 2) normMarkets.push({ key: 'totals',  outcomes: totalsOutcomes });
+    if (ahOutcomes.length >= 2)     normMarkets.push({ key: 'spreads', outcomes: ahOutcomes });
+    if (bttsOutcomes.length >= 2)   normMarkets.push({ key: 'btts',    outcomes: bttsOutcomes });
     if (normMarkets.length === 0) return null;
 
     return {
