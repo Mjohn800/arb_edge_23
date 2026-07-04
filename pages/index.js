@@ -496,16 +496,26 @@ function findArbs(events, mode = 'global', userRegion = null) {
   const arbs = [];
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
-    const best = {};
+
+    // Collect all (marketKey, point) combinations that appear across books.
+    // A valid arb must have ALL its legs from the same market + same line —
+    // mixing h2h outcomes with AH outcomes is not an arb, it just looks like
+    // one because the implied probabilities happen to sum below 1 when you
+    // cherry-pick across unrelated markets.
+    const marketSlots = {};
     for (const bm of ev.bookmakers) {
       if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
       for (const mkt of (bm.markets || [])) {
         if (!['h2h', 'spreads', 'totals', 'outrights'].includes(mkt.key)) continue;
         for (const o of mkt.outcomes) {
-          // Use outcome name as the dedup key — same as before, so the best
-          // price per outcome across books is correctly found. The line (point)
-          // is stored separately for display, not used in the key.
-          if (!best[o.name] || o.price > best[o.name].price) {
+          // For spreads/totals, group by line so Over 2.5 / Under 2.5 stay together
+          // and don't get mixed with Over 3.5 / Under 2.5 from another book.
+          const slotKey = mkt.key === 'h2h' || mkt.key === 'outrights'
+            ? mkt.key
+            : mkt.key + '_' + o.point;
+          if (!marketSlots[slotKey]) marketSlots[slotKey] = { mktKey: mkt.key, point: o.point ?? null, best: {} };
+          const slot = marketSlots[slotKey];
+          if (!slot.best[o.name] || o.price > slot.best[o.name].price) {
             let displayLabel = o.name;
             let marketLabel = 'Match Winner';
             if (mkt.key === 'totals') {
@@ -517,30 +527,36 @@ function findArbs(events, mode = 'global', userRegion = null) {
             } else if (mkt.key === 'outrights') {
               marketLabel = 'Outright';
             }
-            best[o.name] = { price: o.price, book: bm.key, bookName: bm.title, displayLabel, marketLabel, marketKey: mkt.key, point: o.point ?? null };
+            slot.best[o.name] = { price: o.price, book: bm.key, bookName: bm.title, displayLabel, marketLabel, marketKey: mkt.key, point: o.point ?? null };
           }
         }
       }
     }
-    const outs = Object.entries(best);
-    if (outs.length < 2) continue;
-    const imp = outs.reduce((s, [, o]) => s + 1 / o.price, 0);
-    if (imp < 1) arbs.push({
-      id: ev.id,
-      sport: ev.sport_key,
-      match: ev.home_team + ' vs ' + ev.away_team,
-      commenceTime: ev.commence_time,
-      margin: parseFloat((((1 - imp) / imp) * 100).toFixed(2)),
-      outcomes: outs.map(([, o]) => ({
-        label: o.displayLabel,
-        marketLabel: o.marketLabel,
-        marketKey: o.marketKey,
-        point: o.point,
-        book: o.book,
-        bookName: o.bookName,
-        odds: o.price,
-      }))
-    });
+
+    // Now check each market slot independently for an arb
+    for (const slot of Object.values(marketSlots)) {
+      const outs = Object.values(slot.best);
+      if (outs.length < 2) continue;
+      const imp = outs.reduce((s, o) => s + 1 / o.price, 0);
+      if (imp < 1) {
+        arbs.push({
+          id: ev.id + '_' + slot.mktKey + (slot.point != null ? '_' + slot.point : ''),
+          sport: ev.sport_key,
+          match: ev.home_team + ' vs ' + ev.away_team,
+          commenceTime: ev.commence_time,
+          margin: parseFloat((((1 - imp) / imp) * 100).toFixed(2)),
+          outcomes: outs.map(o => ({
+            label: o.displayLabel,
+            marketLabel: o.marketLabel,
+            marketKey: o.marketKey,
+            point: o.point,
+            book: o.book,
+            bookName: o.bookName,
+            odds: o.price,
+          }))
+        });
+      }
+    }
   }
   return arbs.sort((a, b) => b.margin - a.margin);
 }
