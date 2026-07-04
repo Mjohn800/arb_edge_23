@@ -133,32 +133,7 @@ async function fetchSportybetOdds(sportKey) {
     });
     if (rawEvents.length > 0) {
       const sample = rawEvents[0];
-      console.log('[SportyBet] sample timestamp fields:', JSON.stringify({
-        estimateStartTime: sample.estimateStartTime,
-        startTime: sample.startTime,
-        beginTime: sample.beginTime,
-        kickOff: sample.kickOff,
-        matchTime: sample.matchTime,
-        date: sample.date,
-        startDate: sample.startDate,
-        start: sample.start,
-        eventTime: sample.eventTime,
-      }));
-      console.log('[SportyBet] sample raw keys:', Object.keys(sample).join(', '));
-      // Dump first market to diagnose wrong odds being parsed
-      // Log ALL markets from first event to diagnose totals/spreads point field
-      const allMarkets = sample.markets || sample.odds || sample.marketList || [];
-      allMarkets.forEach((mkt, idx) => {
-        console.log('[SportyBet] market[' + idx + ']:', JSON.stringify({
-          id: mkt.id,
-          marketId: mkt.marketId,
-          marketType: mkt.marketType,
-          name: mkt.name,
-          outcomes: (mkt.outcomes || mkt.selections || mkt.odds || []).slice(0, 4).map(o => ({
-            id: o.id, name: o.name, desc: o.desc, odds: o.odds, point: o.point, handicap: o.handicap, line: o.line, base: o.base,
-          })),
-        }));
-      });
+      console.log('[SportyBet] sample timestamp:', sample.estimateStartTime, '| markets:', (sample.markets || []).length);
     }
 
     // Try normalising with inline odds first
@@ -220,19 +195,30 @@ function normaliseEvent(ev, sportKey) {
       for (const o of (market.outcomes || market.selections || market.odds || [])) {
         const price = parseFloat(o.odds || o.price || o.oddsValue);
         if (!price || price <= 1.0) continue;
+        // SportyBet encodes the line in desc e.g. "Over 2.5", "Under 0.5", "Home (2:0)"
+        // Never use o.name alone for totals/spreads — always use desc which has the full label
+        const desc = o.desc || o.name || '';
         if (mKey === 'h2h') {
-          const name = o.name === '1' ? homeTeam : o.name === 'X' ? 'Draw' : o.name === '2' ? awayTeam : o.name || o.oddName;
+          const name = desc === 'Home' ? homeTeam : desc === 'Away' ? awayTeam : desc === 'Draw' ? 'Draw' :
+                       o.name === '1' ? homeTeam : o.name === 'X' ? 'Draw' : o.name === '2' ? awayTeam : desc;
           if (name) h2hOutcomes.push({ name, price });
         } else if (mKey === 'totals') {
-          const raw = (o.name || o.oddName || '').toLowerCase();
-          totalsOutcomes.push({ name: raw.includes('over') ? 'Over' : 'Under', price, point: parseFloat(o.handicap || o.line || o.point || 2.5) });
+          // desc is "Over 2.5", "Under 0.5" etc — parse point from it
+          const match = desc.match(/^(Over|Under)\s+([\d.]+)$/i);
+          if (!match) continue;
+          const side = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+          const point = parseFloat(match[2]);
+          totalsOutcomes.push({ name: side, price, point, desc });
         } else if (mKey === 'spreads') {
-          const raw = (o.name || o.oddName || '').toLowerCase();
-          const isHome = raw === '1' || raw.includes('home') || raw.includes('w1');
-          ahOutcomes.push({ name: isHome ? homeTeam : awayTeam, price, point: parseFloat(o.handicap || o.line || o.point || 0) });
+          // desc is "Home (2:0)", "Draw (3:0)", "Away (4:0)" — parse point from it
+          const match = desc.match(/^(Home|Draw|Away)\s+\((\d+):(\d+)\)$/i);
+          if (!match) continue;
+          const side = match[1];
+          const point = parseInt(match[2]) - parseInt(match[3]);
+          const name = side === 'Home' ? homeTeam : side === 'Away' ? awayTeam : 'Draw';
+          ahOutcomes.push({ name, price, point, desc });
         } else if (mKey === 'btts') {
-          const raw = (o.name || o.oddName || '').toLowerCase();
-          bttsOutcomes.push({ name: raw.includes('yes') || raw === '1' ? 'Yes' : 'No', price });
+          bttsOutcomes.push({ name: desc === 'Yes' ? 'Yes' : 'No', price });
         }
       }
     }
