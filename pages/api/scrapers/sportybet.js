@@ -55,7 +55,7 @@ const HEADERS = {
   'Referer': 'https://www.sportybet.com/gh/m/sport/football',
 };
 
-const MARKET_MAP = { '1_1': 'h2h', '1': 'h2h', '18_1': 'totals', '18': 'totals' };
+const MARKET_MAP = { '1_1': 'h2h', '1': 'h2h', '18_1': 'totals', '18': 'totals', '10_1': 'spreads', '10': 'spreads', '29_1': 'btts', '29': 'btts' };
 
 async function fetchSportybetOdds(sportKey) {
   const mapping = SPORTYBET_SPORT_MAP[sportKey];
@@ -167,7 +167,7 @@ function normaliseEvent(ev, sportKey) {
     if (startMs && startMs < 1e12) startMs = startMs * 1000;
     if (!startMs) return null;
 
-    const h2hOutcomes = [], totalsOutcomes = [];
+    const h2hOutcomes = [], totalsOutcomes = [], ahOutcomes = [], bttsOutcomes = [];
     for (const market of (ev.markets || ev.odds || ev.marketList || ev.quickMarkets || [])) {
       const mKey = MARKET_MAP[market.id] || MARKET_MAP[market.marketId] || MARKET_MAP[String(market.marketType)];
       if (!mKey) continue;
@@ -180,12 +180,21 @@ function normaliseEvent(ev, sportKey) {
         } else if (mKey === 'totals') {
           const raw = (o.name || o.oddName || '').toLowerCase();
           totalsOutcomes.push({ name: raw.includes('over') ? 'Over' : 'Under', price, point: parseFloat(o.handicap || o.line || o.point || 2.5) });
+        } else if (mKey === 'spreads') {
+          const raw = (o.name || o.oddName || '').toLowerCase();
+          const isHome = raw === '1' || raw.includes('home') || raw.includes('w1');
+          ahOutcomes.push({ name: isHome ? homeTeam : awayTeam, price, point: parseFloat(o.handicap || o.line || o.point || 0) });
+        } else if (mKey === 'btts') {
+          const raw = (o.name || o.oddName || '').toLowerCase();
+          bttsOutcomes.push({ name: raw.includes('yes') || raw === '1' ? 'Yes' : 'No', price });
         }
       }
     }
     const markets = [];
-    if (h2hOutcomes.length >= 2) markets.push({ key: 'h2h', outcomes: h2hOutcomes });
-    if (totalsOutcomes.length >= 2) markets.push({ key: 'totals', outcomes: totalsOutcomes });
+    if (h2hOutcomes.length >= 2)   markets.push({ key: 'h2h',     outcomes: h2hOutcomes });
+    if (totalsOutcomes.length >= 2) markets.push({ key: 'totals',  outcomes: totalsOutcomes });
+    if (ahOutcomes.length >= 2)     markets.push({ key: 'spreads', outcomes: ahOutcomes });
+    if (bttsOutcomes.length >= 2)   markets.push({ key: 'btts',    outcomes: bttsOutcomes });
     if (markets.length === 0) return null;
 
     return {
