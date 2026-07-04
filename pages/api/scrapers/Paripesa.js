@@ -71,19 +71,31 @@ async function fetchParipesaOdds(sportKey) {
   const url = `${BASE}/service-api/LiveFeed/Get1x2_VZip?sports=${mapping.sportId}&champs=${mapping.champId}&${FIXED_PARAMS}`;
 
   try {
-    const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(8000) });
+    let finalRes = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(15000) });
 
-    if (!res.ok) {
+    // If geo-blocked (returns HTML splash page), retry via ScraperAPI proxy
+    if (!finalRes.ok || finalRes.headers.get('content-type')?.includes('text/html')) {
+      const scraperKey = process.env.SCRAPER_API_KEY;
+      if (scraperKey) {
+        const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&country_code=gh`;
+        console.log('[Paripesa] geo-blocked, retrying via ScraperAPI...');
+        finalRes = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
+      } else {
+        console.warn('[Paripesa] geo-blocked and no SCRAPER_API_KEY set');
+      }
+    }
+
+    if (!finalRes.ok) {
       let body = '';
-      try { body = (await res.text()).slice(0, 300); } catch {}
-      console.warn('[Paripesa] HTTP', res.status, 'for', sportKey, '| body:', body);
+      try { body = (await finalRes.text()).slice(0, 300); } catch {}
+      console.warn('[Paripesa] HTTP', finalRes.status, 'for', sportKey, '| body:', body);
       return {
         events: [],
-        status: { ok: false, reason: 'http_' + res.status, fetchedAt: new Date().toISOString() },
+        status: { ok: false, reason: 'http_' + finalRes.status, fetchedAt: new Date().toISOString() },
       };
     }
 
-    const json = await res.json();
+    const json = await finalRes.json();
 
     if (json && json.Success === false) {
       console.warn('[Paripesa] API returned Success:false for', sportKey, '| Error:', json.Error || json.ErrorMessage);
@@ -116,20 +128,15 @@ async function fetchParipesaOdds(sportKey) {
   }
 }
 
-// 1xBet-family type IDs (confirmed across white-label skins):
-// 1X2: T=1 (home), T=2 (draw), T=3 (away)
-// Totals: T=9 (over), T=10 (under)
-// Asian Handicap: T=7 (home -n), T=8 (away +n)
-// Both Teams to Score: T=83 (yes), T=84 (no)
+// 1xBet-family "Zip" responses encode each match's odds in a flat array (`E`)
+// of {T: <type id>, C: <coefficient>, P?: <line/handicap>} entries, rather than
+// a nested markets object. T=1/2/3 is the standard main 1X2 market (home/draw/
+// away) across this platform family; T values for totals/handicaps vary, so
+// only 1X2 is parsed here for now — safer to extend once a real response has
+// been inspected (see file header) than to guess totals type IDs blind.
 const H2H_TYPE_HOME = 1;
 const H2H_TYPE_DRAW = 2;
 const H2H_TYPE_AWAY = 3;
-const TOTAL_OVER    = 9;
-const TOTAL_UNDER   = 10;
-const AH_HOME       = 7;
-const AH_AWAY       = 8;
-const BTTS_YES      = 83;
-const BTTS_NO       = 84;
 
 function normaliseParipesaEvent(ev, sportKey) {
   try {
@@ -138,40 +145,23 @@ function normaliseParipesaEvent(ev, sportKey) {
 
     let startMs = ev.S || ev.start || ev.startTime;
     if (!startMs) return null;
-    if (startMs < 1e12) startMs = startMs * 1000;
+    if (startMs < 1e12) startMs = startMs * 1000; // unix seconds -> ms
 
     const outcomesRaw = ev.E || ev.AE || [];
     if (!Array.isArray(outcomesRaw) || outcomesRaw.length === 0) return null;
 
     const h2hOutcomes = [];
-    const totalsOutcomes = [];
-    const ahOutcomes = [];
-    const bttsOutcomes = [];
-
     for (const o of outcomesRaw) {
-      const type  = o.T ?? o.type;
+      const type = o.T ?? o.type;
       const price = parseFloat(o.C ?? o.price ?? o.coef);
-      const point = parseFloat(o.P ?? o.handicap ?? o.line ?? 0);
       if (!price || price <= 1.0) continue;
 
       if (type === H2H_TYPE_HOME) h2hOutcomes.push({ name: homeTeam, price });
       else if (type === H2H_TYPE_DRAW) h2hOutcomes.push({ name: 'Draw', price });
       else if (type === H2H_TYPE_AWAY) h2hOutcomes.push({ name: awayTeam, price });
-      else if (type === TOTAL_OVER)  totalsOutcomes.push({ name: 'Over',  price, point });
-      else if (type === TOTAL_UNDER) totalsOutcomes.push({ name: 'Under', price, point });
-      else if (type === AH_HOME) ahOutcomes.push({ name: homeTeam, price, point });
-      else if (type === AH_AWAY) ahOutcomes.push({ name: awayTeam, price, point: -point });
-      else if (type === BTTS_YES) bttsOutcomes.push({ name: 'Yes', price });
-      else if (type === BTTS_NO)  bttsOutcomes.push({ name: 'No',  price });
     }
 
     if (h2hOutcomes.length < 2) return null;
-
-    const markets = [];
-    if (h2hOutcomes.length >= 2)   markets.push({ key: 'h2h',     outcomes: h2hOutcomes });
-    if (totalsOutcomes.length >= 2) markets.push({ key: 'totals',  outcomes: totalsOutcomes });
-    if (ahOutcomes.length >= 2)     markets.push({ key: 'spreads', outcomes: ahOutcomes });
-    if (bttsOutcomes.length >= 2)   markets.push({ key: 'btts',    outcomes: bttsOutcomes });
 
     return {
       id: 'paripesa_' + (ev.I || ev.id || Math.random()),
@@ -179,7 +169,7 @@ function normaliseParipesaEvent(ev, sportKey) {
       home_team: homeTeam,
       away_team: awayTeam,
       commence_time: new Date(startMs).toISOString(),
-      bookmakers: [{ key: 'paripesa', title: 'Paripesa', markets, _wa: true }],
+      bookmakers: [{ key: 'paripesa', title: 'Paripesa', markets: [{ key: 'h2h', outcomes: h2hOutcomes }], _wa: true }],
     };
   } catch (err) {
     console.warn('[Paripesa] normalise error:', err.message);
