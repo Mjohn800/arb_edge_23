@@ -25,6 +25,8 @@ const BOOKS = {
   sportybet:     { name: 'SportyBet',    momo: true,  licensed: true,  manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.sportybet.com/gh/sport/football', sportUrls: { soccer: 'https://www.sportybet.com/gh/sport/football', basketball: 'https://www.sportybet.com/gh/sport/basketball', tennis: 'https://www.sportybet.com/gh/sport/tennis', cricket: 'https://www.sportybet.com/gh/sport/cricket', mma: 'https://www.sportybet.com/gh/sport/mma' } },
   betano:        { name: 'Betano',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.betano.com.gh/sport/football', sportUrls: { soccer: 'https://www.betano.com.gh/sport/football', basketball: 'https://www.betano.com.gh/sport/basketball', tennis: 'https://www.betano.com.gh/sport/tennis', cricket: 'https://www.betano.com.gh/sport/cricket', mma: 'https://www.betano.com.gh/sport/mma' } },
   msport:        { name: 'MSport',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.msport.com/gh/football', sportUrls: { soccer: 'https://www.msport.com/gh/football', basketball: 'https://www.msport.com/gh/basketball', tennis: 'https://www.msport.com/gh/tennis', cricket: 'https://www.msport.com/gh/cricket', mma: 'https://www.msport.com/gh/mma' } },
+  '22bet':       { name: '22Bet',        momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://22bet.com.gh', sportUrls: { soccer: 'https://22bet.com.gh/prematch?sport=Football', basketball: 'https://22bet.com.gh/prematch?sport=Basketball', tennis: 'https://22bet.com.gh/prematch?sport=Tennis', cricket: 'https://22bet.com.gh/prematch?sport=Cricket', mma: 'https://22bet.com.gh/prematch?sport=MMA' } },
+  paripesa:      { name: 'Paripesa',     momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://paripesa.top', sportUrls: { soccer: 'https://paripesa.top/sport/football', basketball: 'https://paripesa.top/sport/basketball', tennis: 'https://paripesa.top/sport/tennis', cricket: 'https://paripesa.top/sport/cricket', mma: 'https://paripesa.top/sport/mma' } },
 };
 
 const API_BOOKS = Object.entries(BOOKS).filter(([,b]) => !b.manual).map(([k]) => k);
@@ -449,8 +451,9 @@ function avgPPG(games) {
 // whatever's available up to FORM_BASELINE_WINDOW, so it degrades gracefully
 // early in a season rather than demanding a full 30 games before saying
 // anything).
-function getFormDivergence(sportKey, teamName) {
-  const league = TEAM_FORM[sportKey];
+function getFormDivergence(sportKey, teamName, teamForm) {
+  const source = teamForm || TEAM_FORM; // fall back to empty constant if not yet loaded
+  const league = source[sportKey];
   if (!league) return null;
   const key = normaliseTeamName(teamName);
   const games = league[key];
@@ -477,8 +480,8 @@ function getFormDivergence(sportKey, teamName) {
 // getFormContextForOutcome — only meaningful for a bet on a specific team
 // (not the Draw), so this is looked up per-outcome in findEVBets using
 // whichever side (home/away) the outcome actually refers to.
-function getFormContextForOutcome(sportKey, teamName) {
-  return getFormDivergence(sportKey, teamName);
+function getFormContextForOutcome(sportKey, teamName, teamForm) {
+  return getFormDivergence(sportKey, teamName, teamForm);
 }
 
 const MOCK = [
@@ -547,7 +550,7 @@ function normaliseOutcome(name, homeTeam, awayTeam) {
   return n; // fallback — keeps original normalised
 }
 
-function findEVBets(events, minEV = 2, mode = 'all', userRegion = null) {
+function findEVBets(events, minEV = 2, mode = 'all', userRegion = null, teamForm = null) {
   const runMode = (sharpBooks, filterWA) => {
     const evBets = [];
     for (const ev of events) {
@@ -627,7 +630,7 @@ function findEVBets(events, minEV = 2, mode = 'all', userRegion = null) {
               // Form-divergence context: only attached to team-outcome bets
               // (not Draw), and only once TEAM_FORM has real match history
               // logged for that team — null otherwise, never a fabricated 0.
-              formContext: (!isDraw && outcomeTeam) ? getFormContextForOutcome(ev.sport_key, outcomeTeam) : null,
+              formContext: (!isDraw && outcomeTeam) ? getFormContextForOutcome(ev.sport_key, outcomeTeam, teamForm) : null,
             });
           }
         }
@@ -871,6 +874,8 @@ const [apiKey, setApiKey] = useState('server');
   const [isDemo, setIsDemo] = useState(true);
   const [isDemoEV, setIsDemoEV] = useState(true);
   const [waHealth, setWaHealth] = useState(null);
+  const [scanHealth, setScanHealth] = useState(null); // WA book coverage from last scan
+  const [showScanHealth, setShowScanHealth] = useState(false); // expand/collapse detail panel
   const [sel, setSel] = useState(null);
   const [stake, setStake] = useState(500);
   const [currency, setCurrency] = useState('GHS');
@@ -891,6 +896,7 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [coCurrentOdds, setCoCurrentOdds] = useState('');
   const [coOffer, setCoOffer] = useState('');
   const [coLoadedBetId, setCoLoadedBetId] = useState(null);
+  const [partialPct, setPartialPct] = useState(50);
   useEffect(() => { betsRef.current = bets; }, [bets]);
   const [bankroll, setBankroll] = useState(() => { try { return parseFloat(localStorage.getItem('arb_bankroll') || '500'); } catch { return 500; } });
   const [referrals, setReferrals] = useState(() => {
@@ -937,7 +943,6 @@ useEffect(() => {
   const [analyzingId, setAnalyzingId] = useState(null);
   const [middles, setMiddles] = useState([]);
   const [middlesWA, setMiddlesWA] = useState([]); // West Africa middles — both legs accessible
-  const [waDebug, setWaDebug] = useState(null); // TEMP: on-screen WA diagnostics (no dev tools needed)
   const [middleSection, setMiddleSection] = useState('global'); // 'global' | 'wa'
   const [steam, setSteam] = useState([]);
   const [bestOdds, setBestOdds] = useState([]);
@@ -945,6 +950,7 @@ useEffect(() => {
   const [lineshopSection, setLineshopSection] = useState('global'); // 'global' | 'wa'
   const [edgeTab, setEdgeTab] = useState('lineshop'); // 'lineshop' | 'middle' | 'steam'
   const prevEventsRef = React.useRef([]);
+  const teamFormRef = React.useRef(TEAM_FORM);
 
   const fetchOdds = useCallback(async (key) => {
   if (!key) return;
@@ -1012,8 +1018,8 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     }
     const found = findArbs(all, 'global', userRegion);
     const foundArbsWA = findArbs(all, 'wa', userRegion);
-    const foundEV = findEVBets(all, minEV, 'global', userRegion);
-    const foundEVWA = findEVBets(all, minEV, 'wa', userRegion);
+    const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
+    const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
     if (found.length > 0) { setArbs(found); setIsDemo(false); setLastFetch(new Date()); }
     else { setArbs(MOCK); setIsDemo(true); }
     setArbsWAReal(foundArbsWA);
@@ -1029,30 +1035,25 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     setBestOdds(findBestOdds(all, 'global', userRegion));
     setBestOddsWA(bestOddsWAResult);
 
-    // ── TEMP DEBUG: diagnose why the WA section is empty ──────────────────────
-    // Remove once the root cause is confirmed.
-    (() => {
-      const keyCounts = {};
-      all.forEach(ev => (ev.bookmakers || []).forEach(bm => {
-        keyCounts[bm.key] = (keyCounts[bm.key] || 0) + 1;
-      }));
-      const accessibleSeen = Object.keys(keyCounts).filter(k => isBookAccessible(k, userRegion));
-      const unknownKeys = Object.keys(keyCounts).filter(k => !BOOKS[k]);
-      const eventsWith2PlusAccessible = all.filter(ev =>
-        (ev.bookmakers || []).filter(bm => isBookAccessible(bm.key, userRegion)).length >= 2
-      ).length;
-      const debugInfo = {
-        totalEvents: all.length,
-        keyCounts,
-        accessibleSeen,
-        unknownKeys,
-        eventsWith2PlusAccessible,
-        bestOddsWACount: bestOddsWAResult.length,
-        middlesWACount: middlesWAResult.length,
-      };
-      console.log('[WA debug]', debugInfo);
-      setWaDebug(debugInfo);
-    })();
+    // ── SCAN HEALTH ─────────────────────────────────────────────────────────────
+    // Track which WA-accessible books were actually seen in this scan, and how
+    // many events had enough coverage to produce arbs/EV for West Africa users.
+    const WA_BOOKS = Object.entries(BOOKS).filter(([,b]) => b.wa).map(([k]) => k);
+    const seenKeys = new Set(all.flatMap(ev => (ev.bookmakers || []).map(b => b.key)));
+    const waBookStatus = WA_BOOKS.map(key => ({
+      key,
+      name: BOOKS[key].name,
+      seen: seenKeys.has(key),
+    }));
+    const eventsWithWACoverage = all.filter(ev =>
+      (ev.bookmakers || []).filter(bm => isBookAccessible(bm.key, userRegion)).length >= 2
+    ).length;
+    setScanHealth({
+      waBooks: waBookStatus,
+      eventsScanned: all.length,
+      eventsWithWACoverage,
+      scannedAt: new Date().toISOString(),
+    });
 
     // ── AUTO-CLV CAPTURE ────────────────────────────────────────────────────────
     // For pending EV bets: while the match hasn't kicked off, keep refreshing
@@ -1113,7 +1114,57 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
   const id = setInterval(() => { if (apiKey) fetchOdds(apiKey); }, 12 * 60 * 1000);
   return () => clearInterval(id);
 }, [apiKey, fetchOdds]);
-  
+
+  // ── TEAM FORM ────────────────────────────────────────────────────────────────
+  // Fetches from /api/team-form (backed by API-Football) once on mount, then
+  // every 6 hours — matching the server-side cache TTL so we never hammer the
+  // upstream API. Falls back gracefully to the empty TEAM_FORM skeleton if the
+  // endpoint isn't configured yet (API_FOOTBALL_KEY not set in Vercel env).
+  const [teamForm, setTeamForm] = useState(TEAM_FORM);
+  const [teamFormLoading, setTeamFormLoading] = useState(false);
+  const [teamFormError, setTeamFormError] = useState('');
+
+  const fetchTeamForm = useCallback(async () => {
+    setTeamFormLoading(true);
+    setTeamFormError('');
+    try {
+      // season=2024 = the 2024/25 season (API-Football keys by start year).
+      // The 2025/26 season just ended but API-Football hasn't published its
+      // finished fixtures yet under season=2025 — switch to 2025 once they do.
+      const res = await fetch('/api/team-form?sport=all&season=2024');
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.warn('[team-form] fetch failed', res.status, body);
+        setTeamFormError('Team form unavailable (' + res.status + ')');
+        return;
+      }
+      const json = await res.json();
+      if (!json.TEAM_FORM) {
+        console.warn('[team-form] unexpected response shape', json);
+        setTeamFormError('Team form unavailable (bad response)');
+        return;
+      }
+      // Merge into the skeleton so missing leagues stay as {} not undefined
+      setTeamForm(prev => {
+        const merged = { ...prev, ...json.TEAM_FORM };
+        teamFormRef.current = merged; // keep ref in sync for fetchOdds
+        return merged;
+      });
+      console.log('[team-form] loaded', Object.keys(json.TEAM_FORM).length, 'leagues, season', json.season);
+    } catch (err) {
+      console.warn('[team-form] fetch threw', err);
+      setTeamFormError('Team form unavailable');
+    } finally {
+      setTeamFormLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTeamForm();
+    const id = setInterval(fetchTeamForm, 6 * 60 * 60 * 1000); // refresh every 6h
+    return () => clearInterval(id);
+  }, [fetchTeamForm]);
+
   useEffect(() => { try { localStorage.setItem('arb_bets', JSON.stringify(bets)); } catch {} }, [bets]);
   useEffect(() => { try { localStorage.setItem('arb_bankroll', bankroll.toString()); } catch {} }, [bankroll]);
 
@@ -1236,18 +1287,19 @@ const analyzeArb = async (arb) => {
         e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ ' + scanProgress.sport + '...' : '● ' + filteredArbs.length + ' arbs'),
         lastFetch && e('span', { style: st.badge('#1f2937', '#9ca3af') }, lastFetch.toLocaleTimeString()),
         isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, '⚠ Demo'),
-        waHealth && (() => {
-          const books = Object.entries(waHealth);
-          const upCount = books.filter(([, h]) => h && h.ok).length;
-          const allUp = upCount === books.length;
-          const allDown = upCount === 0;
+        scanHealth && (() => {
+          const { waBooks, eventsWithWACoverage, eventsScanned } = scanHealth;
+          const seenCount = waBooks.filter(b => b.seen).length;
+          const allUp = seenCount === waBooks.length;
+          const allDown = seenCount === 0;
           const bg = allUp ? '#052e16' : allDown ? '#450a0a' : '#451a03';
           const fg = allUp ? '#6ee7b7' : allDown ? '#fca5a5' : '#fcd34d';
           const icon = allUp ? '✓' : allDown ? '✕' : '⚠';
           return e('span', {
-            style: st.badge(bg, fg),
-            title: books.map(([name, h]) => name + ': ' + (h && h.ok ? 'live' : (h && h.reason) || 'unknown')).join(' · '),
-          }, icon + ' WA ' + upCount + '/' + books.length);
+            onClick: () => setShowScanHealth(v => !v),
+            style: { ...st.badge(bg, fg), cursor: 'pointer' },
+            title: 'Tap to see scan health details',
+          }, icon + ' WA ' + seenCount + '/' + waBooks.length);
         })(),
         e('button', { onClick: () => setShowSetup(v => !v), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 10px' } }, apiKey ? '⚙ Connected' : 'Connect Live ↗')
       ),
@@ -1256,6 +1308,30 @@ const analyzeArb = async (arb) => {
         e('div', { style: { display: 'flex', gap: 8 } },
           e('input', { value: apiInput, onChange: ev => setApiInput(ev.target.value), placeholder: 'Paste Odds API key...', style: { ...st.input, flex: 1, background: '#1f2937', borderColor: '#374151', color: '#f9fafb' } }),
           e('button', { onClick: saveKey, style: st.btn('primary') }, 'Save')
+        )
+      ),
+      showScanHealth && scanHealth && e('div', { style: { background: '#111827', borderTop: '1px solid #1f2937', padding: '10px 14px' } },
+        e('div', { style: { fontSize: 12, fontWeight: 700, color: '#9ca3af', marginBottom: 8, display: 'flex', justifyContent: 'space-between' } },
+          e('span', null, '🇬🇭 WA Scan Health'),
+          e('span', { style: { fontSize: 11 } }, 'Last scan: ' + new Date(scanHealth.scannedAt).toLocaleTimeString())
+        ),
+        e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 } },
+          scanHealth.waBooks.map(b =>
+            e('div', { key: b.key, style: { display: 'flex', alignItems: 'center', gap: 6, background: b.seen ? '#052e16' : '#1f2937', borderRadius: 8, padding: '5px 8px' } },
+              e('span', null, b.seen ? '✅' : '⬜'),
+              e('span', { style: { fontSize: 12, color: b.seen ? '#6ee7b7' : '#6b7280', fontWeight: b.seen ? 600 : 400 } }, b.name)
+            )
+          )
+        ),
+        e('div', { style: { display: 'flex', gap: 8 } },
+          e('div', { style: { flex: 1, background: '#1f2937', borderRadius: 8, padding: '8px 10px', textAlign: 'center' } },
+            e('div', { style: { fontSize: 20, fontWeight: 700, color: '#f9fafb' } }, scanHealth.eventsScanned),
+            e('div', { style: { fontSize: 11, color: '#6b7280' } }, 'total events')
+          ),
+          e('div', { style: { flex: 1, background: scanHealth.eventsWithWACoverage > 0 ? '#052e16' : '#1f2937', borderRadius: 8, padding: '8px 10px', textAlign: 'center' } },
+            e('div', { style: { fontSize: 20, fontWeight: 700, color: scanHealth.eventsWithWACoverage > 0 ? '#6ee7b7' : '#6b7280' } }, scanHealth.eventsWithWACoverage),
+            e('div', { style: { fontSize: 11, color: '#6b7280' } }, 'with WA coverage')
+          )
         )
       )
     ),
@@ -1276,6 +1352,13 @@ const analyzeArb = async (arb) => {
       const haveInputs = stakeN > 0 && oddsN > 0 && curOddsN > 0;
       const margin = haveInputs && fairValue > 0 ? ((fairValue - offerN) / fairValue) * 100 : null;
       const pendingBets = bets.filter(b => b.status === 'pending' && b.outcomes && b.outcomes[0]);
+
+      // Partial cash out math
+      const partialFrac = partialPct / 100;
+      const partialCashNow = offerN * partialFrac;               // guaranteed cash received now
+      const partialStakeRiding = stakeN * (1 - partialFrac);    // effective stake still at risk
+      const partialWinPayout = potentialPayout * (1 - partialFrac); // extra payout if remaining leg wins
+      const partialBreakEven = partialCashNow;                   // worst case: already secured this
 
       return [
         e('div', { key: 'intro', style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1e3a8a', lineHeight: 1.6 } },
@@ -1335,6 +1418,43 @@ const analyzeArb = async (arb) => {
               margin > 0
                 ? 'Pure expected value says hold — but holding means risking the full stake for a payout that may not come. ' + currency + offerN.toFixed(2) + ' guaranteed now vs ' + currency + fairValue.toFixed(2) + ' expected (but not guaranteed) if you wait.'
                 : 'Cashing out now beats the bet\u2019s own expected value AND removes the risk entirely — this is the rare case where cash-out is the clearly better move both ways.'
+            )
+          ),
+
+          // ── PARTIAL CASH OUT BREAKDOWN ────────────────────────────────────
+          offerN > 0 && e('div', { key: 'partial', style: { background: '#1f2937', borderRadius: 12, padding: '14px', marginTop: 4 } },
+            e('div', { style: { fontSize: 13, fontWeight: 700, color: '#f9fafb', marginBottom: 4 } }, '⚖️ Partial Cash Out'),
+            e('div', { style: { fontSize: 11, color: '#6b7280', marginBottom: 12, lineHeight: 1.5 } },
+              'Cash out a portion now, let the rest ride. Drag to find your risk/reward sweet spot.'
+            ),
+            e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 6 } },
+              e('span', { style: { fontSize: 12, color: '#9ca3af' } }, 'Cash out %'),
+              e('span', { style: { fontSize: 14, fontWeight: 700, color: '#f9fafb' } }, partialPct + '%')
+            ),
+            e('input', {
+              type: 'range', min: 0, max: 100, step: 5, value: partialPct,
+              onChange: ev => setPartialPct(parseInt(ev.target.value)),
+              style: { width: '100%', marginBottom: 14, accentColor: C.green }
+            }),
+            e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 } },
+              [
+                ['Cashing out now', currency + partialCashNow.toFixed(2), '#6ee7b7', '#052e16'],
+                ['Stake still at risk', currency + partialStakeRiding.toFixed(2), '#fca5a5', '#450a0a'],
+                ['Payout if remaining wins', currency + partialWinPayout.toFixed(2), '#93c5fd', '#1e3a8a'],
+                ['Break-even guaranteed', currency + partialBreakEven.toFixed(2), '#fcd34d', '#451a03'],
+              ].map(([label, val, fg, bg]) =>
+                e('div', { key: label, style: { background: bg, borderRadius: 8, padding: '8px 10px' } },
+                  e('div', { style: { fontSize: 10, color: fg, opacity: 0.8, marginBottom: 2 } }, label),
+                  e('div', { style: { fontSize: 16, fontWeight: 700, color: fg } }, val)
+                )
+              )
+            ),
+            e('div', { style: { background: '#111827', borderRadius: 8, padding: '10px 12px', fontSize: 12, color: '#9ca3af', lineHeight: 1.6 } },
+              partialPct === 0
+                ? '🎯 Holding everything. Full ' + currency + potentialPayout.toFixed(2) + ' payout if it wins, full ' + currency + stakeN.toFixed(2) + ' lost if not.'
+                : partialPct === 100
+                ? '🔒 Full cash out. ' + currency + offerN.toFixed(2) + ' locked in, no further exposure.'
+                : '🔀 Cashing ' + partialPct + '% locks in ' + currency + partialCashNow.toFixed(2) + ' now. The remaining ' + (100 - partialPct) + '% of your stake (' + currency + partialStakeRiding.toFixed(2) + ') stays in play — if it wins you collect an extra ' + currency + partialWinPayout.toFixed(2) + ', if it loses you keep only the ' + currency + partialCashNow.toFixed(2) + ' you already took. Your worst-case is ' + currency + (partialCashNow - stakeN).toFixed(2) + ' vs a full loss of -' + currency + stakeN.toFixed(2) + ' holding.'
             )
           )
         )
@@ -1748,15 +1868,36 @@ const analyzeArb = async (arb) => {
     })()
     ),
     tab === 'edge' && e('div', { style: st.section },
-      // ── TEMP: on-screen WA debug panel (no dev tools needed) ───────────────
-      waDebug && e('div', { style: { background: '#1f2937', borderRadius: 10, padding: '10px 12px', marginBottom: 12, fontSize: 11, color: '#e5e7eb', lineHeight: 1.6, fontFamily: 'monospace' } },
-        e('div', { style: { fontWeight: 700, color: '#6ee7b7', marginBottom: 6 } }, '🔎 WA DEBUG (run a scan to refresh)'),
-        e('div', null, 'Total events: ' + waDebug.totalEvents),
-        e('div', null, 'Events with 2+ accessible books: ' + waDebug.eventsWith2PlusAccessible),
-        e('div', null, 'bestOddsWA results: ' + waDebug.bestOddsWACount + ' | middlesWA results: ' + waDebug.middlesWACount),
-        e('div', { style: { marginTop: 6, color: '#fcd34d' } }, 'Accessible keys seen: ' + (waDebug.accessibleSeen.join(', ') || '(none)')),
-        e('div', { style: { marginTop: 4, color: '#fca5a5' } }, 'Unknown keys (not in BOOKS): ' + (waDebug.unknownKeys.join(', ') || '(none)')),
-        e('div', { style: { marginTop: 6, color: '#9ca3af' } }, 'All key counts: ' + JSON.stringify(waDebug.keyCounts))
+      // ── Scan Health Panel ───────────────────────────────────────────────────
+      scanHealth && e('div', { style: { background: '#1f2937', borderRadius: 12, padding: '12px 14px', marginBottom: 14 } },
+        e('div', { style: { fontSize: 13, fontWeight: 700, color: '#f9fafb', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+          e('span', null, '🇬🇭 West Africa Scan Health'),
+          e('span', { style: { fontSize: 11, color: '#6b7280' } }, new Date(scanHealth.scannedAt).toLocaleTimeString())
+        ),
+        e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 } },
+          scanHealth.waBooks.map(b =>
+            e('div', { key: b.key, style: { display: 'flex', alignItems: 'center', gap: 6, background: b.seen ? '#052e16' : '#111827', borderRadius: 8, padding: '6px 10px' } },
+              e('span', null, b.seen ? '✅' : '⬜'),
+              e('div', null,
+                e('div', { style: { fontSize: 12, fontWeight: 600, color: b.seen ? '#6ee7b7' : '#6b7280' } }, b.name),
+                e('div', { style: { fontSize: 10, color: b.seen ? '#4ade80' : '#4b5563' } }, b.seen ? 'Live in scan' : 'Not seen')
+              )
+            )
+          )
+        ),
+        e('div', { style: { display: 'flex', gap: 8 } },
+          e('div', { style: { flex: 1, background: '#111827', borderRadius: 8, padding: '8px 10px', textAlign: 'center' } },
+            e('div', { style: { fontSize: 22, fontWeight: 700, color: '#f9fafb' } }, scanHealth.eventsScanned),
+            e('div', { style: { fontSize: 11, color: '#6b7280', marginTop: 2 } }, 'total events scanned')
+          ),
+          e('div', { style: { flex: 1, background: scanHealth.eventsWithWACoverage > 0 ? '#052e16' : '#111827', borderRadius: 8, padding: '8px 10px', textAlign: 'center' } },
+            e('div', { style: { fontSize: 22, fontWeight: 700, color: scanHealth.eventsWithWACoverage > 0 ? '#6ee7b7' : '#6b7280' } }, scanHealth.eventsWithWACoverage),
+            e('div', { style: { fontSize: 11, color: '#6b7280', marginTop: 2 } }, 'events with WA coverage')
+          )
+        ),
+        scanHealth.eventsWithWACoverage === 0 && e('div', { style: { marginTop: 10, fontSize: 12, color: '#f59e0b', background: '#451a03', borderRadius: 8, padding: '8px 10px' } },
+          '⚠ No events had 2+ WA books priced. This means Betway/1xBet/MelBet aren\'t appearing in the Odds API feed for your selected sports right now — likely off-season or those books aren\'t covered for the current leagues.'
+        )
       ),
       // Sub-tab nav
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
