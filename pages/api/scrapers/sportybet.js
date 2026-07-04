@@ -145,6 +145,17 @@ async function fetchSportybetOdds(sportKey) {
         eventTime: sample.eventTime,
       }));
       console.log('[SportyBet] sample raw keys:', Object.keys(sample).join(', '));
+      // Dump first market to diagnose wrong odds being parsed
+      const firstMarket = sample.markets?.[0] || sample.odds?.[0] || sample.marketList?.[0];
+      if (firstMarket) {
+        console.log('[SportyBet] sample first market:', JSON.stringify({
+          id: firstMarket.id,
+          marketId: firstMarket.marketId,
+          marketType: firstMarket.marketType,
+          name: firstMarket.name,
+          outcomes: (firstMarket.outcomes || firstMarket.selections || firstMarket.odds || []).slice(0, 3),
+        }));
+      }
     }
 
     // Try normalising with inline odds first
@@ -191,9 +202,13 @@ function normaliseEvent(ev, sportKey) {
   try {
     const homeTeam = ev.homeTeamName || ev.home?.name || ev.homeName || ev.homeTeam || 'Home';
     const awayTeam = ev.awayTeamName || ev.away?.name  || ev.awayName || ev.awayTeam || 'Away';
-    let startMs = ev.estimateStartTime || ev.startTime || ev.beginTime || null;
+    let startMs = ev.estimateStartTime || ev.startTime || ev.beginTime || ev.matchTime || ev.kickOff || ev.date || ev.startDate || null;
     if (startMs && startMs < 1e12) startMs = startMs * 1000;
-    if (!startMs) return null;
+    // Log raw event structure for first event to help diagnose field names
+    if (!startMs) {
+      console.log('[SportyBet] no timestamp found, raw event:', JSON.stringify(ev).slice(0, 500));
+      return null;
+    }
 
     const h2hOutcomes = [], totalsOutcomes = [], ahOutcomes = [], bttsOutcomes = [];
     for (const market of (ev.markets || ev.odds || ev.marketList || ev.quickMarkets || [])) {
