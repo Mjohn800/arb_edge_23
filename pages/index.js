@@ -502,14 +502,10 @@ function findArbs(events, mode = 'global', userRegion = null) {
       for (const mkt of (bm.markets || [])) {
         if (!['h2h', 'spreads', 'totals', 'outrights'].includes(mkt.key)) continue;
         for (const o of mkt.outcomes) {
-          // Build a composite key that includes the line so that "Over 2.5" and
-          // "Over 4.5" are never confused — without this, two books with different
-          // total lines get merged into one outcome, producing nonsense like
-          // "Under 13.50 goals" because the line from one book overwrites another.
-          const lineStr = o.point != null ? '_' + o.point : '';
-          const compKey = mkt.key + '|' + o.name + lineStr;
-          if (!best[compKey] || o.price > best[compKey].price) {
-            // Compute a human-readable label for the card
+          // Use outcome name as the dedup key — same as before, so the best
+          // price per outcome across books is correctly found. The line (point)
+          // is stored separately for display, not used in the key.
+          if (!best[o.name] || o.price > best[o.name].price) {
             let displayLabel = o.name;
             let marketLabel = 'Match Winner';
             if (mkt.key === 'totals') {
@@ -521,7 +517,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
             } else if (mkt.key === 'outrights') {
               marketLabel = 'Outright';
             }
-            best[compKey] = { price: o.price, book: bm.key, bookName: bm.title, displayLabel, marketLabel, point: o.point ?? null, marketKey: mkt.key };
+            best[o.name] = { price: o.price, book: bm.key, bookName: bm.title, displayLabel, marketLabel, marketKey: mkt.key, point: o.point ?? null };
           }
         }
       }
