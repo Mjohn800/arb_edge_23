@@ -76,7 +76,7 @@ async function fetchBetanoOdds(sportKey) {
     if (res.status === 403 || res.status === 429) {
       const scraperKey = process.env.SCRAPER_API_KEY;
       if (scraperKey) {
-        const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&country_code=gh`;
+        const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&country_code=gh&premium=true`;
         console.log('[Betano] geo-blocked, retrying via ScraperAPI...');
         finalRes = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
       } else {
