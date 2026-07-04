@@ -188,6 +188,12 @@ export default async function handler(req, res) {
         (ev.bookmakers || []).forEach(bm => { bm._wa = WA_BOOKS.includes(bm.key); });
       });
 
+      // Diagnostic: log all unique bookmaker keys seen in this response
+      const allKeys = [...new Set(globalData.flatMap(ev => (ev.bookmakers || []).map(b => b.key)))];
+      const waKeysFound = allKeys.filter(k => WA_BOOKS.includes(k));
+      console.log('[odds][keys]', sport, '-> all keys:', allKeys.join(', '));
+      console.log('[odds][keys]', sport, '-> WA keys found:', waKeysFound.join(', ') || '(none)');
+
       break; // got data, stop trying keys
     } catch (err) {
       lastError = err.message;
