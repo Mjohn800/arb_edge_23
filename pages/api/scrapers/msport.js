@@ -162,7 +162,7 @@ function normaliseEvent(ev, sportKey) {
     const startMs  = getStartMs(ev);
     if (!startMs) return null;
 
-    const h2hOutcomes = [], totalsOutcomes = [];
+    const h2hOutcomes = [], totalsOutcomes = [], ahOutcomes = [], bttsOutcomes = [];
     for (const market of (ev.markets || ev.oddsList || ev.marketList || ev.odds || [])) {
       const mId = String(market.marketType || market.marketId || market.id || '');
       for (const sel of (market.odds || market.outcomes || market.selections || [])) {
@@ -175,12 +175,21 @@ function normaliseEvent(ev, sportKey) {
         } else if (mId === '18' || mId === '18_1') {
           const raw = (sel.name || sel.oddName || '').toLowerCase();
           totalsOutcomes.push({ name: raw.includes('over') ? 'Over' : 'Under', price, point: parseFloat(sel.handicap || sel.line || sel.point || 2.5) });
+        } else if (mId === '10' || mId === '10_1') {
+          const raw = (sel.name || sel.oddName || '').toLowerCase();
+          const isHome = raw === '1' || raw.includes('home') || raw.includes('w1');
+          ahOutcomes.push({ name: isHome ? homeTeam : awayTeam, price, point: parseFloat(sel.handicap || sel.line || sel.point || 0) });
+        } else if (mId === '29' || mId === '29_1') {
+          const raw = (sel.name || sel.oddName || '').toLowerCase();
+          bttsOutcomes.push({ name: raw.includes('yes') || raw === '1' ? 'Yes' : 'No', price });
         }
       }
     }
     const markets = [];
-    if (h2hOutcomes.length >= 2) markets.push({ key: 'h2h', outcomes: h2hOutcomes });
-    if (totalsOutcomes.length >= 2) markets.push({ key: 'totals', outcomes: totalsOutcomes });
+    if (h2hOutcomes.length >= 2)   markets.push({ key: 'h2h',     outcomes: h2hOutcomes });
+    if (totalsOutcomes.length >= 2) markets.push({ key: 'totals',  outcomes: totalsOutcomes });
+    if (ahOutcomes.length >= 2)     markets.push({ key: 'spreads', outcomes: ahOutcomes });
+    if (bttsOutcomes.length >= 2)   markets.push({ key: 'btts',    outcomes: bttsOutcomes });
     if (markets.length === 0) return null;
 
     return {
