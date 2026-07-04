@@ -498,22 +498,53 @@ function findArbs(events, mode = 'global', userRegion = null) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
     const best = {};
     for (const bm of ev.bookmakers) {
-      // West Africa section: only consider accessible books when picking the best price
-      // per outcome, so a "WA arb" is actually placeable from WA — not just a global arb
-      // that happened to land on an accessible book for every leg by coincidence.
       if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
       for (const mkt of (bm.markets || [])) {
         if (!['h2h', 'spreads', 'totals', 'outrights'].includes(mkt.key)) continue;
         for (const o of mkt.outcomes) {
-          if (!best[o.name] || o.price > best[o.name].price)
-            best[o.name] = { price: o.price, book: bm.key, bookName: bm.title };
+          // Build a composite key that includes the line so that "Over 2.5" and
+          // "Over 4.5" are never confused — without this, two books with different
+          // total lines get merged into one outcome, producing nonsense like
+          // "Under 13.50 goals" because the line from one book overwrites another.
+          const lineStr = o.point != null ? '_' + o.point : '';
+          const compKey = mkt.key + '|' + o.name + lineStr;
+          if (!best[compKey] || o.price > best[compKey].price) {
+            // Compute a human-readable label for the card
+            let displayLabel = o.name;
+            let marketLabel = 'Match Winner';
+            if (mkt.key === 'totals') {
+              marketLabel = 'Over/Under';
+              displayLabel = o.point != null ? o.name + ' ' + o.point : o.name;
+            } else if (mkt.key === 'spreads') {
+              marketLabel = 'Asian Handicap';
+              displayLabel = o.point != null ? o.name + ' (' + (o.point > 0 ? '+' : '') + o.point + ')' : o.name;
+            } else if (mkt.key === 'outrights') {
+              marketLabel = 'Outright';
+            }
+            best[compKey] = { price: o.price, book: bm.key, bookName: bm.title, displayLabel, marketLabel, point: o.point ?? null, marketKey: mkt.key };
+          }
         }
       }
     }
     const outs = Object.entries(best);
     if (outs.length < 2) continue;
     const imp = outs.reduce((s, [, o]) => s + 1 / o.price, 0);
-    if (imp < 1) arbs.push({ id: ev.id, sport: ev.sport_key, match: ev.home_team + ' vs ' + ev.away_team, commenceTime: ev.commence_time, margin: parseFloat((((1 - imp) / imp) * 100).toFixed(2)), outcomes: outs.map(([name, o]) => ({ label: name, book: o.book, bookName: o.bookName, odds: o.price })) });
+    if (imp < 1) arbs.push({
+      id: ev.id,
+      sport: ev.sport_key,
+      match: ev.home_team + ' vs ' + ev.away_team,
+      commenceTime: ev.commence_time,
+      margin: parseFloat((((1 - imp) / imp) * 100).toFixed(2)),
+      outcomes: outs.map(([, o]) => ({
+        label: o.displayLabel,
+        marketLabel: o.marketLabel,
+        marketKey: o.marketKey,
+        point: o.point,
+        book: o.book,
+        bookName: o.bookName,
+        odds: o.price,
+      }))
+    });
   }
   return arbs.sort((a, b) => b.margin - a.margin);
 }
@@ -1572,6 +1603,13 @@ const analyzeArb = async (arb) => {
       ),
  filteredArbs.map(arb => {
         const info = getSportInfo(arb.sport);
+        // Group outcomes by market so mixed-market arbs are easy to read
+        const marketGroups = {};
+        arb.outcomes.forEach(o => {
+          const mk = o.marketLabel || 'Match Winner';
+          (marketGroups[mk] = marketGroups[mk] || []).push(o);
+        });
+        const multiMarket = Object.keys(marketGroups).length > 1;
         return e('div', { key: arb.id, style: st.card(sel && sel.id === arb.id, isDemo), onClick: () => setSel(sel && sel.id === arb.id ? null : arb) },
           e('div', { style: st.cardRow },
             e('div', null, e('div', { style: st.sportLabel }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(arb.commenceTime)), e('div', { style: st.matchTitle }, arb.match)),
@@ -1581,14 +1619,20 @@ const analyzeArb = async (arb) => {
               e('span', { style: st.profitBadge(arb.margin) }, '+' + arb.margin.toFixed(1) + '%')
             )
           ),
-          e('div', { style: st.oddsGrid(arb.outcomes.length) },
-            arb.outcomes.map((o, i) => e('div', { key: i, style: st.oddsCell },
-              e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 2 } }, o.label),
-              e('div', { style: { fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 1 } }, o.bookName),
-              !isBookAccessible(o.book, userRegion) && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b91c1c', marginBottom: 1 } }, '🚫 Not accessible'),
-              e('div', { style: { fontSize: 14, fontWeight: 700, color: C.green } }, o.odds.toFixed(2)),
-              e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportUrls[arb.sport.split('_')[0]]) || (BOOKS[o.book] && BOOKS[o.book].url) || '#', target: '_blank', style: { display: 'block', marginTop: 4, fontSize: 10, fontWeight: 700, color: '#fff', background: C.green, borderRadius: 6, padding: '3px 6px', textDecoration: 'none', textAlign: 'center' } }, 'Bet Now →')
-            ))
+          Object.entries(marketGroups).map(([mktLabel, outs]) =>
+            e('div', { key: mktLabel },
+              multiMarket && e('div', { style: { fontSize: 10, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginTop: 8, marginBottom: 4 } }, mktLabel),
+              e('div', { style: st.oddsGrid(outs.length) },
+                outs.map((o, i) => e('div', { key: i, style: st.oddsCell },
+                  e('div', { style: { fontSize: 10, color: C.muted, marginBottom: 1 } }, mktLabel + (multiMarket ? '' : '')),
+                  e('div', { style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 1 } }, o.label),
+                  e('div', { style: { fontSize: 12, color: C.muted, marginBottom: 1 } }, o.bookName),
+                  !isBookAccessible(o.book, userRegion) && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b91c1c', marginBottom: 1 } }, '🚫 Not accessible'),
+                  e('div', { style: { fontSize: 16, fontWeight: 700, color: C.green } }, o.odds.toFixed(2)),
+                  e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportUrls[arb.sport.split('_')[0]]) || (BOOKS[o.book] && BOOKS[o.book].url) || '#', target: '_blank', style: { display: 'block', marginTop: 4, fontSize: 10, fontWeight: 700, color: '#fff', background: C.green, borderRadius: 6, padding: '3px 6px', textDecoration: 'none', textAlign: 'center' } }, 'Bet Now →')
+                ))
+              )
+            )
           ),
           sel && sel.id === arb.id && e('div', { style: { marginTop: 10, display: 'flex', gap: 8 } },
             e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →'),
