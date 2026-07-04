@@ -88,7 +88,21 @@ async function fetchSportybetOdds(sportKey) {
         } else {
           const json = await res.json();
           const data = json?.data;
-          rawEvents = data?.events || data?.tournamentEvents || data?.matchList || data?.list || (Array.isArray(data) ? data : []);
+          // pcEvents returns category/tournament wrappers with nested events arrays
+          // e.g. [{id, name, categoryName, events: [{eventId, homeTeamName, ...}]}]
+          // Try flat events first, then unwrap from wrapper objects
+          const flat = data?.events || data?.tournamentEvents || data?.matchList || data?.list;
+          if (flat && flat.length > 0 && !flat[0]?.events) {
+            rawEvents = flat;
+          } else {
+            // Wrapper shape — flatten the nested events arrays
+            const wrappers = flat || (Array.isArray(data) ? data : []);
+            rawEvents = wrappers.flatMap(w => w.events || w.matches || w.items || []);
+            if (rawEvents.length === 0 && wrappers.length > 0) {
+              // Last resort: maybe data itself is the wrapper array
+              rawEvents = (Array.isArray(data) ? data : []).flatMap(w => w.events || w.matches || []);
+            }
+          }
           console.log('[SportyBet] pcEvents →', rawEvents.length, 'events for', sportKey);
         }
       } catch (err) {
