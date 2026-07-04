@@ -24,6 +24,8 @@ const BOOKS = {
   sportybet:     { name: 'SportyBet',    momo: true,  licensed: true,  manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.sportybet.com/gh/sport/football', sportUrls: { soccer: 'https://www.sportybet.com/gh/sport/football', basketball: 'https://www.sportybet.com/gh/sport/basketball', tennis: 'https://www.sportybet.com/gh/sport/tennis', cricket: 'https://www.sportybet.com/gh/sport/cricket', mma: 'https://www.sportybet.com/gh/sport/mma' } },
   betano:        { name: 'Betano',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.betano.com.gh/sport/football', sportUrls: { soccer: 'https://www.betano.com.gh/sport/football', basketball: 'https://www.betano.com.gh/sport/basketball', tennis: 'https://www.betano.com.gh/sport/tennis', cricket: 'https://www.betano.com.gh/sport/cricket', mma: 'https://www.betano.com.gh/sport/mma' } },
   msport:        { name: 'MSport',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.msport.com/gh/football', sportUrls: { soccer: 'https://www.msport.com/gh/football', basketball: 'https://www.msport.com/gh/basketball', tennis: 'https://www.msport.com/gh/tennis', cricket: 'https://www.msport.com/gh/cricket', mma: 'https://www.msport.com/gh/mma' } },
+  '22bet':       { name: '22Bet',        momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://22bet.com.gh', sportUrls: { soccer: 'https://22bet.com.gh/prematch?sport=Football', basketball: 'https://22bet.com.gh/prematch?sport=Basketball', tennis: 'https://22bet.com.gh/prematch?sport=Tennis', cricket: 'https://22bet.com.gh/prematch?sport=Cricket', mma: 'https://22bet.com.gh/prematch?sport=MMA' } },
+  paripesa:      { name: 'Paripesa',     momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://paripesa.top', sportUrls: { soccer: 'https://paripesa.top/sport/football', basketball: 'https://paripesa.top/sport/basketball', tennis: 'https://paripesa.top/sport/tennis', cricket: 'https://paripesa.top/sport/cricket', mma: 'https://paripesa.top/sport/mma' } },
 };
 
 const API_BOOKS = Object.entries(BOOKS).filter(([,b]) => !b.manual).map(([k]) => k);
@@ -893,6 +895,7 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [coCurrentOdds, setCoCurrentOdds] = useState('');
   const [coOffer, setCoOffer] = useState('');
   const [coLoadedBetId, setCoLoadedBetId] = useState(null);
+  const [partialPct, setPartialPct] = useState(50);
   useEffect(() => { betsRef.current = bets; }, [bets]);
   const [bankroll, setBankroll] = useState(() => { try { return parseFloat(localStorage.getItem('arb_bankroll') || '500'); } catch { return 500; } });
   const [referrals, setReferrals] = useState(() => {
@@ -1349,6 +1352,13 @@ const analyzeArb = async (arb) => {
       const margin = haveInputs && fairValue > 0 ? ((fairValue - offerN) / fairValue) * 100 : null;
       const pendingBets = bets.filter(b => b.status === 'pending' && b.outcomes && b.outcomes[0]);
 
+      // Partial cash out math
+      const partialFrac = partialPct / 100;
+      const partialCashNow = offerN * partialFrac;               // guaranteed cash received now
+      const partialStakeRiding = stakeN * (1 - partialFrac);    // effective stake still at risk
+      const partialWinPayout = potentialPayout * (1 - partialFrac); // extra payout if remaining leg wins
+      const partialBreakEven = partialCashNow;                   // worst case: already secured this
+
       return [
         e('div', { key: 'intro', style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1e3a8a', lineHeight: 1.6 } },
           '💸 A cash-out offer locks in a result early instead of waiting for the bet to settle. This compares the offer against the bet\u2019s actual expected value right now — bookmakers typically build in extra margin on top of the normal vig, so cash-out offers are very often below fair value. Holding is the higher-EV move on average, but it carries variance that cashing out removes entirely — that trade-off is a real, personal risk-tolerance call, not just a math answer.'
@@ -1407,6 +1417,43 @@ const analyzeArb = async (arb) => {
               margin > 0
                 ? 'Pure expected value says hold — but holding means risking the full stake for a payout that may not come. ' + currency + offerN.toFixed(2) + ' guaranteed now vs ' + currency + fairValue.toFixed(2) + ' expected (but not guaranteed) if you wait.'
                 : 'Cashing out now beats the bet\u2019s own expected value AND removes the risk entirely — this is the rare case where cash-out is the clearly better move both ways.'
+            )
+          ),
+
+          // ── PARTIAL CASH OUT BREAKDOWN ────────────────────────────────────
+          offerN > 0 && e('div', { key: 'partial', style: { background: '#1f2937', borderRadius: 12, padding: '14px', marginTop: 4 } },
+            e('div', { style: { fontSize: 13, fontWeight: 700, color: '#f9fafb', marginBottom: 4 } }, '⚖️ Partial Cash Out'),
+            e('div', { style: { fontSize: 11, color: '#6b7280', marginBottom: 12, lineHeight: 1.5 } },
+              'Cash out a portion now, let the rest ride. Drag to find your risk/reward sweet spot.'
+            ),
+            e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 6 } },
+              e('span', { style: { fontSize: 12, color: '#9ca3af' } }, 'Cash out %'),
+              e('span', { style: { fontSize: 14, fontWeight: 700, color: '#f9fafb' } }, partialPct + '%')
+            ),
+            e('input', {
+              type: 'range', min: 0, max: 100, step: 5, value: partialPct,
+              onChange: ev => setPartialPct(parseInt(ev.target.value)),
+              style: { width: '100%', marginBottom: 14, accentColor: C.green }
+            }),
+            e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 } },
+              [
+                ['Cashing out now', currency + partialCashNow.toFixed(2), '#6ee7b7', '#052e16'],
+                ['Stake still at risk', currency + partialStakeRiding.toFixed(2), '#fca5a5', '#450a0a'],
+                ['Payout if remaining wins', currency + partialWinPayout.toFixed(2), '#93c5fd', '#1e3a8a'],
+                ['Break-even guaranteed', currency + partialBreakEven.toFixed(2), '#fcd34d', '#451a03'],
+              ].map(([label, val, fg, bg]) =>
+                e('div', { key: label, style: { background: bg, borderRadius: 8, padding: '8px 10px' } },
+                  e('div', { style: { fontSize: 10, color: fg, opacity: 0.8, marginBottom: 2 } }, label),
+                  e('div', { style: { fontSize: 16, fontWeight: 700, color: fg } }, val)
+                )
+              )
+            ),
+            e('div', { style: { background: '#111827', borderRadius: 8, padding: '10px 12px', fontSize: 12, color: '#9ca3af', lineHeight: 1.6 } },
+              partialPct === 0
+                ? '🎯 Holding everything. Full ' + currency + potentialPayout.toFixed(2) + ' payout if it wins, full ' + currency + stakeN.toFixed(2) + ' lost if not.'
+                : partialPct === 100
+                ? '🔒 Full cash out. ' + currency + offerN.toFixed(2) + ' locked in, no further exposure.'
+                : '🔀 Cashing ' + partialPct + '% locks in ' + currency + partialCashNow.toFixed(2) + ' now. The remaining ' + (100 - partialPct) + '% of your stake (' + currency + partialStakeRiding.toFixed(2) + ') stays in play — if it wins you collect an extra ' + currency + partialWinPayout.toFixed(2) + ', if it loses you keep only the ' + currency + partialCashNow.toFixed(2) + ' you already took. Your worst-case is ' + currency + (partialCashNow - stakeN).toFixed(2) + ' vs a full loss of -' + currency + stakeN.toFixed(2) + ' holding.'
             )
           )
         )
