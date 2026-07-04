@@ -7,7 +7,7 @@ import { fetchParipesaOdds }  from './scrapers/Paripesa';
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
 export const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet', '1xbet']; // same Pinnacle reference as global, output filtered to WA-accessible books client-side
-export const WA_BOOKS               = ['sportybet', 'betano', 'msport', '22bet', 'paripesa', 'melbet', 'betway', 'onexbet'];
+export const WA_BOOKS               = ['sportybet', 'betano', 'msport', '22bet', 'paripesa', 'melbet', 'betway'];
 
 // Real Odds-API bookmaker keys we actually compare for the GLOBAL feed.
 // NOTE: We use regions= instead of bookmakers= because the bookmakers= param
@@ -151,7 +151,7 @@ export default async function handler(req, res) {
 
   // ── 1. Try each API key until one succeeds ────────────────────────────────
   for (const key of keys) {
-    const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${key}&regions=${GLOBAL_REGIONS}&markets=${markets}&oddsFormat=decimal`;
+    const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${key}&regions=${GLOBAL_REGIONS}&markets=${markets}&oddsFormat=decimal&oddsState=live,upcoming`;
     try {
       const response = await fetch(url);
       console.log(`[odds] key ${keys.indexOf(key)+1} → status ${response.status}`);
@@ -187,12 +187,6 @@ export default async function handler(req, res) {
       globalData.forEach(ev => {
         (ev.bookmakers || []).forEach(bm => { bm._wa = WA_BOOKS.includes(bm.key); });
       });
-
-      // Diagnostic: log all unique bookmaker keys seen in this response
-      const allKeys = [...new Set(globalData.flatMap(ev => (ev.bookmakers || []).map(b => b.key)))];
-      const waKeysFound = allKeys.filter(k => WA_BOOKS.includes(k));
-      console.log('[odds][keys]', sport, '-> all keys:', allKeys.join(', '));
-      console.log('[odds][keys]', sport, '-> WA keys found:', waKeysFound.join(', ') || '(none)');
 
       break; // got data, stop trying keys
     } catch (err) {
