@@ -2,7 +2,7 @@ import { fetchSportybetOdds } from './scrapers/sportybet';
 import { fetchBetanoOdds }    from './scrapers/betano';
 import { fetchMsportOdds }    from './scrapers/msport';
 import { fetch22BetOdds }     from './scrapers/22bet';
-import { fetchParipesaOdds }  from './scrapers/paripesa';
+import { fetchParipesaOdds }  from './scrapers/Paripesa';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
