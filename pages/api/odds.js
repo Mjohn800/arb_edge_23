@@ -1,11 +1,13 @@
 import { fetchSportybetOdds } from './scrapers/sportybet';
 import { fetchBetanoOdds }    from './scrapers/betano';
 import { fetchMsportOdds }    from './scrapers/msport';
+import { fetch22BetOdds }     from './scrapers/22bet';
+import { fetchParipesaOdds }  from './scrapers/paripesa';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
 export const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet', '1xbet']; // same Pinnacle reference as global, output filtered to WA-accessible books client-side
-export const WA_BOOKS               = ['sportybet', 'betano', 'msport', 'melbet', 'betway'];
+export const WA_BOOKS               = ['sportybet', 'betano', 'msport', '22bet', 'paripesa', 'melbet', 'betway'];
 
 // Real Odds-API bookmaker keys we actually compare for the GLOBAL feed.
 // NOTE: We use regions= instead of bookmakers= because the bookmakers= param
@@ -39,6 +41,8 @@ const waHealth = {
   sportybet: { ok: null, reason: null, fetchedAt: null },
   betano:    { ok: null, reason: null, fetchedAt: null },
   msport:    { ok: null, reason: null, fetchedAt: null },
+  '22bet':   { ok: null, reason: null, fetchedAt: null },
+  paripesa:  { ok: null, reason: null, fetchedAt: null },
 };
 
 async function getWAOdds(sportKey) {
@@ -47,36 +51,42 @@ async function getWAOdds(sportKey) {
     return { events: cached.data, health: cached.health, fromCache: true };
   }
 
-  const [sportybet, betano, msport] = await Promise.allSettled([
+  const [sportybet, betano, msport, twobet, paripesa] = await Promise.allSettled([
     fetchSportybetOdds(sportKey),
     fetchBetanoOdds(sportKey),
     fetchMsportOdds(sportKey),
+    fetch22BetOdds(sportKey),
+    fetchParipesaOdds(sportKey),
   ]);
 
-  // Update health tracker for each book regardless of cache
   const extractStatus = (settled, fallbackReason) =>
     settled.status === 'fulfilled' && settled.value?.status
       ? settled.value.status
       : { ok: false, reason: fallbackReason, fetchedAt: new Date().toISOString() };
 
-  waHealth.sportybet = extractStatus(sportybet, 'promise_rejected: ' + (sportybet.reason?.message || 'unknown'));
-  waHealth.betano    = extractStatus(betano,    'promise_rejected: ' + (betano.reason?.message    || 'unknown'));
-  waHealth.msport    = extractStatus(msport,    'promise_rejected: ' + (msport.reason?.message    || 'unknown'));
+  waHealth.sportybet  = extractStatus(sportybet,  'promise_rejected: ' + (sportybet.reason?.message  || 'unknown'));
+  waHealth.betano     = extractStatus(betano,     'promise_rejected: ' + (betano.reason?.message     || 'unknown'));
+  waHealth.msport     = extractStatus(msport,     'promise_rejected: ' + (msport.reason?.message     || 'unknown'));
+  waHealth['22bet']   = extractStatus(twobet,     'promise_rejected: ' + (twobet.reason?.message     || 'unknown'));
+  waHealth.paripesa   = extractStatus(paripesa,   'promise_rejected: ' + (paripesa.reason?.message   || 'unknown'));
 
   const results = [
     ...(sportybet.status === 'fulfilled' ? sportybet.value?.events || [] : []),
     ...(betano.status    === 'fulfilled' ? betano.value?.events    || [] : []),
     ...(msport.status    === 'fulfilled' ? msport.value?.events    || [] : []),
+    ...(twobet.status    === 'fulfilled' ? twobet.value?.events    || [] : []),
+    ...(paripesa.status  === 'fulfilled' ? paripesa.value?.events  || [] : []),
   ];
 
-  // Surfaces the actual per-book event count for this sportKey — distinguishes
-  // "scraper reachable but found nothing for this sport" from a merge bug downstream.
-  console.log('[odds][WA]', sportKey, '-> sportybet:', sportybet.status === 'fulfilled' ? (sportybet.value?.events?.length ?? 0) : 'failed: ' + sportybet.reason?.message,
-    '| betano:', betano.status === 'fulfilled' ? (betano.value?.events?.length ?? 0) : 'failed: ' + betano.reason?.message,
-    '| msport:', msport.status === 'fulfilled' ? (msport.value?.events?.length ?? 0) : 'failed: ' + msport.reason?.message,
+  console.log('[odds][WA]', sportKey,
+    '-> sportybet:', sportybet.status === 'fulfilled' ? (sportybet.value?.events?.length ?? 0) : 'failed: ' + sportybet.reason?.message,
+    '| betano:',    betano.status    === 'fulfilled' ? (betano.value?.events?.length    ?? 0) : 'failed: ' + betano.reason?.message,
+    '| msport:',    msport.status    === 'fulfilled' ? (msport.value?.events?.length    ?? 0) : 'failed: ' + msport.reason?.message,
+    '| 22bet:',     twobet.status    === 'fulfilled' ? (twobet.value?.events?.length    ?? 0) : 'failed: ' + twobet.reason?.message,
+    '| paripesa:',  paripesa.status  === 'fulfilled' ? (paripesa.value?.events?.length  ?? 0) : 'failed: ' + paripesa.reason?.message,
     '| total:', results.length);
 
-  const health = { sportybet: waHealth.sportybet, betano: waHealth.betano, msport: waHealth.msport };
+  const health = { sportybet: waHealth.sportybet, betano: waHealth.betano, msport: waHealth.msport, '22bet': waHealth['22bet'], paripesa: waHealth.paripesa };
   waCache[sportKey] = { data: results, health, ts: Date.now() };
   return { events: results, health, fromCache: false };
 }
