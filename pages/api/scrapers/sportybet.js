@@ -146,16 +146,19 @@ async function fetchSportybetOdds(sportKey) {
       }));
       console.log('[SportyBet] sample raw keys:', Object.keys(sample).join(', '));
       // Dump first market to diagnose wrong odds being parsed
-      const firstMarket = sample.markets?.[0] || sample.odds?.[0] || sample.marketList?.[0];
-      if (firstMarket) {
-        console.log('[SportyBet] sample first market:', JSON.stringify({
-          id: firstMarket.id,
-          marketId: firstMarket.marketId,
-          marketType: firstMarket.marketType,
-          name: firstMarket.name,
-          outcomes: (firstMarket.outcomes || firstMarket.selections || firstMarket.odds || []).slice(0, 3),
+      // Log ALL markets from first event to diagnose totals/spreads point field
+      const allMarkets = sample.markets || sample.odds || sample.marketList || [];
+      allMarkets.forEach((mkt, idx) => {
+        console.log('[SportyBet] market[' + idx + ']:', JSON.stringify({
+          id: mkt.id,
+          marketId: mkt.marketId,
+          marketType: mkt.marketType,
+          name: mkt.name,
+          outcomes: (mkt.outcomes || mkt.selections || mkt.odds || []).slice(0, 4).map(o => ({
+            id: o.id, name: o.name, desc: o.desc, odds: o.odds, point: o.point, handicap: o.handicap, line: o.line, base: o.base,
+          })),
         }));
-      }
+      });
     }
 
     // Try normalising with inline odds first
