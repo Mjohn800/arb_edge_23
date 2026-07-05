@@ -47,9 +47,16 @@ const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
   'Accept': 'application/json, text/plain, */*',
   'Accept-Language': 'en-GB,en;q=0.9',
+  'Content-Type': 'application/json',
+  'Client-Timezone': 'Africa/Accra',
   'Origin': 'https://22bet.com.gh',
   'Referer': 'https://22bet.com.gh/',
   'X-Requested-With': 'XMLHttpRequest',
+  // Session cookies — ubc-code is a persistent device ID, sid is a session token.
+  // These are needed to unlock relations (odds, competitors) in the API response.
+  // If odds stop appearing, refresh these by visiting 22bet.com.gh in a browser
+  // and copying the Cookie header from a network request (DevTools → Network → Headers).
+  'Cookie': 'ubc-code=f37e211c-d4a8-490a-825c-64a9042763db; sid=80ad0e3d8021f22e77cb534252ffcbd',
 };
 
 // Outcome type IDs for 1X2 market
