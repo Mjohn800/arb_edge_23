@@ -1,23 +1,28 @@
 /**
  * scrapers/22bet.js
  *
- * ✅ CONFIRMED via DevTools 30 Jun 2026:
- * 22Bet Ghana uses platform.22bet.com.gh — NOT the old 22bet.gh assumption.
- * Platform: NOT BetConstruct — 22Bet's own proprietary API.
+ * ✅ CONFIRMED via DevTools 5 Jul 2026:
+ * Correct endpoint: GET https://platform.22bet.com.gh/api/event/list
+ *   ?period=0&status_in=0&limit=150&main=1
+ *   &relations=odds&relations=competitors&relations=league
+ *   &leagueId_in={leagueId}&oddsExists_eq=1&lang=en&_trlang=en_gh
  *
- * Endpoint: GET https://platform.22bet.com.gh/api/v4/menu/line/en
- *   ?period=0&withOutrightMarkets=1&trlang=en_gh&leagueIds={leagueId}
+ * Response shape:
+ *   { status: "ok", code: 200, data: { items: [ { id, time, competitor1Id,
+ *     competitor2Id, competitors: [...], odds: [...] } ] } }
+ *
+ * Odds outcomes: { id, odds, type, active }
+ *   type 1 = Home, type 2 = Draw, type 3 = Away (1X2 market)
+ *   type varies for other markets — use marketType field on odds object
  *
  * League IDs: visible in URL bar when browsing 22bet.com.gh
  *   e.g. /prematch?top=1&leagueIds=1008012 → World Cup = 1008012
  *
- * TO FIND MORE LEAGUE IDs:
- *   Browse to the competition on 22bet.com.gh → read leagueIds from URL bar.
+ * TODO (laptop): browse each league on 22bet.com.gh and read leagueIds from URL
  */
 
 const TWENTYTWOBET_SPORT_MAP = {
-  soccer_fifa_world_cup:            { leagueId: 1008012 }, // ✅ confirmed 30 Jun 2026
-  // TODO: browse to each league on 22bet.com.gh and read leagueIds from URL bar
+  soccer_fifa_world_cup:            { leagueId: 1008012 }, // ✅ confirmed
   soccer_epl:                       { leagueId: null },
   soccer_uefa_champs_league:        { leagueId: null },
   soccer_uefa_europa_league:        { leagueId: null },
@@ -47,6 +52,18 @@ const HEADERS = {
   'X-Requested-With': 'XMLHttpRequest',
 };
 
+// Outcome type IDs for 1X2 market
+const TYPE_HOME = 1;
+const TYPE_DRAW = 2;
+const TYPE_AWAY = 3;
+
+// Market type IDs seen on 22Bet platform
+// These will be confirmed/expanded as more responses are inspected
+const MARKET_1X2      = 1;   // Match Winner (1X2)
+const MARKET_TOTALS   = 2;   // Over/Under goals
+const MARKET_HANDICAP = 3;   // Asian Handicap
+const MARKET_BTTS     = 29;  // Both Teams to Score (GG/NG)
+
 async function fetch22BetOdds(sportKey) {
   const mapping = TWENTYTWOBET_SPORT_MAP[sportKey];
   if (!mapping || !mapping.leagueId) {
@@ -56,10 +73,14 @@ async function fetch22BetOdds(sportKey) {
     };
   }
 
-  const url = `${BASE}/api/v4/menu/line/en?period=0&withOutrightMarkets=1&trlang=en_gh&leagueIds=${mapping.leagueId}`;
+  // Use /api/event/list with relations=odds&relations=competitors to get
+  // team names and odds in a single request
+  const url = `${BASE}/api/event/list?period=0&status_in=0&limit=150&main=1` +
+    `&relations=odds&relations=competitors` +
+    `&leagueId_in=${mapping.leagueId}&oddsExists_eq=1&lang=en&_trlang=en_gh`;
 
   try {
-    const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(8000) });
+    const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
 
     if (!res.ok) {
       let body = '';
@@ -73,19 +94,29 @@ async function fetch22BetOdds(sportKey) {
 
     const json = await res.json();
 
-    // 22Bet /api/v4/menu/line/ returns nested league → events structure
-    const blocks = json?.data || json?.leagues || json?.result || (Array.isArray(json) ? json : []);
-    const rawEvents = blocks.flatMap(b => b.events || b.matches || b.items || []);
-    console.log('[22Bet]', sportKey, '→ blocks:', blocks.length, '| raw events:', rawEvents.length);
+    // Response: { status: "ok", code: 200, data: { items: [...] } }
+    const items = json?.data?.items;
+    if (!Array.isArray(items)) {
+      console.warn('[22Bet] unexpected response shape for', sportKey, '| top keys:', Object.keys(json || {}).join(', '));
+      return {
+        events: [],
+        status: { ok: false, reason: 'unexpected_shape', fetchedAt: new Date().toISOString() },
+      };
+    }
+
+    console.log('[22Bet]', sportKey, '→ items:', items.length);
 
     const now = Date.now();
-    const upcoming = rawEvents.filter(ev => {
-      const ms = parseStartTime(ev);
-      if (!ms) return true;
+    // Include events starting up to 3h ago (may still be in play)
+    const upcoming = items.filter(ev => {
+      if (!ev.time) return true;
+      const ms = new Date(ev.time).getTime();
       return ms > now - 3 * 60 * 60 * 1000;
     });
 
     const normalised = upcoming.map(ev => normalise22BetEvent(ev, sportKey)).filter(Boolean);
+    console.log('[22Bet]', sportKey, '→ upcoming:', upcoming.length, '| normalised:', normalised.length);
+
     return {
       events: normalised,
       status: { ok: true, reason: null, fetchedAt: new Date().toISOString() },
@@ -101,59 +132,64 @@ async function fetch22BetOdds(sportKey) {
   }
 }
 
-function parseStartTime(ev) {
-  let ms = ev.start_ts || ev.startTime || ev.start_time || ev.date || ev.kickoff || ev.startDate || null;
-  if (!ms) return null;
-  if (ms < 1e12) ms = ms * 1000;
-  return ms;
-}
-
 function normalise22BetEvent(ev, sportKey) {
   try {
-    const homeTeam = ev.team1_name || ev.home_team || ev.home?.name || ev.homeName || ev.team1 || ev.opp1 || 'Home';
-    const awayTeam = ev.team2_name || ev.away_team || ev.away?.name || ev.awayName || ev.team2 || ev.opp2 || 'Away';
+    // Team names come from the competitors relation
+    // competitors is an array: [{ id, name, isHome }, ...]
+    const competitors = ev.competitors || [];
+    const homeComp = competitors.find(c => c.isHome === true || c.isHome === 1) || competitors[0];
+    const awayComp = competitors.find(c => c.isHome === false || c.isHome === 0) || competitors[1];
+    const homeTeam = homeComp?.name || ev.team1 || 'Home';
+    const awayTeam = awayComp?.name || ev.team2 || 'Away';
 
-    const startMs = parseStartTime(ev);
-    if (!startMs) return null;
+    if (!ev.time) return null;
+    const startMs = new Date(ev.time).getTime();
+    if (!startMs || isNaN(startMs)) return null;
+
+    // Odds come as a flat array of outcome objects
+    // Each outcome has: { id, odds, type, active, marketType (or similar) }
+    const oddsArr = ev.odds || [];
+    if (!Array.isArray(oddsArr) || oddsArr.length === 0) return null;
+
+    // Log first outcome structure on first call to confirm field names
+    if (oddsArr.length > 0 && Math.random() < 0.3) {
+      console.log('[22Bet] sample outcome:', JSON.stringify(oddsArr[0]));
+    }
 
     const h2hOutcomes = [];
     const totalsOutcomes = [];
     const ahOutcomes = [];
     const bttsOutcomes = [];
 
-    const markets = ev.markets || ev.market || ev.odds || ev.factors || [];
-    for (const mkt of (Array.isArray(markets) ? markets : Object.values(markets))) {
-      const mktType = String(mkt.type || mkt.market_type || mkt.name || mkt.factorType || '');
-      const isH2H    = /^(1x2|match result|moneyline|full.time|1_1|factor.*1$)/i.test(mktType) || mkt.key === '1x2';
-      const isTotals = /^(total|over.under|goals)/i.test(mktType);
-      const isAH     = /^(asian.handicap|handicap|spread)/i.test(mktType);
-      const isBTTS   = /^(both.teams|btts|gg|gg.ng)/i.test(mktType);
+    for (const o of oddsArr) {
+      if (!o.active || o.active === 0) continue;
+      const price = parseFloat(o.odds || o.odd || o.value || 0);
+      if (!price || price <= 1.0) continue;
 
-      const outcomes = mkt.outcomes || mkt.selections || mkt.event || mkt.values || [];
-      for (const o of (Array.isArray(outcomes) ? outcomes : Object.values(outcomes))) {
-        const price = parseFloat(o.price || o.odds || o.odd || o.value || o.v || 0);
-        if (!price || price <= 1.0) continue;
+      const outcomeType = o.type ?? o.outcomeType ?? o.typeId ?? null;
+      const marketType  = o.marketType ?? o.market_type ?? o.marketTypeId ?? null;
 
-        if (isH2H) {
-          const rawName = String(o.name || o.type || o.outcome || o.title || '');
-          const name =
-            rawName === '1' || rawName === 'W1' || /home/i.test(rawName) ? homeTeam :
-            rawName === 'X' || rawName === 'Draw' || /draw/i.test(rawName) ? 'Draw' :
-            rawName === '2' || rawName === 'W2' || /away/i.test(rawName) ? awayTeam :
-            rawName;
-          if (name) h2hOutcomes.push({ name, price });
-        } else if (isTotals) {
-          const rawName = String(o.name || o.type || '').toLowerCase();
-          const point = parseFloat(o.base || o.handicap || o.line || o.point || 2.5);
-          totalsOutcomes.push({ name: rawName.includes('over') || rawName === 'more' ? 'Over' : 'Under', price, point });
-        } else if (isAH) {
-          const rawName = String(o.name || o.type || '').toLowerCase();
-          const isHome = rawName === '1' || rawName === 'w1' || rawName.includes('home');
-          ahOutcomes.push({ name: isHome ? homeTeam : awayTeam, price, point: parseFloat(o.base || o.handicap || o.line || 0) });
-        } else if (isBTTS) {
-          const rawName = String(o.name || o.type || '').toLowerCase();
-          bttsOutcomes.push({ name: rawName.includes('yes') || rawName === 'gg' ? 'Yes' : 'No', price });
-        }
+      // 1X2 outcomes — marketType 1 or outcomeType 1/2/3
+      if (marketType === MARKET_1X2 || (!marketType && [TYPE_HOME, TYPE_DRAW, TYPE_AWAY].includes(outcomeType))) {
+        if (outcomeType === TYPE_HOME)      h2hOutcomes.push({ name: homeTeam, price });
+        else if (outcomeType === TYPE_DRAW) h2hOutcomes.push({ name: 'Draw',   price });
+        else if (outcomeType === TYPE_AWAY) h2hOutcomes.push({ name: awayTeam, price });
+      }
+      // Totals (Over/Under)
+      else if (marketType === MARKET_TOTALS) {
+        const point = parseFloat(o.base ?? o.line ?? o.handicap ?? 2.5);
+        const isOver = outcomeType === 12 || (o.name || '').toLowerCase().includes('over');
+        totalsOutcomes.push({ name: isOver ? 'Over' : 'Under', price, point });
+      }
+      // Handicap
+      else if (marketType === MARKET_HANDICAP) {
+        const point = parseFloat(o.base ?? o.line ?? o.handicap ?? 0);
+        const isHome = outcomeType === TYPE_HOME;
+        ahOutcomes.push({ name: isHome ? homeTeam : awayTeam, price, point });
+      }
+      // BTTS
+      else if (marketType === MARKET_BTTS) {
+        bttsOutcomes.push({ name: outcomeType === 74 ? 'Yes' : 'No', price });
       }
     }
 
@@ -165,7 +201,7 @@ function normalise22BetEvent(ev, sportKey) {
     if (normMarkets.length === 0) return null;
 
     return {
-      id: '22bet_' + (ev.id || ev.event_id || ev.match_id || Math.random()),
+      id: '22bet_' + ev.id,
       sport_key: sportKey,
       home_team: homeTeam,
       away_team: awayTeam,
