@@ -199,7 +199,11 @@ async function fetch22BetEventDetail(eventId) {
     const scraperKey = process.env.SCRAPER_API_KEY;
     if (scraperKey) {
       console.log('[22Bet] relations stripped for event', eventId, '— retrying via ScraperAPI...');
-      const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&country_code=gh&premium=true`;
+      // NOTE: platform.22bet.com.gh rejected the standard premium=true tier
+      // with a 500 ("Protected domains may require ... ultra_premium=true").
+      // ultra_premium costs noticeably more ScraperAPI credits per request
+      // than premium — watch your quota given this runs per-event, per-sport.
+      const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&country_code=gh&ultra_premium=true`;
       const proxied = await fetch22BetDetailAttempt(proxyUrl, eventId, { viaProxy: true });
       if (proxied) item = proxied;
     } else {
