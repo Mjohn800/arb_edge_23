@@ -175,6 +175,12 @@ async function fetch22BetOdds(sportKey) {
 
 // Fetch full detail for a single event id. Returns the raw item object
 // (with odds/competitors populated) or null on failure.
+//
+// 22Bet doesn't signal the geo/session gate with a 403/429 like Betano does —
+// it returns a normal 200 but silently omits the `odds`/`competitors`
+// relations. So instead of branching on status code, we branch on whether
+// the relations actually came back, and retry the SAME url via ScraperAPI
+// (which routes the request through a Ghana IP) if they didn't.
 async function fetch22BetEventDetail(eventId) {
   const url = `${BASE}/api/event/list?eventId_eq=${eventId}&main=0` +
     `&relations=league&relations=odds&relations=result&relations=withMarketsCount` +
@@ -182,21 +188,52 @@ async function fetch22BetEventDetail(eventId) {
     `&relations=broadcasts&relations=sport&relations=additionalInfo` +
     `&relations=tips&relations=statistics&lang=en&_trlang=en_gh`;
 
+  let item = await fetch22BetDetailAttempt(url, eventId, { viaProxy: false });
+
+  // Direct request "succeeded" but relations were stripped (empty odds AND
+  // empty competitors) — retry via ScraperAPI as a Ghana-based request.
+  const relationsMissing = item && (!Array.isArray(item.odds) || item.odds.length === 0)
+    && (!Array.isArray(item.competitors) || item.competitors.length === 0);
+
+  if (relationsMissing) {
+    const scraperKey = process.env.SCRAPER_API_KEY;
+    if (scraperKey) {
+      console.log('[22Bet] relations stripped for event', eventId, '— retrying via ScraperAPI...');
+      const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&country_code=gh&premium=true`;
+      const proxied = await fetch22BetDetailAttempt(proxyUrl, eventId, { viaProxy: true });
+      if (proxied) item = proxied;
+    } else {
+      console.warn('[22Bet] relations stripped for event', eventId, 'and no SCRAPER_API_KEY set');
+    }
+  }
+
+  return item;
+}
+
+async function fetch22BetDetailAttempt(url, eventId, { viaProxy }) {
   try {
-    const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+    const res = await fetch(url, {
+      // ScraperAPI itself sets the outbound headers/cookies to the target,
+      // so when going through the proxy we don't need to (and can't rely on
+      // our own Cookie header being honoured anyway).
+      headers: viaProxy ? undefined : HEADERS,
+      signal: AbortSignal.timeout(viaProxy ? 20000 : 10000), // ScraperAPI adds latency
+    });
     if (!res.ok) {
-      console.warn('[22Bet] detail fetch failed', res.status, 'for event', eventId);
+      let body = '';
+      try { body = (await res.text()).slice(0, 300); } catch {}
+      console.warn('[22Bet]', viaProxy ? 'proxy' : 'direct', 'detail fetch failed', res.status, 'for event', eventId, '| body:', body);
       return null;
     }
     const json = await res.json();
     const items = json?.data?.items;
     if (!Array.isArray(items) || items.length === 0) {
-      console.warn('[22Bet] detail empty for event', eventId);
+      console.warn('[22Bet]', viaProxy ? 'proxy' : 'direct', 'detail empty for event', eventId);
       return null;
     }
     return items[0];
   } catch (err) {
-    console.warn('[22Bet] detail error for event', eventId, err.message);
+    console.warn('[22Bet]', viaProxy ? 'proxy' : 'direct', 'detail error for event', eventId, err.message);
     return null;
   }
 }
