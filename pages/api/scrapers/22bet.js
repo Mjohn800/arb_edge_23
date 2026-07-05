@@ -104,7 +104,14 @@ async function fetch22BetOdds(sportKey) {
       };
     }
 
-    console.log('[22Bet]', sportKey, '→ items:', items.length);
+    // Log first event's odds structure to diagnose normalised:0
+    if (items.length > 0) {
+      const sample = items[0];
+      const oddsArr = sample.odds || [];
+      console.log('[22Bet] sample event keys:', Object.keys(sample).join(', '));
+      console.log('[22Bet] sample odds count:', oddsArr.length, '| first outcome:', JSON.stringify(oddsArr[0] || null));
+      console.log('[22Bet] sample competitors:', JSON.stringify(sample.competitors || []));
+    }
 
     const now = Date.now();
     // Include events starting up to 3h ago (may still be in play)
@@ -150,11 +157,6 @@ function normalise22BetEvent(ev, sportKey) {
     // Each outcome has: { id, odds, type, active, marketType (or similar) }
     const oddsArr = ev.odds || [];
     if (!Array.isArray(oddsArr) || oddsArr.length === 0) return null;
-
-    // Log first outcome structure on first call to confirm field names
-    if (oddsArr.length > 0 && Math.random() < 0.3) {
-      console.log('[22Bet] sample outcome:', JSON.stringify(oddsArr[0]));
-    }
 
     const h2hOutcomes = [];
     const totalsOutcomes = [];
