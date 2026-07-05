@@ -2,23 +2,40 @@
  * scrapers/22bet.js
  *
  * ✅ CONFIRMED via DevTools 5 Jul 2026:
- * Correct endpoint: GET https://platform.22bet.com.gh/api/event/list
- *   ?period=0&status_in=0&limit=150&main=1
- *   &relations=odds&relations=competitors&relations=league
- *   &leagueId_in={leagueId}&oddsExists_eq=1&lang=en&_trlang=en_gh
  *
- * Response shape:
+ * STEP 1 — list events for a league (does NOT reliably return odds/competitors):
+ *   GET https://platform.22bet.com.gh/api/event/list
+ *     ?period=0&status_in=0&limit=150&main=1
+ *     &leagueId_in={leagueId}&oddsExists_eq=1&lang=en&_trlang=en_gh
+ *
+ * STEP 2 — fetch a single event by id (THIS is what returns real odds + competitors):
+ *   GET https://platform.22bet.com.gh/api/event/list
+ *     ?eventId_eq={eventId}&main=0
+ *     &relations=league&relations=odds&relations=result&relations=withMarketsCount
+ *     &relations=competitors&relations=sportCategories&relations=players
+ *     &relations=broadcasts&relations=sport&relations=additionalInfo
+ *     &relations=tips&relations=statistics&lang=en&_trlang=en_gh
+ *
+ * Response shape (both steps):
  *   { status: "ok", code: 200, data: { items: [ { id, time, competitor1Id,
- *     competitor2Id, competitors: [...], odds: [...] } ] } }
+ *     competitor2Id, competitors: [...], odds: [ { id, outcomes: [...] } ] } ] } }
  *
- * Odds outcomes: { id, odds, type, active }
- *   type 1 = Home, type 2 = Draw, type 3 = Away (1X2 market)
- *   type varies for other markets — use marketType field on odds object
+ * IMPORTANT: odds is an array of MARKET objects, not a flat array of outcomes.
+ * Each market object looks like: { id, extendedSpecifiers, favourite, isVariant,
+ *   marketMetadata, outcomes: [ { active, competitor, id, odds, player,
+ *   playerVendorId, probabilities, team, type, vendorOutcomeId } ] }
+ * We don't yet know the market's own "type"/name field (need to inspect a market
+ * object at its top level, not just outcomes) — TODO once confirmed, use it to
+ * distinguish 1X2 / totals / handicap / BTTS. Until then we infer from the
+ * *outcome*-level `type` field the same way as before (1/2/3 = home/draw/away
+ * for 1X2), and skip markets we can't classify.
  *
  * League IDs: visible in URL bar when browsing 22bet.com.gh
  *   e.g. /prematch?top=1&leagueIds=1008012 → World Cup = 1008012
  *
  * TODO (laptop): browse each league on 22bet.com.gh and read leagueIds from URL
+ * TODO: inspect a full market object (not just its outcomes) to find the
+ *       market-type/name field so totals/handicap/BTTS can be classified reliably.
  */
 
 const TWENTYTWOBET_SPORT_MAP = {
@@ -53,7 +70,6 @@ const HEADERS = {
   'Referer': 'https://22bet.com.gh/',
   'X-Requested-With': 'XMLHttpRequest',
   // Session cookies — ubc-code is a persistent device ID, sid is a session token.
-  // These are needed to unlock relations (odds, competitors) in the API response.
   // If odds stop appearing, refresh these by visiting 22bet.com.gh in a browser
   // and copying the Cookie header from a network request (DevTools → Network → Headers).
   'Cookie': 'ubc-code=f37e211c-d4a8-490a-825c-64a9042763db; sid=80ad0e3d8021f22e77cb534252ffcbd',
@@ -64,12 +80,13 @@ const TYPE_HOME = 1;
 const TYPE_DRAW = 2;
 const TYPE_AWAY = 3;
 
-// Market type IDs seen on 22Bet platform
-// These will be confirmed/expanded as more responses are inspected
-const MARKET_1X2      = 1;   // Match Winner (1X2)
-const MARKET_TOTALS   = 2;   // Over/Under goals
-const MARKET_HANDICAP = 3;   // Asian Handicap
-const MARKET_BTTS     = 29;  // Both Teams to Score (GG/NG)
+// How many per-event detail requests to run concurrently. Keep this modest —
+// hammering the API in parallel is what triggers geo-block/rate-limit retries.
+const EVENT_DETAIL_CONCURRENCY = 3;
+// Small delay between batches so we don't look like a scraper hammering the API.
+const BATCH_DELAY_MS = 250;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function fetch22BetOdds(sportKey) {
   const mapping = TWENTYTWOBET_SPORT_MAP[sportKey];
@@ -80,56 +97,66 @@ async function fetch22BetOdds(sportKey) {
     };
   }
 
-  // Use /api/event/list with relations=odds&relations=competitors to get
-  // team names and odds in a single request
-  const url = `${BASE}/api/event/list?period=0&status_in=0&limit=150&main=1` +
-    `&relations=odds&relations=competitors` +
-    `&leagueId_in=${mapping.leagueId}&oddsExists_eq=1&lang=en&_trlang=en_gh`;
-
   try {
-    const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+    // ---- STEP 1: list events in the league to get their ids ----
+    const listUrl = `${BASE}/api/event/list?period=0&status_in=0&limit=150&main=1` +
+      `&leagueId_in=${mapping.leagueId}&oddsExists_eq=1&lang=en&_trlang=en_gh`;
 
-    if (!res.ok) {
+    const listRes = await fetch(listUrl, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+
+    if (!listRes.ok) {
       let body = '';
-      try { body = (await res.text()).slice(0, 300); } catch {}
-      console.warn('[22Bet] fetch failed', res.status, 'for', sportKey, '| body:', body);
+      try { body = (await listRes.text()).slice(0, 300); } catch {}
+      console.warn('[22Bet] list fetch failed', listRes.status, 'for', sportKey, '| body:', body);
       return {
         events: [],
-        status: { ok: false, reason: 'http_' + res.status, fetchedAt: new Date().toISOString() },
+        status: { ok: false, reason: 'http_' + listRes.status, fetchedAt: new Date().toISOString() },
       };
     }
 
-    const json = await res.json();
-
-    // Response: { status: "ok", code: 200, data: { items: [...] } }
-    const items = json?.data?.items;
-    if (!Array.isArray(items)) {
-      console.warn('[22Bet] unexpected response shape for', sportKey, '| top keys:', Object.keys(json || {}).join(', '));
+    const listJson = await listRes.json();
+    const listItems = listJson?.data?.items;
+    if (!Array.isArray(listItems)) {
+      console.warn('[22Bet] unexpected list response shape for', sportKey, '| top keys:', Object.keys(listJson || {}).join(', '));
       return {
         events: [],
         status: { ok: false, reason: 'unexpected_shape', fetchedAt: new Date().toISOString() },
       };
     }
 
-    // Log first event's odds structure to diagnose normalised:0
-    if (items.length > 0) {
-      const sample = items[0];
-      const oddsArr = sample.odds || [];
-      console.log('[22Bet] sample event keys:', Object.keys(sample).join(', '));
-      console.log('[22Bet] sample odds count:', oddsArr.length, '| first outcome:', JSON.stringify(oddsArr[0] || null));
-      console.log('[22Bet] sample competitors:', JSON.stringify(sample.competitors || []));
-    }
-
     const now = Date.now();
     // Include events starting up to 3h ago (may still be in play)
-    const upcoming = items.filter(ev => {
+    const upcomingStubs = listItems.filter(ev => {
       if (!ev.time) return true;
       const ms = new Date(ev.time).getTime();
       return ms > now - 3 * 60 * 60 * 1000;
     });
 
-    const normalised = upcoming.map(ev => normalise22BetEvent(ev, sportKey)).filter(Boolean);
-    console.log('[22Bet]', sportKey, '→ upcoming:', upcoming.length, '| normalised:', normalised.length);
+    console.log('[22Bet]', sportKey, '→ list raw:', listItems.length, '| upcoming stubs:', upcomingStubs.length);
+
+    // ---- STEP 2: fetch full detail (odds + competitors) per event id ----
+    const detailed = [];
+    for (let i = 0; i < upcomingStubs.length; i += EVENT_DETAIL_CONCURRENCY) {
+      const batch = upcomingStubs.slice(i, i + EVENT_DETAIL_CONCURRENCY);
+      const results = await Promise.all(batch.map(stub => fetch22BetEventDetail(stub.id)));
+      for (const detail of results) {
+        if (detail) detailed.push(detail);
+      }
+      if (i + EVENT_DETAIL_CONCURRENCY < upcomingStubs.length) {
+        await sleep(BATCH_DELAY_MS);
+      }
+    }
+
+    if (detailed.length > 0) {
+      const sample = detailed[0];
+      console.log('[22Bet] sample detail keys:', Object.keys(sample).join(', '));
+      console.log('[22Bet] sample odds (markets) count:', (sample.odds || []).length);
+      console.log('[22Bet] sample first market:', JSON.stringify((sample.odds || [])[0] || null).slice(0, 500));
+      console.log('[22Bet] sample competitors:', JSON.stringify(sample.competitors || []));
+    }
+
+    const normalised = detailed.map(ev => normalise22BetEvent(ev, sportKey)).filter(Boolean);
+    console.log('[22Bet]', sportKey, '→ detailed:', detailed.length, '| normalised:', normalised.length);
 
     return {
       events: normalised,
@@ -143,6 +170,34 @@ async function fetch22BetOdds(sportKey) {
       events: [],
       status: { ok: false, reason: isTimeout ? 'timeout' : err.message, fetchedAt: new Date().toISOString() },
     };
+  }
+}
+
+// Fetch full detail for a single event id. Returns the raw item object
+// (with odds/competitors populated) or null on failure.
+async function fetch22BetEventDetail(eventId) {
+  const url = `${BASE}/api/event/list?eventId_eq=${eventId}&main=0` +
+    `&relations=league&relations=odds&relations=result&relations=withMarketsCount` +
+    `&relations=competitors&relations=sportCategories&relations=players` +
+    `&relations=broadcasts&relations=sport&relations=additionalInfo` +
+    `&relations=tips&relations=statistics&lang=en&_trlang=en_gh`;
+
+  try {
+    const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) {
+      console.warn('[22Bet] detail fetch failed', res.status, 'for event', eventId);
+      return null;
+    }
+    const json = await res.json();
+    const items = json?.data?.items;
+    if (!Array.isArray(items) || items.length === 0) {
+      console.warn('[22Bet] detail empty for event', eventId);
+      return null;
+    }
+    return items[0];
+  } catch (err) {
+    console.warn('[22Bet] detail error for event', eventId, err.message);
+    return null;
   }
 }
 
@@ -160,50 +215,44 @@ function normalise22BetEvent(ev, sportKey) {
     const startMs = new Date(ev.time).getTime();
     if (!startMs || isNaN(startMs)) return null;
 
-    // Odds come as a flat array of outcome objects
-    // Each outcome has: { id, odds, type, active, marketType (or similar) }
-    const oddsArr = ev.odds || [];
-    if (!Array.isArray(oddsArr) || oddsArr.length === 0) return null;
+    // odds is an array of MARKET objects, each with its own `outcomes` array —
+    // NOT a flat array of outcomes like the old (list-endpoint) response.
+    const markets = ev.odds || [];
+    if (!Array.isArray(markets) || markets.length === 0) return null;
 
     const h2hOutcomes = [];
     const totalsOutcomes = [];
     const ahOutcomes = [];
     const bttsOutcomes = [];
 
-    for (const o of oddsArr) {
-      if (!o.active || o.active === 0) continue;
-      const price = parseFloat(o.odds || o.odd || o.value || 0);
-      if (!price || price <= 1.0) continue;
+    for (const market of markets) {
+      const outcomes = market.outcomes || [];
+      if (!Array.isArray(outcomes) || outcomes.length === 0) continue;
 
-      const outcomeType = o.type ?? o.outcomeType ?? o.typeId ?? null;
-      const marketType  = o.marketType ?? o.market_type ?? o.marketTypeId ?? null;
+      // TODO: once we confirm a market-level type/name field, switch on that
+      // instead of guessing from outcome `type` values. For now: if the
+      // outcome types are exactly {1,2,3} with no player/handicap info, treat
+      // it as 1X2. Everything else is currently skipped rather than mis-tagged.
+      const outcomeTypes = outcomes.map(o => o.type);
+      const looksLike1x2 = outcomeTypes.length === 3 &&
+        [TYPE_HOME, TYPE_DRAW, TYPE_AWAY].every(t => outcomeTypes.includes(t));
 
-      // 1X2 outcomes — marketType 1 or outcomeType 1/2/3
-      if (marketType === MARKET_1X2 || (!marketType && [TYPE_HOME, TYPE_DRAW, TYPE_AWAY].includes(outcomeType))) {
-        if (outcomeType === TYPE_HOME)      h2hOutcomes.push({ name: homeTeam, price });
-        else if (outcomeType === TYPE_DRAW) h2hOutcomes.push({ name: 'Draw',   price });
-        else if (outcomeType === TYPE_AWAY) h2hOutcomes.push({ name: awayTeam, price });
+      if (looksLike1x2) {
+        for (const o of outcomes) {
+          if (!o.active) continue;
+          const price = parseFloat(o.odds || 0);
+          if (!price || price <= 1.0) continue;
+          if (o.type === TYPE_HOME)      h2hOutcomes.push({ name: homeTeam, price });
+          else if (o.type === TYPE_DRAW) h2hOutcomes.push({ name: 'Draw',   price });
+          else if (o.type === TYPE_AWAY) h2hOutcomes.push({ name: awayTeam, price });
+        }
       }
-      // Totals (Over/Under)
-      else if (marketType === MARKET_TOTALS) {
-        const point = parseFloat(o.base ?? o.line ?? o.handicap ?? 2.5);
-        const isOver = outcomeType === 12 || (o.name || '').toLowerCase().includes('over');
-        totalsOutcomes.push({ name: isOver ? 'Over' : 'Under', price, point });
-      }
-      // Handicap
-      else if (marketType === MARKET_HANDICAP) {
-        const point = parseFloat(o.base ?? o.line ?? o.handicap ?? 0);
-        const isHome = outcomeType === TYPE_HOME;
-        ahOutcomes.push({ name: isHome ? homeTeam : awayTeam, price, point });
-      }
-      // BTTS
-      else if (marketType === MARKET_BTTS) {
-        bttsOutcomes.push({ name: outcomeType === 74 ? 'Yes' : 'No', price });
-      }
+      // Totals/handicap/BTTS classification needs the market-level field —
+      // left as TODO until we inspect one of those market objects directly.
     }
 
     const normMarkets = [];
-    if (h2hOutcomes.length >= 2)   normMarkets.push({ key: 'h2h',     outcomes: h2hOutcomes });
+    if (h2hOutcomes.length >= 2)    normMarkets.push({ key: 'h2h',     outcomes: h2hOutcomes });
     if (totalsOutcomes.length >= 2) normMarkets.push({ key: 'totals',  outcomes: totalsOutcomes });
     if (ahOutcomes.length >= 2)     normMarkets.push({ key: 'spreads', outcomes: ahOutcomes });
     if (bttsOutcomes.length >= 2)   normMarkets.push({ key: 'btts',    outcomes: bttsOutcomes });
