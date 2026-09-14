@@ -2648,6 +2648,7 @@ function AuthScreen({ onAuth }) {
     error && e('div', { style: { color: '#dc2626', fontSize: 13, marginBottom: 10 } }, error),
     e('button', { onClick: submit, disabled: loading, style: { width: '100%', padding: 10, background: '#0f172a', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, marginBottom: 10 } }, loading ? 'Please wait…' : (mode === 'login' ? 'Log in' : 'Sign up')),
     e('div', { style: { fontSize: 13, textAlign: 'center', color: '#666' } },
+      e('div', { style: { fontSize: 10, color: '#999', marginBottom: 10, wordBreak: 'break-all' } }, 'DEBUG url=' + String(process.env.NEXT_PUBLIC_SUPABASE_URL) + ' | keyLen=' + String((process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').length)),
       mode === 'login' ? "Don't have an account? " : 'Already have an account? ',
       e('a', { href: '#', onClick: ev => { ev.preventDefault(); setMode(mode === 'login' ? 'signup' : 'login'); }, style: { color: '#0f172a', fontWeight: 600 } }, mode === 'login' ? 'Sign up' : 'Log in')
     )
