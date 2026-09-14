@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useEffect, useCallback, createElement } from 'react';
+import { supabase } from '../lib/supabaseClient';
 
 // ─── BOOKMAKERS ───────────────────────────────────────────────────────────────
 const BOOKS = {
@@ -903,7 +904,7 @@ const st = {
 
 const EMPTY_MANUAL = { match: '', sport: 'soccer_epl', commenceTime: new Date(Date.now() + 3600000).toISOString() };
 
-export default function App() {
+function ArbEdgeApp() {
   const [tab, setTab] = useState('scanner');
 const [apiKey, setApiKey] = useState('server');
   const [apiInput, setApiInput] = useState('');
@@ -2613,4 +2614,53 @@ const analyzeArb = async (arb) => {
       e('div', { style: { background: C.amberLight, borderRadius: 10, padding: '11px 14px', marginTop: 16, fontSize: 12, color: '#78350f', lineHeight: 1.6 } }, '⚖️ Sports betting is legal in Ghana under the Gaming Commission of Ghana. Bet responsibly.')
     )
   );
+}
+const e = React.createElement;
+
+function AuthScreen({ onAuth }) {
+  const [mode, setMode] = useState('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const submit = async () => {
+    setError(''); setLoading(true);
+    const fn = mode === 'login' ? supabase.auth.signInWithPassword : supabase.auth.signUp;
+    const { data, error } = await fn({ email, password });
+    setLoading(false);
+    if (error) { setError(error.message); return; }
+    if (mode === 'signup' && !data.session) {
+      setError('Check your email to confirm your account, then log in.');
+      return;
+    }
+    onAuth(data.session);
+  };
+
+  return e('div', { style: { maxWidth: 360, margin: '80px auto', padding: 24, fontFamily: 'system-ui' } },
+    e('h2', { style: { marginBottom: 16 } }, mode === 'login' ? 'Log in to ArbEdge' : 'Create your ArbEdge account'),
+    e('input', { type: 'email', placeholder: 'Email', value: email, onChange: ev => setEmail(ev.target.value), style: { width: '100%', padding: 10, marginBottom: 10, border: '1px solid #ddd', borderRadius: 8 } }),
+    e('input', { type: 'password', placeholder: 'Password', value: password, onChange: ev => setPassword(ev.target.value), style: { width: '100%', padding: 10, marginBottom: 10, border: '1px solid #ddd', borderRadius: 8 } }),
+    error && e('div', { style: { color: '#dc2626', fontSize: 13, marginBottom: 10 } }, error),
+    e('button', { onClick: submit, disabled: loading, style: { width: '100%', padding: 10, background: '#0f172a', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, marginBottom: 10 } }, loading ? 'Please wait…' : (mode === 'login' ? 'Log in' : 'Sign up')),
+    e('div', { style: { fontSize: 13, textAlign: 'center', color: '#666' } },
+      mode === 'login' ? "Don't have an account? " : 'Already have an account? ',
+      e('a', { href: '#', onClick: ev => { ev.preventDefault(); setMode(mode === 'login' ? 'signup' : 'login'); }, style: { color: '#0f172a', fontWeight: 600 } }, mode === 'login' ? 'Sign up' : 'Log in')
+    )
+  );
+}
+
+export default function App() {
+  const [session, setSession] = useState(undefined);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, sess) => setSession(sess));
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  if (session === undefined) return e('div', { style: { padding: 40, textAlign: 'center' } }, 'Loading…');
+  if (!session) return e(AuthScreen, { onAuth: setSession });
+
+  return e(ArbEdgeApp, { session, onLogout: () => supabase.auth.signOut() });
 }
