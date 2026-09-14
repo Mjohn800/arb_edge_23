@@ -2625,7 +2625,8 @@ function AuthScreen({ onAuth }) {
   const [loading, setLoading] = useState(false);
 
   const submit = async () => {
-    setError(''); setLoading(true);
+  setError(''); setLoading(true);
+  try {
     const fn = mode === 'login' ? supabase.auth.signInWithPassword : supabase.auth.signUp;
     const { data, error } = await fn({ email, password });
     setLoading(false);
@@ -2635,8 +2636,11 @@ function AuthScreen({ onAuth }) {
       return;
     }
     onAuth(data.session);
-  };
-
+  } catch (err) {
+    setLoading(false);
+    setError('Unexpected error: ' + (err?.message || String(err)));
+  }
+};
   return e('div', { style: { maxWidth: 360, margin: '80px auto', padding: 24, fontFamily: 'system-ui' } },
     e('h2', { style: { marginBottom: 16 } }, mode === 'login' ? 'Log in to ArbEdge' : 'Create your ArbEdge account'),
     e('input', { type: 'email', placeholder: 'Email', value: email, onChange: ev => setEmail(ev.target.value), style: { width: '100%', padding: 10, marginBottom: 10, border: '1px solid #ddd', borderRadius: 8 } }),
