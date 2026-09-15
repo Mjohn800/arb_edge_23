@@ -1074,11 +1074,12 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     if (sportsToScan.length > 0 && okCount === 0) {
       setError('Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. Showing demo data below.');
     }
+    if (okCount > 0) setLastFetch(new Date()); // scan completed successfully, regardless of whether arbs were found
     const found = findArbs(all, 'global', userRegion);
     const foundArbsWA = findArbs(all, 'wa', userRegion);
     const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
     const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
-    if (found.length > 0) { setArbs(found); setIsDemo(false); setLastFetch(new Date()); }
+    if (found.length > 0) { setArbs(found); setIsDemo(false); }
     else { setArbs(MOCK); setIsDemo(true); }
     setArbsWAReal(foundArbsWA);
     if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
