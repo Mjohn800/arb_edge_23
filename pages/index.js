@@ -913,7 +913,12 @@ const [apiKey, setApiKey] = useState('server');
   const [arbsWAReal, setArbsWAReal] = useState([]); // properly computed WA-only arbs (not a post-filter of global picks)
   const [loading, setLoading] = useState(false);
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0, sport: '' });
-  const [lastFetch, setLastFetch] = useState(null);
+  const [lastFetch, setLastFetch] = useState(() => {
+  try {
+    const saved = localStorage.getItem('arb_lastFetch');
+    return saved ? new Date(saved) : null;
+  } catch { return null; }
+});
   const [error, setError] = useState('');
   const [isDemo, setIsDemo] = useState(true);
   const [isDemoEV, setIsDemoEV] = useState(true);
@@ -1230,6 +1235,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
   })();
 }, [bets, session]);
   useEffect(() => { try { localStorage.setItem('arb_bankroll', bankroll.toString()); } catch {} }, [bankroll]);
+  useEffect(() => { try { if (lastFetch) localStorage.setItem('arb_lastFetch', lastFetch.toISOString()); } catch {} }, [lastFetch]);
 
   useEffect(() => {
     const tick = setInterval(() => {
