@@ -1398,6 +1398,9 @@ const analyzeArb = async (arb) => {
         )
       )
     ),
+           e('div', { style: { display: 'flex', justifyContent: 'flex-end', padding: '6px 4px' } },
+  e('button', { onClick: onLogout, style: { fontSize: 12, padding: '6px 12px', borderRadius: 8, border: '1px solid #dc2626', color: '#dc2626', background: 'transparent' } }, 'Log out')
+),
     e('div', { style: st.tabs },
       [['scanner','🔍 Scanner'], ['calculator','🧮 Calculator'], ['manual','✏️ Manual Arb'], ['ev','📈 +EV Bets'], ['edge','⚡ Edge Tools'], ['analyzer','🧠 Bet Analyzer'], ['tracker','📒 Bets (' + bets.length + ')'], ['cashout','💸 Cash Out'], ['earn','💰 Earn'], ['guide','📚 Guide']].map(([k, l]) =>
         e('button', { key: k, style: st.tab(tab === k), onClick: () => setTab(k) }, l)
