@@ -904,7 +904,7 @@ const st = {
 
 const EMPTY_MANUAL = { match: '', sport: 'soccer_epl', commenceTime: new Date(Date.now() + 3600000).toISOString() };
 
-function ArbEdgeApp() {
+function ArbEdgeApp({ session, onLogout }) {
   const [tab, setTab] = useState('scanner');
 const [apiKey, setApiKey] = useState('server');
   const [apiInput, setApiInput] = useState('');
@@ -952,11 +952,17 @@ const [selectedSports, setSelectedSports] = useState(() => {
   useEffect(() => { try { localStorage.setItem('arb_sports', JSON.stringify(selectedSports)); } catch {} }, [selectedSports]);
 
 useEffect(() => {
-  try {
-    const saved = localStorage.getItem('arb_bets');
-    if (saved) setBets(JSON.parse(saved));
-  } catch {}
-}, []);
+  if (!session?.user?.id) return;
+  supabase
+    .from('tracked_bets')
+    .select('id, data')
+    .eq('user_id', session.user.id)
+    .order('created_at', { ascending: false })
+    .then(({ data, error }) => {
+      if (error) { console.error('Failed to load bets:', error); return; }
+      if (data) setBets(data.map(row => ({ ...row.data, id: row.id })));
+    });
+}, [session]);
   const [manualOutcomes, setManualOutcomes] = useState([
     { label: 'Home', book: 'betway', odds: '' },
     { label: 'Draw', book: 'sportybet', odds: '' },
