@@ -1218,7 +1218,17 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     return () => clearInterval(id);
   }, [fetchTeamForm]);
 
-  useEffect(() => { try { localStorage.setItem('arb_bets', JSON.stringify(bets)); } catch {} }, [bets]);
+  useEffect(() => {
+  if (!session?.user?.id || !betsLoadedRef.current) return;
+  const userId = session.user.id;
+  (async () => {
+    await supabase.from('tracked_bets').delete().eq('user_id', userId);
+    if (bets.length === 0) return;
+    const rows = bets.map(b => ({ user_id: userId, data: b }));
+    const { error } = await supabase.from('tracked_bets').insert(rows);
+    if (error) console.error('Failed to sync bets:', error);
+  })();
+}, [bets, session]);
   useEffect(() => { try { localStorage.setItem('arb_bankroll', bankroll.toString()); } catch {} }, [bankroll]);
 
   useEffect(() => {
