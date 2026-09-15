@@ -1239,6 +1239,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
 }, [bets, session]);
   useEffect(() => { try { localStorage.setItem('arb_bankroll', bankroll.toString()); } catch {} }, [bankroll]);
   useEffect(() => { try { if (lastFetch) localStorage.setItem('arb_lastFetch', lastFetch.toISOString()); } catch {} }, [lastFetch]);
+  useEffect(() => { try { if (nextScanAt) localStorage.setItem('arb_nextScanAt', String(nextScanAt)); } catch {} }, [nextScanAt]);
 
   useEffect(() => {
     const tick = setInterval(() => {
