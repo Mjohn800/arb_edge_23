@@ -2627,8 +2627,9 @@ function AuthScreen({ onAuth }) {
   const submit = async () => {
   setError(''); setLoading(true);
   try {
-    const fn = mode === 'login' ? supabase.auth.signInWithPassword : supabase.auth.signUp;
-    const { data, error } = await fn({ email, password });
+ const { data, error } = mode === 'login'
+  ? await supabase.auth.signInWithPassword({ email, password })
+  : await supabase.auth.signUp({ email, password });
     setLoading(false);
     if (error) { setError(error.message); return; }
     if (mode === 'signup' && !data.session) {
