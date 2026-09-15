@@ -995,7 +995,9 @@ useEffect(() => {
   const [analyzerLoaded, setAnalyzerLoaded] = useState(false);
   const [quota, setQuota] = useState({ remaining: null, used: null, keyIndex: 1 });
   const [userRegion, setUserRegion] = useState({ country: null, isWA: true, accessibleBooks: null }); // default WA until detected
-  const [nextScanAt, setNextScanAt] = useState(null);
+  const [nextScanAt, setNextScanAt] = useState(() => {
+  try { const saved = localStorage.getItem('arb_nextScanAt'); return saved ? Number(saved) : null; } catch { return null; }
+});
   const [countdown, setCountdown] = useState(0);
   const [cardAnalysis, setCardAnalysis] = useState({});
   const [analyzingId, setAnalyzingId] = useState(null);
