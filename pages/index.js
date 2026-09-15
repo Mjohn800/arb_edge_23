@@ -951,6 +951,8 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [clvInputs, setClvInputs] = useState({}); // betId -> closing odds string
   useEffect(() => { try { localStorage.setItem('arb_sports', JSON.stringify(selectedSports)); } catch {} }, [selectedSports]);
 
+const betsLoadedRef = React.useRef(false);
+
 useEffect(() => {
   if (!session?.user?.id) return;
   supabase
@@ -961,6 +963,7 @@ useEffect(() => {
     .then(({ data, error }) => {
       if (error) { console.error('Failed to load bets:', error); return; }
       if (data) setBets(data.map(row => ({ ...row.data, id: row.id })));
+      betsLoadedRef.current = true;
     });
 }, [session]);
   const [manualOutcomes, setManualOutcomes] = useState([
