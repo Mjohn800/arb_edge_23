@@ -1015,6 +1015,7 @@ useEffect(() => {
   const fetchOdds = useCallback(async (key) => {
   if (!key) return;
     setLoading(true); setError('');
+    setLastFetch(new Date()); // mark attempt now, so the 12-min gate holds even if this scan fails entirely (quota exhausted etc.)
     const sportsToScan = ALL_SPORTS.filter(s => selectedSports.includes(s.key));
     const all = [];
     let okCount = 0, lastFailStatus = null, lastFailBody = '';
@@ -1076,7 +1077,6 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     if (sportsToScan.length > 0 && okCount === 0) {
       setError('Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. Showing demo data below.');
     }
-    if (okCount > 0) setLastFetch(new Date()); // scan completed successfully, regardless of whether arbs were found
     const found = findArbs(all, 'global', userRegion);
     const foundArbsWA = findArbs(all, 'wa', userRegion);
     const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
