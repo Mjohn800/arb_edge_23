@@ -102,12 +102,38 @@ async function fetch22BetOdds(sportKey) {
     const listUrl = `${BASE}/api/event/list?period=0&status_in=0&limit=150&main=1` +
       `&leagueId_in=${mapping.leagueId}&oddsExists_eq=1&lang=en&_trlang=en_gh`;
 
-    const listRes = await fetch(listUrl, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+    let listRes;
+    try {
+      listRes = await fetch(listUrl, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+    } catch (err) {
+      console.warn('[22Bet] direct list fetch threw for', sportKey, '| err:', err.message, '— retrying via ScraperAPI...');
+      listRes = null;
+    }
+
+    if (listRes && !listRes.ok) {
+      console.warn('[22Bet] list fetch failed', listRes.status, 'for', sportKey, '— retrying via ScraperAPI...');
+      listRes = null;
+    }
+
+    if (!listRes) {
+      const scraperKey = process.env.SCRAPER_API_KEY;
+      if (scraperKey) {
+        const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(listUrl)}&country_code=gh&premium=true`;
+        try {
+          listRes = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
+        } catch (err) {
+          console.warn('[22Bet] proxy list fetch also failed for', sportKey, '| err:', err.message);
+          return { events: [], status: { ok: false, reason: 'fetch_error_both: ' + err.message, fetchedAt: new Date().toISOString() } };
+        }
+      } else {
+        return { events: [], status: { ok: false, reason: 'fetch_failed_no_scraper_key', fetchedAt: new Date().toISOString() } };
+      }
+    }
 
     if (!listRes.ok) {
       let body = '';
       try { body = (await listRes.text()).slice(0, 300); } catch {}
-      console.warn('[22Bet] list fetch failed', listRes.status, 'for', sportKey, '| body:', body);
+      console.warn('[22Bet] list fetch failed even via proxy', listRes.status, 'for', sportKey, '| body:', body);
       return {
         events: [],
         status: { ok: false, reason: 'http_' + listRes.status, fetchedAt: new Date().toISOString() },
