@@ -45,6 +45,12 @@ const waHealth = {
   paripesa:  { ok: null, reason: null, fetchedAt: null },
 };
 
+// Tracks keys known to be exhausted/invalid on THIS warm serverless instance,
+// so we don't waste a call re-trying a dead key on every single sport request
+// within the same scan cycle. Resets on cold start.
+const deadKeys = new Map(); // key -> timestamp it died
+const DEAD_KEY_TTL = 5 * 60 * 1000;
+
 async function getWAOdds(sportKey) {
   const cached = waCache[sportKey];
   if (cached && Date.now() - cached.ts < WA_CACHE_TTL) {
@@ -151,6 +157,8 @@ export default async function handler(req, res) {
 
   // ── 1. Try each API key until one succeeds ────────────────────────────────
   for (const key of keys) {
+    const deadAt = deadKeys.get(key);
+    if (deadAt && Date.now() - deadAt < DEAD_KEY_TTL) continue;
     const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${key}&regions=${GLOBAL_REGIONS}&markets=${markets}&oddsFormat=decimal&oddsState=live,upcoming`;
     try {
       const response = await fetch(url);
@@ -158,6 +166,7 @@ export default async function handler(req, res) {
 
       if (response.status === 429) {
         lastError = 'quota';
+        deadKeys.set(key, Date.now());
         continue;
       }
       if (response.status === 401 || response.status === 403) {
