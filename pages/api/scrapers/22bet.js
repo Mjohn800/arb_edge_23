@@ -40,11 +40,11 @@
 
 const TWENTYTWOBET_SPORT_MAP = {
   soccer_fifa_world_cup:            { leagueId: 1008012 }, // ✅ confirmed
-  soccer_epl:                       { leagueId: null },
-  soccer_uefa_champs_league:        { leagueId: null },
-  soccer_uefa_europa_league:        { leagueId: null },
-  soccer_spain_la_liga:             { leagueId: null },
-  soccer_germany_bundesliga:        { leagueId: null },
+  soccer_epl:                       { leagueId: 88637 }, // ✅ confirmed 16 Sep 2026
+  soccer_uefa_champs_league:        { leagueId: 118587 }, // ✅ confirmed 16 Sep 2026
+  soccer_uefa_europa_league:        { leagueId: 118593 }, // ✅ confirmed 16 Sep 2026
+  soccer_spain_la_liga:             { leagueId: 127733 }, // ✅ confirmed 16 Sep 2026
+  soccer_germany_bundesliga:        { leagueId: 96463 }, // ✅ confirmed 16 Sep 2026
   soccer_italy_serie_a:             { leagueId: null },
   soccer_france_ligue_one:          { leagueId: null },
   soccer_ghana_premiership:         { leagueId: null },
