@@ -118,7 +118,7 @@ async function fetch22BetOdds(sportKey) {
     if (!listRes) {
       const scraperKey = process.env.SCRAPER_API_KEY;
       if (scraperKey) {
-        const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(listUrl)}&country_code=gh&premium=true`;
+        const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(listUrl)}&country_code=gh&premium=true&ultra_premium=true`;
         try {
           listRes = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
         } catch (err) {
