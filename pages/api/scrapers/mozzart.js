@@ -4,7 +4,10 @@
  * CONFIRMED via DevTools capture (16 Sep 2026):
  *
  *   POST https://www.mozzartbet.com/betting/matches
- *   Body: { date, sort, currentPage, competitionIds, matchTypeId, pageSize, search, sportId }
+ *   Body: { date, sort, currentPage, competitionIds, matchTypeId, pageSize, search, sportId, medium }
+ *
+ *   medium: "ANDROID" — CONFIRMED via DevTools capture (17 Sep 2026). Without it the API
+ *   returns 403 { status: "ERROR", message: "Pogresan medium", mediumFromHeader: "DEFAULT" }.
  *
  * competitionIds: [] returns matches across ALL competitions for that sport/date —
  * we filter by competition name client-side rather than hunting per-league IDs,
@@ -51,6 +54,7 @@ async function fetchOneDate(sportId, date, retries = 2) {
     pageSize: 50,
     search: '',
     sportId,
+    medium: 'ANDROID', // CONFIRMED via DevTools capture (17 Sep 2026) — without this the API returns 403 "Pogresan medium"
   };
 
   for (let attempt = 0; attempt <= retries; attempt++) {
