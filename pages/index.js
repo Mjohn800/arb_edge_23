@@ -28,7 +28,7 @@ const BOOKS = {
   msport:        { name: 'MSport',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.msport.com/gh/football', sportUrls: { soccer: 'https://www.msport.com/gh/football', basketball: 'https://www.msport.com/gh/basketball', tennis: 'https://www.msport.com/gh/tennis', cricket: 'https://www.msport.com/gh/cricket', mma: 'https://www.msport.com/gh/mma' } },
   '22bet':       { name: '22Bet',        momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://22bet.com.gh', sportUrls: { soccer: 'https://22bet.com.gh/prematch?sport=Football', basketball: 'https://22bet.com.gh/prematch?sport=Basketball', tennis: 'https://22bet.com.gh/prematch?sport=Tennis', cricket: 'https://22bet.com.gh/prematch?sport=Cricket', mma: 'https://22bet.com.gh/prematch?sport=MMA' } },
   paripesa:      { name: 'Paripesa',     momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://paripesa.top', sportUrls: { soccer: 'https://paripesa.top/sport/football', basketball: 'https://paripesa.top/sport/basketball', tennis: 'https://paripesa.top/sport/tennis', cricket: 'https://paripesa.top/sport/cricket', mma: 'https://paripesa.top/sport/mma' } },
-  // TODO confirm momo/licensed for Ghana before relying on these flags
+  // Mozzart absent from GCG licensed-operators list as of Sept 2026 (gamingcommission.gov.gh/licensed-operators) — recheck periodically
   mozzart:       { name: 'Mozzart',      momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.mozzartbet.com', sportUrls: { soccer: 'https://www.mozzartbet.com/en/kladjenje' } },
 };
 
