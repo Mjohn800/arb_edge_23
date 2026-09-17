@@ -41,7 +41,7 @@ const HEADERS = {
   'Referer': 'https://www.mozzartbet.com/en/kladjenje',
 };
 
-async function fetchOneDate(sportId, date) {
+async function fetchOneDate(sportId, date, retries = 2) {
   const body = {
     date,
     sort: 'bycompetition',
@@ -53,22 +53,33 @@ async function fetchOneDate(sportId, date) {
     sportId,
   };
 
-  const res = await fetch(BASE, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(10000),
-  });
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(BASE, {
+      method: 'POST',
+      headers: HEADERS,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    });
 
-  if (!res.ok) {
+    if (res.ok) {
+      const json = await res.json();
+      return json?.items || [];
+    }
+
+    if (res.status === 429 && attempt < retries) {
+      const waitMs = 800 * Math.pow(2, attempt); // 800ms, then 1600ms
+      console.warn('[Mozzart]', date, '429 — backing off', waitMs, 'ms (attempt', attempt + 1, 'of', retries, ')');
+      await new Promise(r => setTimeout(r, waitMs));
+      continue;
+    }
+
     let bodyText = '';
     try { bodyText = (await res.text()).slice(0, 300); } catch {}
     console.warn('[Mozzart]', date, 'fetch failed', res.status, '| body:', bodyText);
     return [];
   }
 
-  const json = await res.json();
-  return json?.items || [];
+  return [];
 }
 
 async function fetchMozzartOdds(sportKey) {
@@ -76,10 +87,10 @@ async function fetchMozzartOdds(sportKey) {
   if (!mapping) return { events: [], status: { ok: true, reason: 'unsupported_sport', fetchedAt: new Date().toISOString() } };
 
   try {
-    // Pull today + tomorrow so we're not limited to same-day matches.
-    // NOTE: "tomorrow" as a date value is unconfirmed — if this errors, fall back to "today" only.
+    // Only "today" — "tomorrow" was an unconfirmed guess and doubled request volume,
+    // which was triggering Mozzart's 429 rate limiting.
     let allItems = [];
-    for (const date of ['today', 'tomorrow']) {
+    for (const date of ['today']) {
       try {
         const items = await fetchOneDate(mapping.sportId, date);
         allItems = allItems.concat(items);
