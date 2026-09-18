@@ -4,7 +4,6 @@ import { fetchMsportOdds }    from './scrapers/msport';
 import { fetch22BetOdds }     from './scrapers/22bet';
 import { fetchParipesaOdds }  from './scrapers/Paripesa';
 import { fetchMozzartOdds }   from './scrapers/mozzart';
-import { fetchBetfoxOdds }    from './scrapers/betfox';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
@@ -32,6 +31,124 @@ const GLOBAL_REGIONS = 'eu,uk';
 // scrapers (sportybet, betano, msport). If those are unreliable (e.g. the
 // Betano 403 seen on AFCON), the WA section will legitimately have nothing to
 // show — that's a scraper problem, not a filtering bug in findBestOdds/findMiddles.
+
+// ─── BETFOX (inline — single JSON endpoint, no scraper module needed) ────────
+// CONFIRMED via DevTools (2026-09-17):
+//   GET https://www.betfox.com.gh/api/client/v4/offer/competitions
+//       ?ids=sr:tournament:{id}&enriched=2&sport=Football
+//   → returns { enriched: [{ id, name, category, fixtures: [...] }], minimal: [...] }
+//   Each fixture already carries its markets + odds inline — no per-match request needed.
+//   Confirmed market types: FOOTBALL_WINNER (1X2), FOOTBALL_OVER_UNDER_GOALS (totals),
+//   FOOTBALL_BOTH_TEAMS_TO_SCORE (BTTS). Tournament IDs are the same Sportradar IDs
+//   used by the SportyBet scraper (shared feed provider).
+const BETFOX_TOURNAMENT_MAP = {
+  soccer_epl:                    'sr:tournament:17',
+  soccer_uefa_champs_league:     'sr:tournament:7',
+  soccer_spain_la_liga:          'sr:tournament:8',
+  soccer_germany_bundesliga:     'sr:tournament:35',
+  soccer_italy_serie_a:          'sr:tournament:23',
+  soccer_france_ligue_one:       'sr:tournament:34',
+  soccer_netherlands_eredivisie: 'sr:tournament:37',
+  soccer_portugal_primeira_liga: 'sr:tournament:238',
+  soccer_england_efl_champ:      'sr:tournament:18',
+  soccer_norway_eliteserien:     'sr:tournament:20',
+  soccer_sweden_allsvenskan:     'sr:tournament:40',
+  soccer_belgium_first_div:      'sr:tournament:38',
+  soccer_spl:                    'sr:tournament:36',
+  soccer_fifa_world_cup:         'sr:tournament:16',
+};
+
+const BETFOX_BASE = 'https://www.betfox.com.gh/api/client/v4/offer';
+const BETFOX_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+  'Accept': 'application/json, text/plain, */*',
+  'Referer': 'https://www.betfox.com.gh/',
+};
+
+function normaliseBetfoxOutcome(market) {
+  const out = { h2h: [], totals: [], btts: [] };
+  for (const o of (market.outcomes || [])) {
+    const price = parseFloat(o.odds);
+    if (!price || price <= 1.0 || o.status !== 'Active') continue;
+
+    if (market.type === 'FOOTBALL_WINNER') {
+      out.h2h.push({ name: o.name, price, _value: o.value });
+    } else if (market.type === 'FOOTBALL_OVER_UNDER_GOALS') {
+      const point = parseFloat(market.properties?.boundary);
+      const side = o.value === 'OVER' ? 'Over' : o.value === 'UNDER' ? 'Under' : null;
+      if (side && !isNaN(point)) out.totals.push({ name: side, price, point });
+    } else if (market.type === 'FOOTBALL_BOTH_TEAMS_TO_SCORE') {
+      out.btts.push({ name: o.value === 'YES' ? 'Yes' : 'No', price });
+    }
+  }
+  return out;
+}
+
+function normaliseBetfoxFixture(fixture, sportKey) {
+  try {
+    const winnerMarket = (fixture.markets || []).find(m => m.type === 'FOOTBALL_WINNER');
+    if (!winnerMarket) return null;
+    const homeOutcome = winnerMarket.outcomes.find(o => o.value === 'HOME');
+    const awayOutcome = winnerMarket.outcomes.find(o => o.value === 'AWAY');
+    if (!homeOutcome || !awayOutcome) return null;
+    const homeTeam = homeOutcome.name, awayTeam = awayOutcome.name;
+
+    const markets = [];
+    let h2hAll = [], totalsAll = [], bttsAll = [];
+    for (const market of (fixture.markets || [])) {
+      const { h2h, totals, btts } = normaliseBetfoxOutcome(market);
+      h2hAll = h2hAll.concat(h2h.map(o => ({
+        name: o._value === 'HOME' ? homeTeam : o._value === 'AWAY' ? awayTeam : 'Draw',
+        price: o.price,
+      })));
+      totalsAll = totalsAll.concat(totals);
+      bttsAll = bttsAll.concat(btts);
+    }
+    if (h2hAll.length >= 2) markets.push({ key: 'h2h', outcomes: h2hAll });
+    if (totalsAll.length >= 2) markets.push({ key: 'totals', outcomes: totalsAll });
+    if (bttsAll.length >= 2) markets.push({ key: 'btts', outcomes: bttsAll });
+    if (markets.length === 0) return null;
+
+    return {
+      id: 'betfox_' + fixture.id,
+      sport_key: sportKey,
+      home_team: homeTeam,
+      away_team: awayTeam,
+      commence_time: fixture.startTime,
+      bookmakers: [{ key: 'betfox', title: 'Betfox', markets, _wa: true }],
+    };
+  } catch { return null; }
+}
+
+async function fetchBetfoxOdds(sportKey) {
+  const tournamentId = BETFOX_TOURNAMENT_MAP[sportKey];
+  if (!tournamentId) return { events: [], status: { ok: true, reason: 'unsupported_sport', fetchedAt: new Date().toISOString() } };
+
+  try {
+    const url = `${BETFOX_BASE}/competitions?ids=${encodeURIComponent(tournamentId)}&enriched=2&sport=Football`;
+    const res = await fetch(url, { headers: BETFOX_HEADERS, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) {
+      console.warn('[Betfox] competitions', res.status, 'for', sportKey);
+      return { events: [], status: { ok: false, reason: 'http_' + res.status, fetchedAt: new Date().toISOString() } };
+    }
+    const json = await res.json();
+    const tournaments = json?.enriched || [];
+    const fixtures = tournaments.flatMap(t => t.fixtures || []);
+
+    const now = Date.now();
+    const upcoming = fixtures.filter(f => {
+      const ms = new Date(f.startTime).getTime();
+      return !isNaN(ms) && ms > now - 3 * 60 * 60 * 1000 && f.status === 'Active';
+    });
+
+    const normalised = upcoming.map(f => normaliseBetfoxFixture(f, sportKey)).filter(Boolean);
+    console.log('[Betfox]', sportKey, '→ raw:', fixtures.length, '| upcoming:', upcoming.length, '| normalised:', normalised.length);
+    return { events: normalised, status: { ok: true, reason: null, fetchedAt: new Date().toISOString() } };
+  } catch (err) {
+    console.warn('[Betfox] error for', sportKey, err.message);
+    return { events: [], status: { ok: false, reason: err.name === 'TimeoutError' ? 'timeout' : err.message, fetchedAt: new Date().toISOString() } };
+  }
+}
 
 // ─── WA SCRAPER CACHE (in-memory, 3 min TTL) ─────────────────────────────────
 const waCache = {};
