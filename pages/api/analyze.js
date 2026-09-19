@@ -1,9 +1,83 @@
+// ─── RATE LIMITING (in-memory, per-IP, 5 requests / 10 min) ─────────────────
+// This endpoint has real per-call cost (a Groq inference every hit) and,
+// unlike /api/odds, had NO protection at all before this — anyone with the
+// URL could script a loop and burn quota fast. Same best-effort caveat as
+// odds.js's caches: resets on cold start, not shared across serverless
+// instances, but stops casual/scripted abuse from a single source.
+const rateLimitLog = {};
+const RATE_LIMIT_WINDOW = 10 * 60 * 1000;
+const RATE_LIMIT_MAX = 5;
+
+function getClientIp(req) {
+  const fwd = req.headers['x-forwarded-for'];
+  if (fwd) return fwd.split(',')[0].trim();
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const hits = (rateLimitLog[ip] || []).filter(t => now - t < RATE_LIMIT_WINDOW);
+  if (hits.length >= RATE_LIMIT_MAX) {
+    const retryAfterMs = RATE_LIMIT_WINDOW - (now - hits[0]);
+    return { allowed: false, retryAfterSeconds: Math.ceil(retryAfterMs / 1000) };
+  }
+  hits.push(now);
+  rateLimitLog[ip] = hits;
+  return { allowed: true };
+}
+
+// ─── RESPONSE CACHE (in-memory, 15 min TTL) ──────────────────────────────────
+// Multiple bettors often ask about the same headline match around the same
+// time (e.g. everyone looking at Arsenal vs Chelsea right after kickoff
+// announcements). Without this, that's N separate Groq calls for identical
+// output. With it, they share one.
+const analysisCache = {};
+const ANALYSIS_CACHE_TTL = 15 * 60 * 1000;
+
+function analysisCacheKey(match, sport, marketType, outcomes) {
+  const oddsKey = (outcomes || [])
+    .map(o => `${o.label}:${o.odds}:${o.bookName}`)
+    .sort()
+    .join('|');
+  return `${match}::${sport}::${marketType}::${oddsKey}`;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   const { match, sport, outcomes, margin, marketType, includeNews } = req.body;
+
+  // ── Basic input validation — previously a missing/malformed body threw an
+  // unhandled exception (500) instead of a clean error ──────────────────────
+  if (!match || typeof match !== 'string') {
+    return res.status(400).json({ error: 'Missing or invalid "match"' });
+  }
+  if (!sport || typeof sport !== 'string') {
+    return res.status(400).json({ error: 'Missing or invalid "sport"' });
+  }
+  if (!Array.isArray(outcomes) || outcomes.length === 0) {
+    return res.status(400).json({ error: 'Missing or invalid "outcomes" — expected a non-empty array' });
+  }
+
+  // ── Rate limit ──────────────────────────────────────────────────────────
+  const ip = getClientIp(req);
+  const rl = checkRateLimit(ip);
+  if (!rl.allowed) {
+    return res.status(429).json({
+      error: `Too many analysis requests. Please wait ${rl.retryAfterSeconds}s and try again.`,
+      retryAfterSeconds: rl.retryAfterSeconds,
+    });
+  }
+
+  // ── Cache check ─────────────────────────────────────────────────────────
+  const cacheKey = analysisCacheKey(match, sport, marketType, outcomes);
+  const cached = analysisCache[cacheKey];
+  if (cached && Date.now() - cached.ts < ANALYSIS_CACHE_TTL) {
+    console.log('[analyze] serving', match, 'from cache, age:', Math.round((Date.now() - cached.ts) / 1000) + 's');
+    return res.status(200).json(cached.data);
+  }
 
   const prompt = `You are an expert sports analyst with deep knowledge of team statistics, current form, and recent news. Analyze this match for West African bettors.
 
@@ -77,6 +151,9 @@ Respond ONLY with this exact JSON, no markdown, no extra text:
     const text = data.choices?.[0]?.message?.content || '';
     const clean = text.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(clean);
+
+    analysisCache[cacheKey] = { data: parsed, ts: Date.now() };
+
     return res.status(200).json(parsed);
   } catch (err) {
     return res.status(500).json({ error: 'Analysis failed: ' + err.message });
