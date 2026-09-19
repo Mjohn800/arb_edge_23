@@ -1378,20 +1378,6 @@ const analyzeArb = async (arb) => {
         e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ ' + scanProgress.sport + '...' : '● ' + filteredArbs.length + ' arbs'),
         lastFetch && e('span', { style: st.badge('#1f2937', '#9ca3af') }, lastFetch.toLocaleTimeString()),
         isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, '⚠ Demo'),
-        scanHealth && (() => {
-          const { waBooks, eventsWithWACoverage, eventsScanned } = scanHealth;
-          const seenCount = waBooks.filter(b => b.seen).length;
-          const allUp = seenCount === waBooks.length;
-          const allDown = seenCount === 0;
-          const bg = allUp ? '#052e16' : allDown ? '#450a0a' : '#451a03';
-          const fg = allUp ? '#6ee7b7' : allDown ? '#fca5a5' : '#fcd34d';
-          const icon = allUp ? '✓' : allDown ? '✕' : '⚠';
-          return e('span', {
-            onClick: () => setShowScanHealth(v => !v),
-            style: { ...st.badge(bg, fg), cursor: 'pointer' },
-            title: 'Tap to see scan health details',
-          }, icon + ' WA ' + seenCount + '/' + waBooks.length);
-        })(),
         e('button', { onClick: () => setShowSetup(v => !v), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 10px' } }, apiKey ? '⚙ Connected' : 'Connect Live ↗')
       ),
       showSetup && e('div', { style: st.setupBox },
@@ -1401,30 +1387,6 @@ const analyzeArb = async (arb) => {
           e('button', { onClick: saveKey, style: st.btn('primary') }, 'Save')
         )
       ),
-      showScanHealth && scanHealth && e('div', { style: { background: '#111827', borderTop: '1px solid #1f2937', padding: '10px 14px' } },
-        e('div', { style: { fontSize: 12, fontWeight: 700, color: '#9ca3af', marginBottom: 8, display: 'flex', justifyContent: 'space-between' } },
-          e('span', null, '🇬🇭 WA Scan Health'),
-          e('span', { style: { fontSize: 11 } }, 'Last scan: ' + new Date(scanHealth.scannedAt).toLocaleTimeString())
-        ),
-        e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 } },
-          scanHealth.waBooks.map(b =>
-            e('div', { key: b.key, style: { display: 'flex', alignItems: 'center', gap: 6, background: b.seen ? '#052e16' : '#1f2937', borderRadius: 8, padding: '5px 8px' } },
-              e('span', null, b.seen ? '✅' : '⬜'),
-              e('span', { style: { fontSize: 12, color: b.seen ? '#6ee7b7' : '#6b7280', fontWeight: b.seen ? 600 : 400 } }, b.name)
-            )
-          )
-        ),
-        e('div', { style: { display: 'flex', gap: 8 } },
-          e('div', { style: { flex: 1, background: '#1f2937', borderRadius: 8, padding: '8px 10px', textAlign: 'center' } },
-            e('div', { style: { fontSize: 20, fontWeight: 700, color: '#f9fafb' } }, scanHealth.eventsScanned),
-            e('div', { style: { fontSize: 11, color: '#6b7280' } }, 'total events')
-          ),
-          e('div', { style: { flex: 1, background: scanHealth.eventsWithWACoverage > 0 ? '#052e16' : '#1f2937', borderRadius: 8, padding: '8px 10px', textAlign: 'center' } },
-            e('div', { style: { fontSize: 20, fontWeight: 700, color: scanHealth.eventsWithWACoverage > 0 ? '#6ee7b7' : '#6b7280' } }, scanHealth.eventsWithWACoverage),
-            e('div', { style: { fontSize: 11, color: '#6b7280' } }, 'with WA coverage')
-          )
-        )
-      )
     ),
            e('div', { style: { display: 'flex', justifyContent: 'flex-end', padding: '6px 4px' } },
   e('button', { onClick: onLogout, style: { fontSize: 12, padding: '6px 12px', borderRadius: 8, border: '1px solid #dc2626', color: '#dc2626', background: 'transparent' } }, 'Log out')
@@ -1616,6 +1578,9 @@ const analyzeArb = async (arb) => {
           e('button', { key: k, onClick: () => setArbSection(k), style: { ...st.btn(arbSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, l)
         )
       ),
+      (arbSection === 'wa' || arbSection === 'all') && e('div', {
+        style: { background: '#dcfce7', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: C.greenDark }
+      }, '🇬🇭 Scanning 3 West Africa-accessible sportsbooks: SportyBet, Betway, 1xBet. More being added.'),
       e('div', { style: { display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' } },
         e('select', { value: groupFilter, onChange: ev => setGroupFilter(ev.target.value), style: { ...st.input, width: 'auto', fontSize: 12, padding: '6px 10px' } },
           e('option', { value: 'all' }, 'All sports'),
@@ -2660,7 +2625,13 @@ const analyzeArb = async (arb) => {
           e('span', { style: { fontSize: 13, color: C.muted, lineHeight: 1.4 } }, item)
         )
       ),
-      e('div', { style: { background: C.amberLight, borderRadius: 10, padding: '11px 14px', marginTop: 16, fontSize: 12, color: '#78350f', lineHeight: 1.6 } }, '⚖️ Sports betting is legal in Ghana under the Gaming Commission of Ghana. Bet responsibly.')
+      e('div', { style: { background: C.amberLight, borderRadius: 10, padding: '11px 14px', marginTop: 16, fontSize: 12, color: '#78350f', lineHeight: 1.6 } },
+        e('div', { style: { fontWeight: 700, marginBottom: 4 } }, '⚖️ Gamble Responsibly. Only 18+ Years. Gambling is Addictive.'),
+        'ArbEdge is an odds-comparison tool — it does not accept bets or hold funds. All wagers are placed directly with licensed third-party sportsbooks. ',
+        e('a', { href: '/terms', target: '_blank', style: { color: '#78350f', fontWeight: 700, textDecoration: 'underline' } }, 'Terms'),
+        ' · ',
+        e('a', { href: '/privacy', target: '_blank', style: { color: '#78350f', fontWeight: 700, textDecoration: 'underline' } }, 'Privacy')
+      )
     )
   );
 }
@@ -2670,10 +2641,15 @@ function AuthScreen({ onAuth }) {
   const [mode, setMode] = useState('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const submit = async () => {
+  if (mode === 'signup' && !ageConfirmed) {
+    setError('You must confirm you are 18 or older to create an account.');
+    return;
+  }
   setError(''); setLoading(true);
   try {
  const { data, error } = mode === 'login'
@@ -2695,10 +2671,19 @@ function AuthScreen({ onAuth }) {
     e('h2', { style: { marginBottom: 16 } }, mode === 'login' ? 'Log in to ArbEdge' : 'Create your ArbEdge account'),
     e('input', { type: 'email', placeholder: 'Email', value: email, onChange: ev => setEmail(ev.target.value), style: { width: '100%', padding: 10, marginBottom: 10, border: '1px solid #ddd', borderRadius: 8 } }),
     e('input', { type: 'password', placeholder: 'Password', value: password, onChange: ev => setPassword(ev.target.value), style: { width: '100%', padding: 10, marginBottom: 10, border: '1px solid #ddd', borderRadius: 8 } }),
+    mode === 'signup' && e('label', { style: { display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10, fontSize: 12, color: '#4b5563', cursor: 'pointer' } },
+      e('input', { type: 'checkbox', checked: ageConfirmed, onChange: ev => setAgeConfirmed(ev.target.checked), style: { marginTop: 2 } }),
+      e('span', null,
+        'I confirm I am 18 years or older, and I agree to the ',
+        e('a', { href: '/terms', target: '_blank', style: { color: '#0f172a', fontWeight: 600 } }, 'Terms of Service'),
+        ' and ',
+        e('a', { href: '/privacy', target: '_blank', style: { color: '#0f172a', fontWeight: 600 } }, 'Privacy Policy'),
+        '.'
+      )
+    ),
     error && e('div', { style: { color: '#dc2626', fontSize: 13, marginBottom: 10 } }, error),
     e('button', { onClick: submit, disabled: loading, style: { width: '100%', padding: 10, background: '#0f172a', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, marginBottom: 10 } }, loading ? 'Please wait…' : (mode === 'login' ? 'Log in' : 'Sign up')),
     e('div', { style: { fontSize: 13, textAlign: 'center', color: '#666' } },
-      e('div', { style: { fontSize: 10, color: '#999', marginBottom: 10, wordBreak: 'break-all' } }, 'DEBUG url=' + String(process.env.NEXT_PUBLIC_SUPABASE_URL) + ' | keyLen=' + String((process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').length)),
       mode === 'login' ? "Don't have an account? " : 'Already have an account? ',
       e('a', { href: '#', onClick: ev => { ev.preventDefault(); setMode(mode === 'login' ? 'signup' : 'login'); }, style: { color: '#0f172a', fontWeight: 600 } }, mode === 'login' ? 'Sign up' : 'Log in')
     )
