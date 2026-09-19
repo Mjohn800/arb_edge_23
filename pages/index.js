@@ -1175,14 +1175,24 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     setApiKey(apiInput); setShowSetup(false); fetchOdds(apiInput);
   };
 
+  // fetchOddsRef always points at the LATEST fetchOdds closure (current
+  // selectedSports/minEV baked in), but reading it via ref rather than as a
+  // direct effect dependency means the interval below never has to be torn
+  // down and recreated when those change — editing the sports list just
+  // changes what the NEXT scheduled tick will scan, without moving that
+  // tick's time or firing an extra scan in between.
+  const fetchOddsRef = React.useRef(fetchOdds);
+  useEffect(() => { fetchOddsRef.current = fetchOdds; }, [fetchOdds]);
+
   useEffect(() => {
   const now = new Date();
   if (!lastFetch || (now - new Date(lastFetch)) > 5 * 60 * 1000) {
-    fetchOdds(apiKey || 'server');
+    fetchOddsRef.current(apiKey || 'server');
   }
-  const id = setInterval(() => { if (apiKey) fetchOdds(apiKey); }, 5 * 60 * 1000);
+  const id = setInterval(() => { if (apiKey) fetchOddsRef.current(apiKey); }, 5 * 60 * 1000);
   return () => clearInterval(id);
-}, [apiKey, fetchOdds]);
+}, [apiKey]); // fetchOdds intentionally omitted — read via fetchOddsRef so edits to
+              // selectedSports/minEV don't tear down and restart this interval
 
   // ── TEAM FORM ────────────────────────────────────────────────────────────────
   // Fetches from /api/team-form (backed by API-Football) once on mount, then
@@ -1624,18 +1634,7 @@ const analyzeArb = async (arb) => {
   )
 ),
         e('button', { onClick: () => setAccessOnly(v => !v), style: { ...st.btn(accessOnly ? 'success' : 'outline'), fontSize: 12, padding: '6px 10px' } }, accessOnly ? '✓ Accessible only' : '🌍 All books'),
-        e('button', { onClick: () => setShowSportPicker(v => !v), style: { ...st.btn('outline'), fontSize: 12, padding: '6px 10px' } }, '⚙ Sports (' + selectedSports.length + ')'),
-     e('button', {
-  onClick: () => {
-    if (lastFetch && (Date.now() - new Date(lastFetch).getTime()) < 60 * 1000) {
-      setError('Please wait at least 1 minute between manual scans to conserve API quota.');
-      return;
-    }
-    fetchOdds(apiKey);
-  },
-  disabled: loading || !apiKey,
-  style: { ...st.btn('outline'), fontSize: 12, padding: '6px 10px' }
-}, loading ? '...' : '↻')
+        e('button', { onClick: () => setShowSportPicker(v => !v), style: { ...st.btn('outline'), fontSize: 12, padding: '6px 10px' } }, '⚙ Sports (' + selectedSports.length + ')')
       ),
       showSportPicker && e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 12, padding: 14, marginBottom: 14, maxHeight: 300, overflowY: 'auto' } },
         e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 10 } },
