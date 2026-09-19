@@ -182,6 +182,26 @@ const waHealth = {
 const deadKeys = new Map(); // key -> timestamp it died
 const DEAD_KEY_TTL = 5 * 60 * 1000;
 
+// ─── GLOBAL ODDS-API CACHE (in-memory, 5 min TTL) ────────────────────────────
+// This is the fix for quota exhaustion: without it, EVERY incoming scan
+// request re-fetches the-odds-api fresh, so usage scales 1:1 with traffic.
+// With it, N users scanning the same sport within the same 5-minute window
+// all share ONE the-odds-api call instead of N separate ones. Best-effort —
+// resets on cold start, same caveat as waCache — but covers the common case
+// of multiple people using the app around the same time.
+const globalOddsCache = {};
+const GLOBAL_CACHE_TTL = 5 * 60 * 1000;
+function globalCacheKey(sport, markets) { return `${sport}::${markets}`; }
+
+// Single-flight: if the cache is stale and 5 requests for the SAME sport land
+// on this serverless instance within the same few hundred ms (a realistic
+// "everyone opens the site right after a community post" scenario), only the
+// FIRST one should actually loop through the-odds-api keys. The other 4 just
+// await that same in-flight promise instead of each starting their own
+// key-rotation loop — otherwise a stale-cache burst costs 5x instead of 1x,
+// even with caching in place.
+const inFlightGlobal = {};
+
 async function getWAOdds(sportKey) {
   const cached = waCache[sportKey];
   if (cached && Date.now() - cached.ts < WA_CACHE_TTL) {
@@ -272,24 +292,12 @@ function fuzzyMatch(a, b) {
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
-// ─── HANDLER ──────────────────────────────────────────────────────────────────
-export default async function handler(req, res) {
-  const { sport, region, market } = req.query;
-  const markets = market || 'h2h,spreads,totals';
-
-  // ── Multi-key rotation (your existing logic, unchanged) ───────────────────
-  const keys = [
-    process.env.ODDS_API_KEY,
-    process.env.ODDS_API_KEY_2,
-    process.env.ODDS_API_KEY_3,
-    process.env.ODDS_API_KEY_4,
-    process.env.ODDS_API_KEY_5,
-    process.env.ODDS_API_KEY_6,
-  ].filter(Boolean);
-
-  console.log('[odds] keys loaded:', keys.map((k, i) => `KEY_${i+1}=${k ? k.slice(0,8)+'...' : 'MISSING'}`));
-  console.log('[odds] requesting sport:', sport, 'regions:', GLOBAL_REGIONS, 'markets:', markets);
-
+// Does the actual work of trying each API key until one succeeds, and writes
+// the result to the shared cache on success. Called at most ONCE per stale
+// sport at a time — concurrent requests for the same sport all await the same
+// call to this function instead of each running their own copy (see
+// inFlightGlobal above).
+async function fetchGlobalOddsFresh(sport, markets, keys, cacheKey) {
   let lastError = null;
   let lastErrorDetail = null;
   let globalData = null;
@@ -297,7 +305,6 @@ export default async function handler(req, res) {
   let usedRequests = null;
   let keyIndex = null;
 
-  // ── 1. Try each API key until one succeeds ────────────────────────────────
   for (const key of keys) {
     const deadAt = deadKeys.get(key);
     if (deadAt && Date.now() - deadAt < DEAD_KEY_TTL) continue;
@@ -339,11 +346,69 @@ export default async function handler(req, res) {
         (ev.bookmakers || []).forEach(bm => { bm._wa = WA_BOOKS.includes(bm.key); });
       });
 
+      globalOddsCache[cacheKey] = { data: globalData, remainingRequests, usedRequests, keyIndex, ts: Date.now() };
       break; // got data, stop trying keys
     } catch (err) {
       lastError = err.message;
       continue;
     }
+  }
+
+  return { globalData, remainingRequests, usedRequests, keyIndex, lastError, lastErrorDetail };
+}
+
+// ─── HANDLER ──────────────────────────────────────────────────────────────────
+export default async function handler(req, res) {
+  const { sport, region, market } = req.query;
+  const markets = market || 'h2h,spreads,totals';
+
+  // ── Multi-key rotation (your existing logic, unchanged) ───────────────────
+  const keys = [
+    process.env.ODDS_API_KEY,
+    process.env.ODDS_API_KEY_2,
+    process.env.ODDS_API_KEY_3,
+    process.env.ODDS_API_KEY_4,
+    process.env.ODDS_API_KEY_5,
+    process.env.ODDS_API_KEY_6,
+  ].filter(Boolean);
+
+  console.log('[odds] keys loaded:', keys.map((k, i) => `KEY_${i+1}=${k ? k.slice(0,8)+'...' : 'MISSING'}`));
+  console.log('[odds] requesting sport:', sport, 'regions:', GLOBAL_REGIONS, 'markets:', markets);
+
+  let lastError = null;
+  let lastErrorDetail = null;
+  let globalData = null;
+  let remainingRequests = null;
+  let usedRequests = null;
+  let keyIndex = null;
+  let globalFromCache = false;
+
+  // ── 0. Serve from cache if a recent fetch for this exact sport+markets exists ──
+  const cacheKey = globalCacheKey(sport, markets);
+  const cachedGlobal = globalOddsCache[cacheKey];
+  if (cachedGlobal && Date.now() - cachedGlobal.ts < GLOBAL_CACHE_TTL) {
+    globalData = cachedGlobal.data;
+    remainingRequests = cachedGlobal.remainingRequests;
+    usedRequests = cachedGlobal.usedRequests;
+    keyIndex = cachedGlobal.keyIndex;
+    globalFromCache = true;
+    console.log('[odds] serving', sport, 'from cache, age:', Math.round((Date.now() - cachedGlobal.ts) / 1000) + 's');
+  } else {
+    // ── 1. Cache miss: join an in-flight fetch for this sport if one's already
+    // running (another request beat us here by milliseconds), else start one. ──
+    if (inFlightGlobal[cacheKey]) {
+      console.log('[odds] joining in-flight fetch already running for', sport);
+    } else {
+      inFlightGlobal[cacheKey] = fetchGlobalOddsFresh(sport, markets, keys, cacheKey)
+        .finally(() => { delete inFlightGlobal[cacheKey]; });
+    }
+    const result = await inFlightGlobal[cacheKey];
+    globalData = result.globalData;
+    remainingRequests = result.remainingRequests;
+    usedRequests = result.usedRequests;
+    keyIndex = result.keyIndex;
+    lastError = result.lastError;
+    lastErrorDetail = result.lastErrorDetail;
   }
 
   // ── 2. WA scrapers run regardless of whether global API succeeded ─────────
@@ -397,6 +462,7 @@ export default async function handler(req, res) {
     remainingRequests,
     usedRequests,
     keyIndex,
+    globalFromCache,
     waBookHealth,
     userCountry,
     isWAUser,
