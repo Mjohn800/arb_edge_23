@@ -933,7 +933,11 @@ const [apiKey, setApiKey] = useState('server');
   const [stake, setStake] = useState(500);
   const [currency, setCurrency] = useState('GHS');
   const [groupFilter, setGroupFilter] = useState('all');
-  const TOP_SPORTS = ['soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_italy_serie_a','soccer_france_ligue_one','soccer_africa_cup_of_nations','soccer_ghana_premiership','soccer_fifa_world_cup','basketball_nba','tennis_atp_wimbledon','tennis_wta_wimbledon','mma_mixed_martial_arts','boxing_boxing','cricket_ipl','cricket_t20_world_cup','americanfootball_nfl','soccer_uefa_europa_league','soccer_conmebol_copa_libertadores','soccer_usa_mls'];
+  // Capped to 20 popular FOOTBALL leagues only (was previously mixed with
+  // basketball/tennis/MMA/cricket/NFL, which fragmented the shared scan cache
+  // across sports nobody was actually comparing). Every entry here has a
+  // confirmed WA-scraper tournament ID, so capping doesn't lose WA coverage.
+  const TOP_SPORTS = ['soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_italy_serie_a','soccer_france_ligue_one','soccer_africa_cup_of_nations','soccer_ghana_premiership','soccer_fifa_world_cup','soccer_uefa_europa_league','soccer_conmebol_copa_libertadores','soccer_usa_mls','soccer_england_efl_champ','soccer_netherlands_eredivisie','soccer_portugal_primeira_liga','soccer_belgium_first_div','soccer_spl','soccer_norway_eliteserien','soccer_sweden_allsvenskan','soccer_brazil_campeonato'];
 const [selectedSports, setSelectedSports] = useState(() => {
   try { const saved = localStorage.getItem('arb_sports'); return saved ? JSON.parse(saved) : TOP_SPORTS; } catch { return TOP_SPORTS; }
 });
@@ -1019,7 +1023,7 @@ useEffect(() => {
   const fetchOdds = useCallback(async (key) => {
   if (!key) return;
     setLoading(true); setError('');
-    setLastFetch(new Date()); // mark attempt now, so the 12-min gate holds even if this scan fails entirely (quota exhausted etc.)
+    setLastFetch(new Date()); // mark attempt now, so the 5-min gate holds even if this scan fails entirely (quota exhausted etc.)
     const sportsToScan = ALL_SPORTS.filter(s => selectedSports.includes(s.key));
     const all = [];
     let okCount = 0, lastFailStatus = null, lastFailBody = '';
@@ -1031,7 +1035,7 @@ useEffect(() => {
     for (let i = 0; i < sportsToScan.length; i++) {
       const sp = sportsToScan[i];
       setScanProgress({ current: i + 1, total: sportsToScan.length, sport: sp.label });
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 150));
       try {
         // Outright/futures sport keys (e.g. '..._winner') ONLY accept markets=outrights.
         // Regular match-based sports ONLY accept h2h/spreads/totals. Mixing the two in
@@ -1163,7 +1167,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
 
     prevEventsRef.current = all;
     setLoading(false);
-    setNextScanAt(Date.now() + 12 * 60 * 1000);
+    setNextScanAt(Date.now() + 5 * 60 * 1000);
   }, [selectedSports, minEV]);
 
   const saveKey = () => {
@@ -1173,10 +1177,10 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
 
   useEffect(() => {
   const now = new Date();
-  if (!lastFetch || (now - new Date(lastFetch)) > 12 * 60 * 1000) {
+  if (!lastFetch || (now - new Date(lastFetch)) > 5 * 60 * 1000) {
     fetchOdds(apiKey || 'server');
   }
-  const id = setInterval(() => { if (apiKey) fetchOdds(apiKey); }, 12 * 60 * 1000);
+  const id = setInterval(() => { if (apiKey) fetchOdds(apiKey); }, 5 * 60 * 1000);
   return () => clearInterval(id);
 }, [apiKey, fetchOdds]);
 
@@ -1657,7 +1661,7 @@ const analyzeArb = async (arb) => {
         quota.remaining !== null && e('div', { style: { background: parseInt(quota.remaining) < 50 ? '#fef3c7' : '#f0fdf4', color: parseInt(quota.remaining) < 50 ? '#92400e' : '#14532d', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10, display: 'flex', justifyContent: 'space-between' } }, e('span', null, 'Key ' + (quota.keyIndex || 1) + ' | Used: ' + quota.used), e('span', { style: { fontWeight: 700 } }, quota.remaining + ' remaining')),
       isDemo && !error && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
         apiKey
-          ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 12 min.'
+          ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 5 min.'
           : '📌 Demo mode — tap Connect Live to scan real odds across ' + ALL_SPORTS.length + ' sports. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'
       ),
  filteredArbs.map(arb => {
@@ -2137,7 +2141,7 @@ const analyzeArb = async (arb) => {
         ),
         steam.length === 0 && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
           e('div', { style: { fontSize: 32, marginBottom: 8 } }, '💨'),
-          e('div', { style: { fontSize: 14 } }, steam.length === 0 && prevEventsRef.current.length === 0 ? 'Steam needs two scans to compare. Run a second scan after 12 minutes.' : 'No significant line moves detected in the last scan.')
+          e('div', { style: { fontSize: 14 } }, steam.length === 0 && prevEventsRef.current.length === 0 ? 'Steam needs two scans to compare. Run a second scan after 5 minutes.' : 'No significant line moves detected in the last scan.')
         ),
         steam.map(s => {
           const info = getSportInfo(s.sport);
