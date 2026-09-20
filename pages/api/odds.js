@@ -1,3 +1,4 @@
+import { getUserPlan, FREE_SPORTS } from '../../lib/serverAuth';
 import { fetchSportybetOdds } from './scrapers/sportybet';
 import { fetchBetanoOdds }    from './scrapers/betano';
 import { fetchMsportOdds }    from './scrapers/msport';
@@ -360,6 +361,14 @@ async function fetchGlobalOddsFresh(sport, markets, keys, cacheKey) {
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   const { sport, region, market } = req.query;
+
+  // -- PAYWALL: must be logged in; free users only get FREE_SPORTS ----------
+  const plan = await getUserPlan(req);
+  if (!plan.user) return res.status(401).json({ error: 'login_required' });
+  if (!plan.isPremium && !FREE_SPORTS.includes(sport)) {
+    return res.status(402).json({ error: 'premium_required', sport });
+  }
+
   const markets = market || 'h2h,spreads,totals';
 
   // ── Multi-key rotation (your existing logic, unchanged) ───────────────────
