@@ -34,6 +34,9 @@ const BOOKS = {
   betfox:        { name: 'Betfox',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.betfox.com.gh', sportUrls: { soccer: 'https://www.betfox.com.gh' } },
 };
 
+const SUPPORT_EMAIL = 'lexjhn1390@gmail.com';
+const mailto = (subject, body) => 'mailto:' + SUPPORT_EMAIL + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+
 // Regions a user can pick in the app (or leave on auto-detect).
 const REGION_OPTIONS = [
   { key: 'auto',  label: 'Auto-detect' },
@@ -1069,7 +1072,7 @@ useEffect(() => {
   const priceLabel = (plan.quotes[curSel] && plan.quotes[curSel].label) || 'Premium';
   const _q = plan.quotes[curSel];
   const chargeNote = (_q && _q.chargeLabel && _q.displayCurrency !== _q.currency)
-    ? e('div', { style: { marginTop: 8, fontSize: 11, color: '#6b7280', lineHeight: 1.4 } }, 'At checkout you are charged ' + _q.chargeLabel + ' (the equivalent of ' + _q.label + '). Your card converts it to your own currency and your bank may add its own fees.')
+    ? createElement('div', { style: { marginTop: 8, fontSize: 11, color: '#6b7280', lineHeight: 1.4 } }, 'At checkout you are charged ' + _q.chargeLabel + ' (the equivalent of ' + _q.label + '). Your card converts it to your own currency and your bank may add its own fees.')
     : null;
   const startCheckout = async (mode) => {
     setCheckoutLoading(true);
@@ -1135,6 +1138,131 @@ useEffect(() => {
   const myLabel = isWAUserNow ? '\uD83C\uDDEC\uD83C\uDDED West Africa' : '\u2705 My region';
   const myLabelOnly = isWAUserNow ? '\uD83C\uDDEC\uD83C\uDDED West Africa only' : '\u2705 Available to me only';
   const regionFallbackText = 'Only books available in your region are compared, so every gap shown is a bet you can actually place.';
+
+  // -- MENU (account, support, region, help, legal, log out) ------------------
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [fbCategory, setFbCategory] = useState('bug');
+  const [fbMessage, setFbMessage] = useState('');
+  const [fbStatus, setFbStatus] = useState('idle');
+  const [planCheckMsg, setPlanCheckMsg] = useState('');
+  const submitFeedback = async () => {
+    const msg = fbMessage.trim();
+    if (msg.length < 5) { setFbStatus('short'); return; }
+    setFbStatus('sending');
+    try {
+      const { error } = await supabase.from('feedback').insert({
+        user_id: session.user.id,
+        email: session.user.email,
+        category: fbCategory,
+        message: msg.slice(0, 2000),
+        plan_status: plan.isOwner ? 'owner' : (plan.isPremium ? 'premium' : 'free'),
+        region: userRegion.region || null,
+      });
+      if (error) throw error;
+      setFbMessage('');
+      setFbStatus('sent');
+    } catch { setFbStatus('error'); }
+  };
+  const checkPayment = async () => {
+    setPlanCheckMsg('Checking...');
+    const j = await refreshPlan();
+    if (j && j.isPremium) setPlanCheckMsg('Your Premium is active.');
+    else setPlanCheckMsg('Still showing the Free plan. If you paid a minute ago, wait a little and check again. If it has been longer, email us with your payment receipt and we will fix it.');
+  };
+  const renderMenu = () => {
+    if (!menuOpen) return null;
+    const e = createElement;
+    const userEmail = (session && session.user && session.user.email) || '';
+    const sec = { marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid #e5e7eb' };
+    const h = { fontSize: 12, fontWeight: 700, color: '#6b7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 };
+    const p = { fontSize: 13, color: '#374151', lineHeight: 1.5, margin: '0 0 8px' };
+    const link = { color: '#2563eb', textDecoration: 'underline', fontSize: 13 };
+    const planLine = plan.isOwner ? 'Owner access' : plan.isPremium ? 'Premium' + (plan.periodEnd ? ' until ' + new Date(plan.periodEnd).toLocaleDateString() : '') : 'Free plan';
+    const canPay = !plan.notAvailable && Object.keys(plan.quotes).length > 0;
+    const supportBody = 'Account: ' + userEmail + '\n\n';
+    const faq = [
+      ['What does Premium include?', 'Every league we scan, AI bet analysis, and the full set of tools. The free plan covers a limited set of leagues.'],
+      ['How do I pay?', 'By card through Paystack, and by mobile money where available. The price for your region is shown before you pay.'],
+      ['I paid but I am still on Free', 'Open Account in this menu and tap "Paid but still on Free?". If it does not change after a few minutes, email us your receipt.'],
+      ['How do I cancel?', 'A 30-day payment does not renew, so there is nothing to cancel. If you chose auto-renew, email us before your next charge and we will stop it.'],
+      ['Why do some odds say Not accessible?', 'Not every sportsbook is available in every country. Set My region so the app shows the books you can actually use. These labels are guidance and can be wrong.'],
+      ['Are arbs guaranteed profit?', 'No. Odds move fast and sportsbooks can limit or void bets. Always check the price on the sportsbook before you bet.'],
+      ['How often do odds refresh?', 'The scanner runs about every 5 minutes while the app is open.'],
+    ];
+    return e('div', { style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000, background: 'rgba(0,0,0,0.5)' }, onClick: () => setMenuOpen(false) },
+      e('div', { onClick: ev => ev.stopPropagation(), style: { position: 'absolute', top: 0, right: 0, bottom: 0, width: 'min(94vw, 420px)', background: '#fff', overflowY: 'auto', padding: 16, boxSizing: 'border-box' } },
+        e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 } },
+          e('div', { style: { fontSize: 18, fontWeight: 800, color: '#111827' } }, 'Menu'),
+          e('button', { onClick: () => setMenuOpen(false), style: { ...st.btn('outline'), padding: '6px 12px' } }, 'Close')
+        ),
+
+        e('div', { style: sec },
+          e('div', { style: h }, 'Account'),
+          e('div', { style: p }, userEmail),
+          e('div', { style: p }, 'Plan: ' + planLine),
+          !plan.isOwner && canPay && e('button', { onClick: () => startCheckout('prepaid'), disabled: checkoutLoading, style: st.btn('primary') }, checkoutLoading ? 'Opening...' : (plan.isPremium ? 'Renew for 30 days (' + priceLabel + ')' : 'Upgrade to Premium (' + priceLabel + ')')),
+          !plan.isPremium && e('div', { style: { marginTop: 10 } },
+            e('button', { onClick: checkPayment, style: st.btn('outline') }, 'Paid but still on Free?'),
+            planCheckMsg && e('div', { style: { ...p, marginTop: 8 } }, planCheckMsg)
+          )
+        ),
+
+        e('div', { style: sec },
+          e('div', { style: h }, 'Customer support'),
+          e('div', { style: p }, 'Send us a message and we will reply by email.'),
+          e('select', { value: fbCategory, onChange: ev => setFbCategory(ev.target.value), style: { width: '100%', padding: '8px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 13, marginBottom: 8, boxSizing: 'border-box' } },
+            [['bug', 'Something is broken'], ['payment', 'Payment problem'], ['idea', 'Idea or feedback'], ['other', 'Something else']].map(([k, l]) => e('option', { key: k, value: k }, l))
+          ),
+          e('textarea', { value: fbMessage, onChange: ev => setFbMessage(ev.target.value), maxLength: 2000, rows: 4, placeholder: 'Tell us what happened or what you would like to see...', style: { width: '100%', boxSizing: 'border-box', padding: 8, borderRadius: 8, border: '1px solid #d1d5db', fontSize: 13, fontFamily: 'inherit', marginBottom: 8 } }),
+          e('button', { onClick: submitFeedback, disabled: fbStatus === 'sending', style: st.btn('primary') }, fbStatus === 'sending' ? 'Sending...' : 'Send message'),
+          fbStatus === 'sent' && e('div', { style: { ...p, marginTop: 8, color: '#047857' } }, 'Thank you. We got your message.'),
+          fbStatus === 'short' && e('div', { style: { ...p, marginTop: 8, color: '#b45309' } }, 'Please write a little more.'),
+          fbStatus === 'error' && e('div', { style: { ...p, marginTop: 8, color: '#b91c1c' } }, 'Could not send. Please email us instead.'),
+          e('div', { style: { marginTop: 10 } }, e('a', { href: mailto('ArbEdge support', supportBody), style: link }, 'Or email ' + SUPPORT_EMAIL))
+        ),
+
+        e('div', { style: sec },
+          e('div', { style: h }, 'My region'),
+          e('select', { value: myRegion, onChange: ev => changeRegion(ev.target.value), style: { width: '100%', padding: '8px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box' } },
+            REGION_OPTIONS.map(o => e('option', { key: o.key, value: o.key }, o.label))
+          ),
+          myRegion === 'auto' && userRegion.region && e('div', { style: { ...p, marginTop: 6, color: '#6b7280' } }, 'Detected: ' + _regionName(userRegion.region)),
+          e('div', { style: { ...p, marginTop: 6 } }, 'This decides which sportsbooks count as available to you.'),
+          regionNotice && e('div', { style: { padding: '8px 10px', borderRadius: 8, fontSize: 12, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' } }, regionNotice)
+        ),
+
+        e('div', { style: sec },
+          e('div', { style: h }, 'Help and FAQ'),
+          faq.map(([q, a], i) => e('details', { key: i, style: { marginBottom: 8 } },
+            e('summary', { style: { cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#111827' } }, q),
+            e('div', { style: { ...p, marginTop: 6 } }, a)
+          ))
+        ),
+
+        e('div', { style: sec },
+          e('div', { style: h }, 'Legal'),
+          e('div', { style: { display: 'flex', gap: 16 } },
+            e('a', { href: '/terms', target: '_blank', rel: 'noreferrer', style: link }, 'Terms of Service'),
+            e('a', { href: '/privacy', target: '_blank', rel: 'noreferrer', style: link }, 'Privacy Policy')
+          )
+        ),
+
+        e('div', { style: sec },
+          e('div', { style: h }, 'Responsible gambling'),
+          e('div', { style: p }, 'Gamble responsibly. Only 18+ (or the legal age where you live). Gambling is addictive. Never bet money you cannot afford to lose, and take a break or set limits if it stops being fun.'),
+          e('div', { style: p }, 'In the UK, free support is available at ', e('a', { href: 'https://www.begambleaware.org', target: '_blank', rel: 'noreferrer', style: link }, 'begambleaware.org'), '. Elsewhere, please contact your national gambling support service.')
+        ),
+
+        e('div', { style: sec },
+          e('div', { style: h }, 'Your data'),
+          e('div', { style: p }, 'You can ask us to delete your account and the data we hold about you.'),
+          e('a', { href: mailto('Delete my ArbEdge account', 'Please delete my account: ' + userEmail + '\n'), style: link }, 'Request account deletion')
+        ),
+
+        e('button', { onClick: onLogout, style: { width: '100%', fontSize: 14, padding: '10px 12px', borderRadius: 8, border: '1px solid #dc2626', color: '#dc2626', background: 'transparent', cursor: 'pointer', fontWeight: 600 } }, 'Log out')
+      )
+    );
+  };
 
   const fetchOdds = useCallback(async (key) => {
   if (!key) return;
@@ -1517,16 +1645,9 @@ const analyzeArb = async (arb) => {
       ),
     ),
            e('div', { style: { display: 'flex', justifyContent: 'flex-end', padding: '6px 4px' } },
-  e('button', { onClick: onLogout, style: { fontSize: 12, padding: '6px 12px', borderRadius: 8, border: '1px solid #dc2626', color: '#dc2626', background: 'transparent' } }, 'Log out')
+  e('button', { onClick: () => setMenuOpen(true), style: { fontSize: 13, padding: '7px 14px', borderRadius: 8, border: '1px solid #d1d5db', color: '#111827', background: '#fff', cursor: 'pointer', fontWeight: 600 } }, '\u2630 Menu')
 ),
-    e('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '6px 4px', fontSize: 12, color: '#374151' } },
-      e('span', null, 'My region:'),
-      e('select', { value: myRegion, onChange: ev => changeRegion(ev.target.value), style: { padding: '6px 8px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 12 } },
-        REGION_OPTIONS.map(o => e('option', { key: o.key, value: o.key }, o.label))
-      ),
-      myRegion === 'auto' && userRegion.region && e('span', { style: { color: '#6b7280' } }, 'detected: ' + _regionName(userRegion.region))
-    ),
-    regionNotice && e('div', { style: { margin: '0 4px 6px', padding: '8px 10px', borderRadius: 8, fontSize: 12, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' } }, regionNotice),
+    renderMenu(),
     plan.loaded && e('div', { style: { margin: '8px 4px', padding: '10px 12px', borderRadius: 10, fontSize: 12, lineHeight: 1.5, color: '#1f2937', background: plan.isPremium ? '#ecfdf5' : '#fefce8', border: '1px solid ' + (plan.isPremium ? '#a7f3d0' : '#fde68a') } },
       plan.isPremium
         ? plan.isOwner ? 'Owner access: everything is unlocked.' : 'Premium active' + (plan.periodEnd ? ' until ' + new Date(plan.periodEnd).toLocaleDateString() : '') + '.'
