@@ -1,4 +1,4 @@
-import { getUserPlan, FREE_SPORTS } from '../../lib/serverAuth';
+import { getUserPlan, FREE_SPORTS, SCANNED_SPORTS } from '../../lib/serverAuth';
 import { fetchSportybetOdds } from './scrapers/sportybet';
 import { fetchBetanoOdds }    from './scrapers/betano';
 import { fetchMsportOdds }    from './scrapers/msport';
@@ -51,12 +51,13 @@ const BETFOX_TOURNAMENT_MAP = {
   soccer_france_ligue_one:       'sr:tournament:34',
   soccer_netherlands_eredivisie: 'sr:tournament:37',
   soccer_portugal_primeira_liga: 'sr:tournament:238',
-  soccer_england_efl_champ:      'sr:tournament:18',
+  soccer_efl_champ:              'sr:tournament:18', // fixed key (was soccer_england_efl_champ, not a real Odds API key)
   soccer_norway_eliteserien:     'sr:tournament:20',
   soccer_sweden_allsvenskan:     'sr:tournament:40',
   soccer_belgium_first_div:      'sr:tournament:38',
   soccer_spl:                    'sr:tournament:36',
   soccer_fifa_world_cup:         'sr:tournament:16',
+  soccer_brazil_campeonato:      'sr:tournament:325', // Brasileirao Serie A. VERIFY this ID in Betfox's network tab
 };
 
 const BETFOX_BASE = 'https://www.betfox.com.gh/api/client/v4/offer';
@@ -365,6 +366,9 @@ export default async function handler(req, res) {
   // -- PAYWALL: must be logged in; free users only get FREE_SPORTS ----------
   const plan = await getUserPlan(req);
   if (!plan.user) return res.status(401).json({ error: 'login_required' });
+  if (!plan.isOwner && !SCANNED_SPORTS.includes(sport)) {
+    return res.status(403).json({ error: 'sport_not_available', sport });
+  }
   if (!plan.isPremium && !FREE_SPORTS.includes(sport)) {
     return res.status(402).json({ error: 'premium_required', sport });
   }
