@@ -1021,7 +1021,7 @@ useEffect(() => {
   const teamFormRef = React.useRef(TEAM_FORM);
 
   // -- PREMIUM PLAN STATE --------------------------------------------------
-  const [plan, setPlan] = useState({ loaded: false, isPremium: false, periodEnd: null, quotes: {}, defaultCurrency: 'GHS', autoCurrencies: [] });
+  const [plan, setPlan] = useState({ loaded: false, isPremium: false, isOwner: false, periodEnd: null, quotes: {}, defaultCurrency: 'GHS', autoCurrencies: [], freeSports: [] });
   const [payCurrency, setPayCurrency] = useState('');
   const [upgradeNotice, setUpgradeNotice] = useState('');
   const [checkoutLoading, setCheckoutLoading] = useState(false);
@@ -1036,7 +1036,7 @@ useEffect(() => {
       const res = await fetch('/api/me', { headers: { Authorization: 'Bearer ' + token } });
       if (!res.ok) return null;
       const j = await res.json();
-      setPlan({ loaded: true, isPremium: !!j.isPremium, periodEnd: j.currentPeriodEnd, quotes: j.quotes || {}, defaultCurrency: j.defaultCurrency || 'GHS', autoCurrencies: j.autoCurrencies || [] });
+      setPlan({ loaded: true, isPremium: !!j.isPremium, isOwner: !!j.isOwner, periodEnd: j.currentPeriodEnd, quotes: j.quotes || {}, defaultCurrency: j.defaultCurrency || 'GHS', autoCurrencies: j.autoCurrencies || [], freeSports: j.freeSports || [] });
       return j;
     } catch { return null; }
   }, []);
@@ -1073,13 +1073,41 @@ useEffect(() => {
     setCheckoutLoading(false);
   };
 
+  const planRef = React.useRef(plan);
+  planRef.current = plan;
+  const [pickerNotice, setPickerNotice] = useState('');
+  const isLocked = (key) => plan.loaded && !plan.isPremium && plan.freeSports.length > 0 && !plan.freeSports.includes(key);
+  const lockMsg = (n) => '\uD83D\uDD12 ' + n + (n === 1 ? ' league is' : ' leagues are') + ' Premium only. Go Premium (' + priceLabel + ' for 30 days) to scan every league.';
+  const toggleSport = (key) => {
+    if (selectedSports.includes(key)) { setSelectedSports(p => p.filter(k => k !== key)); return; }
+    if (isLocked(key)) { setPickerNotice(lockMsg(1)); return; }
+    setPickerNotice('');
+    setSelectedSports(p => [...p, key]);
+  };
+  const addSports = (keys) => {
+    const ok = keys.filter(k => !isLocked(k));
+    const blocked = keys.length - ok.length;
+    setPickerNotice(blocked > 0 ? lockMsg(blocked) : '');
+    setSelectedSports(p => [...new Set([...p, ...ok])]);
+  };
+  const setSportsExactly = (keys) => {
+    const ok = keys.filter(k => !isLocked(k));
+    const blocked = keys.length - ok.length;
+    setPickerNotice(blocked > 0 ? lockMsg(blocked) : '');
+    setSelectedSports(ok);
+  };
+
   const fetchOdds = useCallback(async (key) => {
   if (!key) return;
     setLoading(true); setError('');
     setLastFetch(new Date()); // mark attempt now, so the 5-min gate holds even if this scan fails entirely (quota exhausted etc.)
-    const sportsToScan = ALL_SPORTS.filter(s => selectedSports.includes(s.key));
+    const _p = planRef.current;
+    const _gated = _p.loaded && !_p.isPremium && _p.freeSports.length > 0;
+    const _selected = ALL_SPORTS.filter(s => selectedSports.includes(s.key));
+    const sportsToScan = _gated ? _selected.filter(s => _p.freeSports.includes(s.key)) : _selected;
+    const _lockedCount = _selected.length - sportsToScan.length;
     const all = [];
-    let okCount = 0, lastFailStatus = null, lastFailBody = '', premiumBlocked = 0;
+    let okCount = 0, lastFailStatus = null, lastFailBody = '', premiumBlocked = _lockedCount;
     const authToken = await getToken();
     // Aggregates WA scraper health across the ENTIRE scan, not just the last sport checked —
     // previously setWaHealth() was called fresh on every iteration, so a 403 on sport #3
@@ -1449,7 +1477,7 @@ const analyzeArb = async (arb) => {
 ),
     plan.loaded && e('div', { style: { margin: '8px 4px', padding: '10px 12px', borderRadius: 10, fontSize: 12, lineHeight: 1.5, color: '#1f2937', background: plan.isPremium ? '#ecfdf5' : '#fefce8', border: '1px solid ' + (plan.isPremium ? '#a7f3d0' : '#fde68a') } },
       plan.isPremium
-        ? 'Premium active' + (plan.periodEnd ? ' until ' + new Date(plan.periodEnd).toLocaleDateString() : '') + '.'
+        ? plan.isOwner ? 'Owner access: everything is unlocked.' : 'Premium active' + (plan.periodEnd ? ' until ' + new Date(plan.periodEnd).toLocaleDateString() : '') + '.'
         : e('div', null,
             e('div', { style: { marginBottom: 8 } }, upgradeNotice || 'Free plan: a limited set of leagues. Go Premium for every league, all books and the full toolset.'),
             e('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
@@ -1675,18 +1703,22 @@ const analyzeArb = async (arb) => {
         e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 10 } },
           e('span', { style: { fontSize: 13, fontWeight: 600 } }, 'Select sports to scan'),
           e('div', { style: { display: 'flex', gap: 6 } },
-            e('button', { onClick: () => setSelectedSports(TOP_SPORTS), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 8px' } }, 'Default'),
-            e('button', { onClick: () => setSelectedSports(ALL_SPORTS.map(s => s.key)), style: { ...st.btn('success'), fontSize: 11, padding: '4px 8px' } }, 'All'),
+            e('button', { onClick: () => setSportsExactly(TOP_SPORTS), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 8px' } }, 'Default'),
+            e('button', { onClick: () => setSportsExactly(ALL_SPORTS.map(s => s.key)), style: { ...st.btn('success'), fontSize: 11, padding: '4px 8px' } }, 'All'),
             e('button', { onClick: () => setSelectedSports([]), style: { ...st.btn('danger'), fontSize: 11, padding: '4px 8px' } }, 'None')
           )
         ),
+        pickerNotice && e('div', { style: { background: '#fefce8', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: '8px 10px', fontSize: 12, marginBottom: 10, lineHeight: 1.5 } },
+          pickerNotice, ' ',
+          e('button', { onClick: () => startCheckout('prepaid'), disabled: checkoutLoading, style: { ...st.btn('primary'), fontSize: 11, padding: '4px 10px', marginLeft: 6 } }, checkoutLoading ? 'Opening...' : 'Go Premium')
+        ),
         SPORT_GROUPS.map(g => e('div', { key: g.group, style: { marginBottom: 12 } },
-          e('div', { onClick: () => { const keys = g.sports.map(s => s.key); const allOn = keys.every(k => selectedSports.includes(k)); setSelectedSports(p => allOn ? p.filter(k => !keys.includes(k)) : [...new Set([...p, ...keys])]); }, style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 } },
+          e('div', { onClick: () => { const keys = g.sports.map(s => s.key); const allOn = keys.every(k => selectedSports.includes(k)); if (allOn) { setSelectedSports(p => p.filter(k => !keys.includes(k))); } else { addSports(keys); } }, style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 } },
             e('input', { type: 'checkbox', readOnly: true, checked: g.sports.every(s => selectedSports.includes(s.key)) }), ' ', g.group
           ),
           e('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, paddingLeft: 8 } },
             g.sports.map(s => e('label', { key: s.key, style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer', background: selectedSports.includes(s.key) ? C.greenLight : C.grayLight, padding: '3px 8px', borderRadius: 20, color: selectedSports.includes(s.key) ? C.greenDark : C.muted } },
-              e('input', { type: 'checkbox', checked: selectedSports.includes(s.key), onChange: () => setSelectedSports(p => p.includes(s.key) ? p.filter(k => k !== s.key) : [...p, s.key]) }), ' ', s.label
+              e('input', { type: 'checkbox', checked: selectedSports.includes(s.key), onChange: () => toggleSport(s.key) }), ' ', s.label + (isLocked(s.key) ? ' \uD83D\uDD12' : '')
             ))
           )
         ))
