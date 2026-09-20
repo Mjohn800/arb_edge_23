@@ -1,5 +1,5 @@
-import { getUser } from '../../lib/serverAuth';
-import { getQuote, planCodeFor, BASE_CURRENCY } from '../../lib/pricing';
+import { getUser, isOwner } from '../../lib/serverAuth';
+import { getQuote, planCodeFor, tierForCountry, defaultCurrencyForTier } from '../../lib/pricing';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'method_not_allowed' });
@@ -10,18 +10,23 @@ export default async function handler(req, res) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
   if (!secret) return res.status(500).json({ error: 'Payments are not set up yet.' });
 
+  const cc = req.headers['x-vercel-ip-country'];
+  if (cc === 'US' && !isOwner(user)) {
+    return res.status(403).json({ error: 'ArbEdge is not available in the United States yet.' });
+  }
+  const tier = tierForCountry(cc);
   const mode = req.body && req.body.mode === 'auto' ? 'auto' : 'prepaid';
-  const wanted = (req.body && req.body.currency) || BASE_CURRENCY;
+  const wanted = (req.body && req.body.currency) || defaultCurrencyForTier(tier);
 
   // The server works out the price itself; the browser only says which currency.
-  const quote = await getQuote(wanted);
+  const quote = await getQuote(wanted, tier);
   if (!quote) {
-    return res.status(400).json({ error: 'That currency is not available right now. Try GHS.' });
+    return res.status(400).json({ error: 'Payments are temporarily unavailable. Please try again in a few minutes.' });
   }
 
-  const planCode = mode === 'auto' ? planCodeFor(quote.currency) : null;
+  const planCode = mode === 'auto' ? planCodeFor(tier) : null;
   if (mode === 'auto' && !planCode) {
-    return res.status(400).json({ error: 'Auto-renew is not available in ' + quote.currency + ' yet. Use the 30-day option.' });
+    return res.status(400).json({ error: 'Auto-renew is not available yet. Use the 30-day option.' });
   }
 
   const origin = process.env.APP_URL || req.headers.origin || 'https://' + req.headers.host;
