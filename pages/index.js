@@ -34,6 +34,16 @@ const BOOKS = {
   betfox:        { name: 'Betfox',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.betfox.com.gh', sportUrls: { soccer: 'https://www.betfox.com.gh' } },
 };
 
+// Regions a user can pick in the app (or leave on auto-detect).
+const REGION_OPTIONS = [
+  { key: 'auto',  label: 'Auto-detect' },
+  { key: 'wa',    label: 'West Africa' },
+  { key: 'eu',    label: 'Europe' },
+  { key: 'uk',    label: 'United Kingdom' },
+  { key: 'us',    label: 'United States (not available)' },
+  { key: 'other', label: 'Rest of world' },
+];
+
 const API_BOOKS = Object.entries(BOOKS).filter(([,b]) => !b.manual).map(([k]) => k);
 const MANUAL_BOOKS = Object.entries(BOOKS).filter(([,b]) => b.manual);
 const ACCESSIBLE_BOOKS = Object.entries(BOOKS).filter(([,b]) => b.accessible).map(([k]) => k);
@@ -705,7 +715,7 @@ function findEVBets(events, minEV = 2, mode = 'all', userRegion = null, teamForm
 function findMiddles(events, mode = 'global', userRegion = null) {
   const middles = [];
   // West Africa section: a middle is only placeable if BOTH legs are on WA-accessible books.
-  const legsOk = (bookA, bookB) => mode !== 'wa' || (BOOKS[bookA]?.accessible && BOOKS[bookB]?.accessible);
+  const legsOk = (bookA, bookB) => mode !== 'wa' || (isBookAccessible(bookA, userRegion) && isBookAccessible(bookB, userRegion));
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
 
@@ -1021,7 +1031,7 @@ useEffect(() => {
   const teamFormRef = React.useRef(TEAM_FORM);
 
   // -- PREMIUM PLAN STATE --------------------------------------------------
-  const [plan, setPlan] = useState({ loaded: false, isPremium: false, isOwner: false, periodEnd: null, quotes: {}, defaultCurrency: 'GHS', autoCurrencies: [], freeSports: [], scannedSports: [] });
+  const [plan, setPlan] = useState({ loaded: false, isPremium: false, isOwner: false, periodEnd: null, quotes: {}, defaultCurrency: 'GHS', autoCurrencies: [], freeSports: [], scannedSports: [], notAvailable: false });
   const [payCurrency, setPayCurrency] = useState('');
   const [upgradeNotice, setUpgradeNotice] = useState('');
   const [checkoutLoading, setCheckoutLoading] = useState(false);
@@ -1036,7 +1046,7 @@ useEffect(() => {
       const res = await fetch('/api/me', { headers: { Authorization: 'Bearer ' + token } });
       if (!res.ok) return null;
       const j = await res.json();
-      setPlan({ loaded: true, isPremium: !!j.isPremium, isOwner: !!j.isOwner, periodEnd: j.currentPeriodEnd, quotes: j.quotes || {}, defaultCurrency: j.defaultCurrency || 'GHS', autoCurrencies: j.autoCurrencies || [], freeSports: j.freeSports || [], scannedSports: j.scannedSports || [] });
+      setPlan({ loaded: true, isPremium: !!j.isPremium, isOwner: !!j.isOwner, periodEnd: j.currentPeriodEnd, quotes: j.quotes || {}, defaultCurrency: j.defaultCurrency || 'GHS', autoCurrencies: j.autoCurrencies || [], freeSports: j.freeSports || [], scannedSports: j.scannedSports || [], notAvailable: !!j.notAvailable });
       return j;
     } catch { return null; }
   }, []);
@@ -1056,7 +1066,11 @@ useEffect(() => {
     } catch {}
   }, [refreshPlan]);
   const curSel = payCurrency || plan.defaultCurrency;
-  const priceLabel = (plan.quotes[curSel] && plan.quotes[curSel].label) || 'GHS 50';
+  const priceLabel = (plan.quotes[curSel] && plan.quotes[curSel].label) || 'Premium';
+  const _q = plan.quotes[curSel];
+  const chargeNote = (_q && _q.chargeLabel && _q.displayCurrency !== _q.currency)
+    ? e('div', { style: { marginTop: 8, fontSize: 11, color: '#6b7280', lineHeight: 1.4 } }, 'At checkout you are charged ' + _q.chargeLabel + ' (the equivalent of ' + _q.label + '). Your card converts it to your own currency and your bank may add its own fees.')
+    : null;
   const startCheckout = async (mode) => {
     setCheckoutLoading(true);
     try {
@@ -1102,6 +1116,26 @@ useEffect(() => {
     ? SPORT_GROUPS
     : [{ group: '\u26BD Scanned leagues', sports: allowedKeys.map(k => ALL_SPORTS.find(s => s.key === k)).filter(Boolean) }];
 
+  const [myRegion, setMyRegion] = useState(() => { try { return localStorage.getItem('arb_region') || 'auto'; } catch { return 'auto'; } });
+  const [regionNotice, setRegionNotice] = useState('');
+  const myRegionRef = React.useRef(myRegion);
+  myRegionRef.current = myRegion;
+  const userRegionRef = React.useRef(userRegion);
+  userRegionRef.current = userRegion;
+  const changeRegion = (val) => {
+    if (val === 'us') { setRegionNotice('ArbEdge does not have odds for US sportsbooks, so it is not available in the United States.'); return; }
+    setRegionNotice('');
+    setMyRegion(val);
+    myRegionRef.current = val;
+    try { localStorage.setItem('arb_region', val); } catch {}
+    try { fetchOddsRef.current(apiKey || 'server'); } catch {}
+  };
+  const _regionName = (k) => { const o = REGION_OPTIONS.find(x => x.key === k); return o ? o.label : ''; };
+  const isWAUserNow = userRegion.isWA !== false;
+  const myLabel = isWAUserNow ? '\uD83C\uDDEC\uD83C\uDDED West Africa' : '\u2705 My region';
+  const myLabelOnly = isWAUserNow ? '\uD83C\uDDEC\uD83C\uDDED West Africa only' : '\u2705 Available to me only';
+  const regionFallbackText = 'Only books available in your region are compared, so every gap shown is a bet you can actually place.';
+
   const fetchOdds = useCallback(async (key) => {
   if (!key) return;
     setLoading(true); setError('');
@@ -1115,6 +1149,7 @@ useEffect(() => {
     const all = [];
     let okCount = 0, lastFailStatus = null, lastFailBody = '', premiumBlocked = _lockedCount;
     const authToken = await getToken();
+    let regionNow = userRegionRef.current;
     // Aggregates WA scraper health across the ENTIRE scan, not just the last sport checked —
     // previously setWaHealth() was called fresh on every iteration, so a 403 on sport #3
     // would get silently overwritten by sport #20's "ok" status, making the "WA 3/3" badge
@@ -1131,9 +1166,10 @@ useEffect(() => {
         // the ENTIRE request — which is why every sport was coming back empty.
         const isOutright = sp.key.endsWith('_winner');
         const sportMarkets = isOutright ? 'outrights' : 'h2h,spreads,totals';
-        const res = await fetch('/api/odds?sport=' + sp.key + '&region=' + sp.region + '&market=' + sportMarkets, { headers: { Authorization: 'Bearer ' + authToken } });
+        const res = await fetch('/api/odds?sport=' + sp.key + '&region=' + sp.region + '&market=' + sportMarkets + (myRegionRef.current && myRegionRef.current !== 'auto' ? '&myRegion=' + myRegionRef.current : ''), { headers: { Authorization: 'Bearer ' + authToken } });
         if (res.status === 401) { setError('Session expired. Please log out and log in again.'); break; }
         if (res.status === 402) { premiumBlocked++; continue; }
+        if (res.status === 451) { setPlan(p => ({ ...p, notAvailable: true })); break; }
         if (res.status === 429) { setError('API quota reached. Try again later.'); break; }
         if (!res.ok) {
           lastFailStatus = res.status;
@@ -1146,7 +1182,8 @@ useEffect(() => {
 const data = json.data || json;
 if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests, keyIndex: json.keyIndex || 1 });
 if (json.userAccessibleBooks) {
-  setUserRegion({ country: json.userCountry, isWA: json.isWAUser, accessibleBooks: json.userAccessibleBooks });
+  regionNow = { country: json.userCountry, region: json.userRegion, detectedRegion: json.detectedRegion, isWA: json.isWAUser, accessibleBooks: json.userAccessibleBooks };
+  setUserRegion(regionNow);
 }
 if (json.waBookHealth) {
   Object.entries(json.waBookHealth).forEach(([book, h]) => {
@@ -1175,8 +1212,8 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     if (sportsToScan.length > 0 && okCount === 0 && premiumBlocked === 0) {
       setError('Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. Showing demo data below.');
     }
-    const found = findArbs(all, 'global', userRegion);
-    const foundArbsWA = findArbs(all, 'wa', userRegion);
+    const found = findArbs(all, 'global', regionNow);
+    const foundArbsWA = findArbs(all, 'wa', regionNow);
     const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
     const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
     if (found.length > 0) { setArbs(found); setIsDemo(false); }
@@ -1186,12 +1223,12 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     else if (okCount === 0) { setEvBets(MOCK_EV); setIsDemoEV(true); } // scan failed entirely
     else { setEvBets([]); setIsDemoEV(false); } // scan worked, genuinely no +EV right now
     setEvWA(foundEVWA);
-    const middlesWAResult = findMiddles(all, 'wa', userRegion);
-    const bestOddsWAResult = findBestOdds(all, 'wa', userRegion);
-    setMiddles(findMiddles(all, 'global', userRegion));
+    const middlesWAResult = findMiddles(all, 'wa', regionNow);
+    const bestOddsWAResult = findBestOdds(all, 'wa', regionNow);
+    setMiddles(findMiddles(all, 'global', regionNow));
     setMiddlesWA(middlesWAResult);
     setSteam(findSteam(prevEventsRef.current, all));
-    setBestOdds(findBestOdds(all, 'global', userRegion));
+    setBestOdds(findBestOdds(all, 'global', regionNow));
     setBestOddsWA(bestOddsWAResult);
 
     // ── SCAN HEALTH ─────────────────────────────────────────────────────────────
@@ -1205,7 +1242,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
       seen: seenKeys.has(key),
     }));
     const eventsWithWACoverage = all.filter(ev =>
-      (ev.bookmakers || []).filter(bm => isBookAccessible(bm.key, userRegion)).length >= 2
+      (ev.bookmakers || []).filter(bm => isBookAccessible(bm.key, regionNow)).length >= 2
     ).length;
     setScanHealth({
       waBooks: waBookStatus,
@@ -1400,7 +1437,7 @@ const analyzeArb = async (arb) => {
   try {
     const res = await fetch('/api/analyze', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + await getToken() },
       body: JSON.stringify({
         match: arb.match, sport: getSportInfo(arb.sport).label,
         outcomes: arb.outcomes, margin: arb.margin,
@@ -1408,6 +1445,7 @@ const analyzeArb = async (arb) => {
       })
     });
     const data = await res.json();
+    if (res.status === 402) { data.error = data.message || 'AI analysis is a Premium feature.'; setUpgradeNotice(data.error); }
     setCardAnalysis(p => ({ ...p, [arb.id]: data }));
   } catch (err) {
     setCardAnalysis(p => ({ ...p, [arb.id]: { error: 'Analysis failed' } }));
@@ -1462,7 +1500,7 @@ const analyzeArb = async (arb) => {
     e('div', { style: st.header },
       e('div', { style: st.logoRow },
         e('div', { style: st.logoBox }, '📈'),
-        e('div', null, e('div', { style: st.logoTitle }, 'ArbEdge'), e('div', { style: st.logoSub }, '🌍 Global · 🇬🇭 West Africa'))
+        e('div', null, e('div', { style: st.logoTitle }, 'ArbEdge'), e('div', { style: st.logoSub }, '\uD83C\uDF0D Global' + (isWAUserNow ? ' \u00B7 \uD83C\uDDEC\uD83C\uDDED West Africa' : '')))
       ),
       e('div', { style: st.headerRow },
         e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ ' + scanProgress.sport + '...' : '● ' + filteredArbs.length + ' arbs'),
@@ -1481,9 +1519,19 @@ const analyzeArb = async (arb) => {
            e('div', { style: { display: 'flex', justifyContent: 'flex-end', padding: '6px 4px' } },
   e('button', { onClick: onLogout, style: { fontSize: 12, padding: '6px 12px', borderRadius: 8, border: '1px solid #dc2626', color: '#dc2626', background: 'transparent' } }, 'Log out')
 ),
+    e('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '6px 4px', fontSize: 12, color: '#374151' } },
+      e('span', null, 'My region:'),
+      e('select', { value: myRegion, onChange: ev => changeRegion(ev.target.value), style: { padding: '6px 8px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 12 } },
+        REGION_OPTIONS.map(o => e('option', { key: o.key, value: o.key }, o.label))
+      ),
+      myRegion === 'auto' && userRegion.region && e('span', { style: { color: '#6b7280' } }, 'detected: ' + _regionName(userRegion.region))
+    ),
+    regionNotice && e('div', { style: { margin: '0 4px 6px', padding: '8px 10px', borderRadius: 8, fontSize: 12, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' } }, regionNotice),
     plan.loaded && e('div', { style: { margin: '8px 4px', padding: '10px 12px', borderRadius: 10, fontSize: 12, lineHeight: 1.5, color: '#1f2937', background: plan.isPremium ? '#ecfdf5' : '#fefce8', border: '1px solid ' + (plan.isPremium ? '#a7f3d0' : '#fde68a') } },
       plan.isPremium
         ? plan.isOwner ? 'Owner access: everything is unlocked.' : 'Premium active' + (plan.periodEnd ? ' until ' + new Date(plan.periodEnd).toLocaleDateString() : '') + '.'
+        : plan.notAvailable ? 'ArbEdge is not available in the United States yet. We do not have odds coverage for US sportsbooks.'
+        : Object.keys(plan.quotes).length === 0 ? 'Payments are temporarily unavailable. Please try again in a few minutes.'
         : e('div', null,
             e('div', { style: { marginBottom: 8 } }, upgradeNotice || 'Free plan: a limited set of leagues. Go Premium for every league, all books and the full toolset.'),
             e('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
@@ -1492,7 +1540,8 @@ const analyzeArb = async (arb) => {
               ),
               e('button', { onClick: () => startCheckout('prepaid'), disabled: checkoutLoading, style: st.btn('primary') }, checkoutLoading ? 'Opening...' : 'Pay ' + priceLabel + ' for 30 days'),
               plan.autoCurrencies.includes(curSel) && e('button', { onClick: () => startCheckout('auto'), disabled: checkoutLoading, style: st.btn('outline') }, 'Auto-renew ' + priceLabel + '/month (card)')
-            )
+            ),
+            chargeNote
           )
     ),
     e('div', { style: st.tabs },
@@ -1670,7 +1719,7 @@ const analyzeArb = async (arb) => {
         [
           ['All Arbs', filteredArbs.length, null],
           ['🌍 Global', arbsGlobal.length, C.blue],
-          ['🇬🇭 West Africa', arbsWA.length, C.green],
+          [myLabel, arbsWA.length, C.green],
           ['Next Scan', loading ? '...' : (nextScanAt && !loading ? (countdown > 0 ? Math.floor(countdown / 60) + ':' + String(countdown % 60).padStart(2, '0') : '0:00') : '—'), loading ? C.muted : countdown < 30 && countdown > 0 && !loading ? C.amber : C.text]
         ].map(([l, v, c]) =>
           e('div', { key: l, style: st.metric }, e('div', { style: st.metricLabel }, l), e('div', { style: st.metricVal(c) }, v))
@@ -1678,11 +1727,11 @@ const analyzeArb = async (arb) => {
       ),
       // Region toggle
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 12 } },
-        [['all','🔍 All'], ['global','🌍 Global only'], ['wa','🇬🇭 West Africa only']].map(([k,l]) =>
+        [['all','🔍 All'], ['global','🌍 Global only'], ['wa',myLabelOnly]].map(([k,l]) =>
           e('button', { key: k, onClick: () => setArbSection(k), style: { ...st.btn(arbSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, l)
         )
       ),
-      (arbSection === 'wa' || arbSection === 'all') && e('div', {
+      isWAUserNow && (arbSection === 'wa' || arbSection === 'all') && e('div', {
         style: { background: '#dcfce7', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: C.greenDark }
       }, '🇬🇭 Scanning 3 West Africa-accessible sportsbooks: SportyBet, Betway, 1xBet. More being added.'),
       e('div', { style: { display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' } },
@@ -1923,14 +1972,14 @@ const analyzeArb = async (arb) => {
       ),
       // Region section toggle
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
-        [['global','🌍 Global'], ['wa','🇬🇭 West Africa']].map(([k,l]) =>
+        [['global','🌍 Global'], ['wa',myLabel]].map(([k,l]) =>
           e('button', { key: k, onClick: () => setEvSection(k), style: { ...st.btn(evSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '7px 14px' } }, l)
         )
       ),
       // Reference book info banner
       e('div', { style: { background: evSection === 'wa' ? '#dcfce7' : '#eff6ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: evSection === 'wa' ? C.greenDark : '#1e3a8a' } },
         evSection === 'wa'
-          ? '🇬🇭 Using Pinnacle / Betfair as sharp reference — showing only WA-accessible books (Betway, SportyBet, Betano, MSport, 1xBet, MelBet)'
+          ? (isWAUserNow ? '🇬🇭 Using Pinnacle / Betfair as sharp reference — showing only WA-accessible books (Betway, SportyBet, Betano, MSport, 1xBet, MelBet)' : 'Using Pinnacle / Betfair as sharp reference \u2014 showing only books available in your region.')
           : '🌍 Using Pinnacle / Betfair as sharp reference — showing all books globally'
       ),
       e('div', { style: st.metricsGrid },
@@ -1978,7 +2027,7 @@ const analyzeArb = async (arb) => {
             isDemoEV
               ? 'The odds API could not be reached. Check your API key or connection.'
               : evSection === 'wa'
-                ? 'Scan completed successfully. No WA-accessible bets cleared the +EV threshold. Most likely cause: off-season (European leagues restart August). Try lowering Min EV or switching to Global.'
+                ? (isWAUserNow ? 'Scan completed successfully. No WA-accessible bets cleared the +EV threshold. Most likely cause: off-season (European leagues restart August). Try lowering Min EV or switching to Global.' : 'Scan completed successfully. No +EV bets cleared the threshold for books available in your region. Try lowering Min EV.')
                 : 'Scan completed successfully — odds data loaded but no edges found at this threshold. Most likely cause: off-season. European leagues restart August 15–22. Try cricket or MMA in the scanner for active markets.'
           )
         );
@@ -2092,13 +2141,13 @@ const analyzeArb = async (arb) => {
         ),
         // Region section toggle
         e('div', { style: { display: 'flex', gap: 6, marginBottom: 10 } },
-          [['global','🌍 Global'], ['wa','🇬🇭 West Africa']].map(([k,l]) =>
+          [['global','🌍 Global'], ['wa',myLabel]].map(([k,l]) =>
             e('button', { key: k, onClick: () => setLineshopSection(k), style: { ...st.btn(lineshopSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '7px 14px' } }, l)
           )
         ),
         e('div', { style: { background: lineshopSection === 'wa' ? '#dcfce7' : '#eff6ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: lineshopSection === 'wa' ? C.greenDark : '#1e3a8a' } },
           lineshopSection === 'wa'
-            ? '🇬🇭 Comparing only books accessible in West Africa (Betway, SportyBet, Betano, MSport, MelBet, 1xBet) — gaps shown are bets you can actually place.'
+            ? (isWAUserNow ? '🇬🇭 Comparing only books accessible in West Africa (Betway, SportyBet, Betano, MSport, MelBet, 1xBet) — gaps shown are bets you can actually place.' : regionFallbackText)
             : '🌍 Comparing all scanned books worldwide, including books not accessible from West Africa.'
         ),
         (() => {
@@ -2107,7 +2156,7 @@ const analyzeArb = async (arb) => {
             e('div', { style: { fontSize: 32, marginBottom: 8 } }, '🛒'),
             e('div', { style: { fontSize: 14 } },
               lineshopSection === 'wa'
-                ? 'No West Africa price gaps found yet. Run a scan, or odds may be aligned across WA books right now.'
+                ? (isWAUserNow ? 'No West Africa price gaps found yet. Run a scan, or odds may be aligned across WA books right now.' : 'No price gaps found yet among books available in your region. Run a scan.')
                 : 'Run a scan first to see best available odds.'
             )
           );
@@ -2152,13 +2201,13 @@ const analyzeArb = async (arb) => {
         ),
         // Region section toggle
         e('div', { style: { display: 'flex', gap: 6, marginBottom: 10 } },
-          [['global','🌍 Global'], ['wa','🇬🇭 West Africa']].map(([k,l]) =>
+          [['global','🌍 Global'], ['wa',myLabel]].map(([k,l]) =>
             e('button', { key: k, onClick: () => setMiddleSection(k), style: { ...st.btn(middleSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '7px 14px' } }, l)
           )
         ),
         e('div', { style: { background: middleSection === 'wa' ? '#dcfce7' : '#fdf4ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: middleSection === 'wa' ? C.greenDark : '#6b21a8' } },
           middleSection === 'wa'
-            ? '🇬🇭 Both legs must be on books accessible in West Africa (Betway, SportyBet, Betano, MSport, MelBet, 1xBet) — every middle shown here is placeable.'
+            ? (isWAUserNow ? '🇬🇭 Both legs must be on books accessible in West Africa (Betway, SportyBet, Betano, MSport, MelBet, 1xBet) — every middle shown here is placeable.' : 'Both legs must be on books available in your region, so every middle shown here is placeable.')
             : '🌍 Showing middles across all scanned books worldwide, including books not accessible from West Africa.'
         ),
         (() => {
@@ -2167,7 +2216,7 @@ const analyzeArb = async (arb) => {
             e('div', { style: { fontSize: 32, marginBottom: 8 } }, '↔'),
             e('div', { style: { fontSize: 14 } },
               middleSection === 'wa'
-                ? 'No West Africa middles found yet. Run a scan — these need a price gap between two WA-accessible books.'
+                ? (isWAUserNow ? 'No West Africa middles found yet. Run a scan — these need a price gap between two WA-accessible books.' : 'No middles found yet between books available in your region. Run a scan.')
                 : 'No middles found yet. Run a scan — middles appear most often in NBA and NFL spreads/totals.'
             )
           );
@@ -2334,7 +2383,7 @@ const analyzeArb = async (arb) => {
                     ];
                     const res = await fetch('/api/analyze', {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
+                      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + await getToken() },
                       body: JSON.stringify({
                         match: game.match,
                         sport: game.league || getSportInfo(game.sport).label,
@@ -2346,6 +2395,7 @@ const analyzeArb = async (arb) => {
                       })
                     });
                     const data = await res.json();
+                    if (res.status === 402) { data.error = data.message || 'AI analysis is a Premium feature.'; setUpgradeNotice(data.error); }
                     setGameAnalyses(p => ({ ...p, [game.id]: data }));
                   } catch (err) {
                     setGameAnalyses(p => ({ ...p, [game.id]: { error: 'Analysis failed: ' + err.message } }));
