@@ -25,6 +25,20 @@ const SPORTYBET_SPORT_MAP = {
   soccer_ghana_premiership:     { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:1436' },
   soccer_africa_cup_of_nations: { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:5765' },
   soccer_fifa_world_cup:        { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:16'   }, // ✓ confirmed
+  // -- Added for ArbEdge's 20 scanned leagues (same Sportradar IDs the Betfox scraper uses) --
+  // IDs below the 'verified' note were cross-checked between SportyBet and Betfox.
+  soccer_netherlands_eredivisie:    { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:37' },
+  soccer_portugal_primeira_liga:    { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:238' },
+  soccer_norway_eliteserien:        { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:20' },
+  soccer_sweden_allsvenskan:        { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:40' },
+  soccer_spl:                       { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:36' },
+  // UNVERIFIED: check each in SportyBet's network tab. A wrong ID just returns no matches.
+  soccer_belgium_first_div:         { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:38' },
+  soccer_efl_champ:                 { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:18' },
+  soccer_brazil_campeonato:         { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:325' },
+  soccer_usa_mls:                   { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:242' },
+  soccer_conmebol_copa_libertadores: { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:384' },
+
   basketball_nba:               { type: 'tournament', sportId: 'sr:sport:2',   tournamentId: 'sr:tournament:132'  },
   tennis_atp_wimbledon:         { type: 'tournament', sportId: 'sr:sport:5',   tournamentId: 'sr:tournament:270'  },
   mma_mixed_martial_arts:       { type: 'sport',      sportId: 'sr:sport:117', tournamentId: null                 },
