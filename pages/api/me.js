@@ -8,6 +8,7 @@ export default async function handler(req, res) {
   const quotes = await getAllQuotes();
   return res.status(200).json({
     isPremium: plan.isPremium,
+    isOwner: !!plan.isOwner,
     status: sub ? sub.status : 'free',
     currentPeriodEnd: sub ? sub.current_period_end : null,
     autoRenew: sub ? !!sub.auto_renew : false,
