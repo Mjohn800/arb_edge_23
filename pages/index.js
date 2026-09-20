@@ -937,7 +937,7 @@ const [apiKey, setApiKey] = useState('server');
   // basketball/tennis/MMA/cricket/NFL, which fragmented the shared scan cache
   // across sports nobody was actually comparing). Every entry here has a
   // confirmed WA-scraper tournament ID, so capping doesn't lose WA coverage.
-  const TOP_SPORTS = ['soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_italy_serie_a','soccer_france_ligue_one','soccer_africa_cup_of_nations','soccer_ghana_premiership','soccer_fifa_world_cup','soccer_uefa_europa_league','soccer_conmebol_copa_libertadores','soccer_usa_mls','soccer_england_efl_champ','soccer_netherlands_eredivisie','soccer_portugal_primeira_liga','soccer_belgium_first_div','soccer_spl','soccer_norway_eliteserien','soccer_sweden_allsvenskan','soccer_brazil_campeonato'];
+  const TOP_SPORTS = ['soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_italy_serie_a','soccer_france_ligue_one','soccer_africa_cup_of_nations','soccer_ghana_premiership','soccer_fifa_world_cup','soccer_uefa_europa_league','soccer_conmebol_copa_libertadores','soccer_usa_mls','soccer_efl_champ','soccer_netherlands_eredivisie','soccer_portugal_primeira_liga','soccer_belgium_first_div','soccer_spl','soccer_norway_eliteserien','soccer_sweden_allsvenskan','soccer_brazil_campeonato'];
 const [selectedSports, setSelectedSports] = useState(() => {
   try { const saved = localStorage.getItem('arb_sports'); return saved ? JSON.parse(saved) : TOP_SPORTS; } catch { return TOP_SPORTS; }
 });
@@ -1021,7 +1021,7 @@ useEffect(() => {
   const teamFormRef = React.useRef(TEAM_FORM);
 
   // -- PREMIUM PLAN STATE --------------------------------------------------
-  const [plan, setPlan] = useState({ loaded: false, isPremium: false, isOwner: false, periodEnd: null, quotes: {}, defaultCurrency: 'GHS', autoCurrencies: [], freeSports: [] });
+  const [plan, setPlan] = useState({ loaded: false, isPremium: false, isOwner: false, periodEnd: null, quotes: {}, defaultCurrency: 'GHS', autoCurrencies: [], freeSports: [], scannedSports: [] });
   const [payCurrency, setPayCurrency] = useState('');
   const [upgradeNotice, setUpgradeNotice] = useState('');
   const [checkoutLoading, setCheckoutLoading] = useState(false);
@@ -1036,7 +1036,7 @@ useEffect(() => {
       const res = await fetch('/api/me', { headers: { Authorization: 'Bearer ' + token } });
       if (!res.ok) return null;
       const j = await res.json();
-      setPlan({ loaded: true, isPremium: !!j.isPremium, isOwner: !!j.isOwner, periodEnd: j.currentPeriodEnd, quotes: j.quotes || {}, defaultCurrency: j.defaultCurrency || 'GHS', autoCurrencies: j.autoCurrencies || [], freeSports: j.freeSports || [] });
+      setPlan({ loaded: true, isPremium: !!j.isPremium, isOwner: !!j.isOwner, periodEnd: j.currentPeriodEnd, quotes: j.quotes || {}, defaultCurrency: j.defaultCurrency || 'GHS', autoCurrencies: j.autoCurrencies || [], freeSports: j.freeSports || [], scannedSports: j.scannedSports || [] });
       return j;
     } catch { return null; }
   }, []);
@@ -1097,13 +1097,19 @@ useEffect(() => {
     setSelectedSports(ok);
   };
 
+  const allowedKeys = plan.isOwner ? ALL_SPORTS.map(s => s.key) : (plan.scannedSports.length ? plan.scannedSports : TOP_SPORTS);
+  const pickerGroups = plan.isOwner
+    ? SPORT_GROUPS
+    : [{ group: '\u26BD Scanned leagues', sports: allowedKeys.map(k => ALL_SPORTS.find(s => s.key === k)).filter(Boolean) }];
+
   const fetchOdds = useCallback(async (key) => {
   if (!key) return;
     setLoading(true); setError('');
     setLastFetch(new Date()); // mark attempt now, so the 5-min gate holds even if this scan fails entirely (quota exhausted etc.)
     const _p = planRef.current;
     const _gated = _p.loaded && !_p.isPremium && _p.freeSports.length > 0;
-    const _selected = ALL_SPORTS.filter(s => selectedSports.includes(s.key));
+    const _inScope = (k) => _p.isOwner || !_p.loaded || _p.scannedSports.length === 0 || _p.scannedSports.includes(k);
+    const _selected = ALL_SPORTS.filter(s => selectedSports.includes(s.key) && _inScope(s.key));
     const sportsToScan = _gated ? _selected.filter(s => _p.freeSports.includes(s.key)) : _selected;
     const _lockedCount = _selected.length - sportsToScan.length;
     const all = [];
@@ -1704,7 +1710,7 @@ const analyzeArb = async (arb) => {
           e('span', { style: { fontSize: 13, fontWeight: 600 } }, 'Select sports to scan'),
           e('div', { style: { display: 'flex', gap: 6 } },
             e('button', { onClick: () => setSportsExactly(TOP_SPORTS), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 8px' } }, 'Default'),
-            e('button', { onClick: () => setSportsExactly(ALL_SPORTS.map(s => s.key)), style: { ...st.btn('success'), fontSize: 11, padding: '4px 8px' } }, 'All'),
+            e('button', { onClick: () => setSportsExactly(allowedKeys), style: { ...st.btn('success'), fontSize: 11, padding: '4px 8px' } }, 'All'),
             e('button', { onClick: () => setSelectedSports([]), style: { ...st.btn('danger'), fontSize: 11, padding: '4px 8px' } }, 'None')
           )
         ),
@@ -1712,7 +1718,7 @@ const analyzeArb = async (arb) => {
           pickerNotice, ' ',
           e('button', { onClick: () => startCheckout('prepaid'), disabled: checkoutLoading, style: { ...st.btn('primary'), fontSize: 11, padding: '4px 10px', marginLeft: 6 } }, checkoutLoading ? 'Opening...' : 'Go Premium')
         ),
-        SPORT_GROUPS.map(g => e('div', { key: g.group, style: { marginBottom: 12 } },
+        pickerGroups.map(g => e('div', { key: g.group, style: { marginBottom: 12 } },
           e('div', { onClick: () => { const keys = g.sports.map(s => s.key); const allOn = keys.every(k => selectedSports.includes(k)); if (allOn) { setSelectedSports(p => p.filter(k => !keys.includes(k))); } else { addSports(keys); } }, style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 } },
             e('input', { type: 'checkbox', readOnly: true, checked: g.sports.every(s => selectedSports.includes(s.key)) }), ' ', g.group
           ),
@@ -1728,7 +1734,7 @@ const analyzeArb = async (arb) => {
       isDemo && !error && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
         apiKey
           ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 5 min.'
-          : '📌 Demo mode — tap Connect Live to scan real odds across ' + ALL_SPORTS.length + ' sports. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'
+          : '📌 Demo mode — tap Connect Live to scan real odds across the ' + 20 + ' top leagues. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'
       ),
  filteredArbs.map(arb => {
         const info = getSportInfo(arb.sport);
@@ -2717,7 +2723,7 @@ const analyzeArb = async (arb) => {
         '✅ SportyBet, Betano and MSport are now auto-scanned via the West Africa scraper. Their odds feed directly into the 🇬🇭 West Africa section of the Scanner and +EV tabs. Manual entry is still available if the scraper misses a market.'
       ),
       e('div', { style: st.guideH }, '🌍 Sports coverage'),
-      e('div', { style: st.guideP }, 'ArbEdge scans ' + ALL_SPORTS.length + ' competitions worldwide — FIFA World Cup (Men & Women), AFCON, all Grand Slams (ATP & WTA), NBA, WNBA, NFL, UFC/MMA, ICC Cricket World Cup, Champions League, Copa América, IPL, and 80+ football leagues.'),
+      e('div', { style: st.guideP }, 'ArbEdge scans 20 top football competitions, including the Premier League, Champions League, La Liga, Bundesliga, Serie A, Ligue 1, AFCON, the World Cup, Europa League, Copa Libertadores, MLS and Brazil Serie A.'),
       e('div', { style: st.guideH }, '⚠️ Key risks'),
       e('div', { style: st.guideP }, 'Account limits: bookmakers detect arbers. Use round stakes and place occasional recreational bets. Odds movement: place the better-odds leg first — you have 30 seconds to 3 minutes. For Betano and MSport you need to check odds manually and move fast.'),
       e('div', { style: st.guideH }, '📋 Quick checklist'),
