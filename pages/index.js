@@ -1020,13 +1020,67 @@ useEffect(() => {
   const prevEventsRef = React.useRef([]);
   const teamFormRef = React.useRef(TEAM_FORM);
 
+  // -- PREMIUM PLAN STATE --------------------------------------------------
+  const [plan, setPlan] = useState({ loaded: false, isPremium: false, periodEnd: null, quotes: {}, defaultCurrency: 'GHS', autoCurrencies: [] });
+  const [payCurrency, setPayCurrency] = useState('');
+  const [upgradeNotice, setUpgradeNotice] = useState('');
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const getToken = async () => {
+    const { data } = await supabase.auth.getSession();
+    return (data && data.session && data.session.access_token) || '';
+  };
+  const refreshPlan = useCallback(async () => {
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = (data && data.session && data.session.access_token) || '';
+      const res = await fetch('/api/me', { headers: { Authorization: 'Bearer ' + token } });
+      if (!res.ok) return null;
+      const j = await res.json();
+      setPlan({ loaded: true, isPremium: !!j.isPremium, periodEnd: j.currentPeriodEnd, quotes: j.quotes || {}, defaultCurrency: j.defaultCurrency || 'GHS', autoCurrencies: j.autoCurrencies || [] });
+      return j;
+    } catch { return null; }
+  }, []);
+  useEffect(() => {
+    refreshPlan();
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('paid') === '1') {
+        let tries = 0;
+        const t = setInterval(async () => {
+          tries++;
+          const j = await refreshPlan();
+          if ((j && j.isPremium) || tries >= 10) { clearInterval(t); window.history.replaceState({}, '', '/'); }
+        }, 3000);
+        return () => clearInterval(t);
+      }
+    } catch {}
+  }, [refreshPlan]);
+  const curSel = payCurrency || plan.defaultCurrency;
+  const priceLabel = (plan.quotes[curSel] && plan.quotes[curSel].label) || 'GHS 50';
+  const startCheckout = async (mode) => {
+    setCheckoutLoading(true);
+    try {
+      const token = await getToken();
+      const res = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ mode, currency: payCurrency || plan.defaultCurrency }),
+      });
+      const j = await res.json();
+      if (j.url) { window.location.href = j.url; return; }
+      setUpgradeNotice(j.error || 'Could not start checkout. Please try again.');
+    } catch { setUpgradeNotice('Could not start checkout. Please try again.'); }
+    setCheckoutLoading(false);
+  };
+
   const fetchOdds = useCallback(async (key) => {
   if (!key) return;
     setLoading(true); setError('');
     setLastFetch(new Date()); // mark attempt now, so the 5-min gate holds even if this scan fails entirely (quota exhausted etc.)
     const sportsToScan = ALL_SPORTS.filter(s => selectedSports.includes(s.key));
     const all = [];
-    let okCount = 0, lastFailStatus = null, lastFailBody = '';
+    let okCount = 0, lastFailStatus = null, lastFailBody = '', premiumBlocked = 0;
+    const authToken = await getToken();
     // Aggregates WA scraper health across the ENTIRE scan, not just the last sport checked —
     // previously setWaHealth() was called fresh on every iteration, so a 403 on sport #3
     // would get silently overwritten by sport #20's "ok" status, making the "WA 3/3" badge
@@ -1043,8 +1097,9 @@ useEffect(() => {
         // the ENTIRE request — which is why every sport was coming back empty.
         const isOutright = sp.key.endsWith('_winner');
         const sportMarkets = isOutright ? 'outrights' : 'h2h,spreads,totals';
-        const res = await fetch('/api/odds?sport=' + sp.key + '&region=' + sp.region + '&market=' + sportMarkets);
-        if (res.status === 401) { setError('Invalid API key.'); break; }
+        const res = await fetch('/api/odds?sport=' + sp.key + '&region=' + sp.region + '&market=' + sportMarkets, { headers: { Authorization: 'Bearer ' + authToken } });
+        if (res.status === 401) { setError('Session expired. Please log out and log in again.'); break; }
+        if (res.status === 402) { premiumBlocked++; continue; }
         if (res.status === 429) { setError('API quota reached. Try again later.'); break; }
         if (!res.ok) {
           lastFailStatus = res.status;
@@ -1082,7 +1137,8 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
         : b.failedSports.length + '/' + sportsToScan.length + ' sports failed: ' + b.failedSports.slice(0, 3).join(', ') + (b.failedSports.length > 3 ? ' …' : '');
     });
     if (Object.keys(waHealthAgg).length > 0) setWaHealth(waHealthAgg);
-    if (sportsToScan.length > 0 && okCount === 0) {
+    setUpgradeNotice(premiumBlocked > 0 ? premiumBlocked + ' of your selected sports need Premium. Free plan covers a limited set of leagues.' : '');
+    if (sportsToScan.length > 0 && okCount === 0 && premiumBlocked === 0) {
       setError('Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. Showing demo data below.');
     }
     const found = findArbs(all, 'global', userRegion);
@@ -1391,6 +1447,20 @@ const analyzeArb = async (arb) => {
            e('div', { style: { display: 'flex', justifyContent: 'flex-end', padding: '6px 4px' } },
   e('button', { onClick: onLogout, style: { fontSize: 12, padding: '6px 12px', borderRadius: 8, border: '1px solid #dc2626', color: '#dc2626', background: 'transparent' } }, 'Log out')
 ),
+    plan.loaded && e('div', { style: { margin: '8px 4px', padding: '10px 12px', borderRadius: 10, fontSize: 12, lineHeight: 1.5, color: '#1f2937', background: plan.isPremium ? '#ecfdf5' : '#fefce8', border: '1px solid ' + (plan.isPremium ? '#a7f3d0' : '#fde68a') } },
+      plan.isPremium
+        ? 'Premium active' + (plan.periodEnd ? ' until ' + new Date(plan.periodEnd).toLocaleDateString() : '') + '.'
+        : e('div', null,
+            e('div', { style: { marginBottom: 8 } }, upgradeNotice || 'Free plan: a limited set of leagues. Go Premium for every league, all books and the full toolset.'),
+            e('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
+              Object.keys(plan.quotes).length > 1 && e('select', { value: curSel, onChange: ev => setPayCurrency(ev.target.value), style: { padding: '6px 8px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 12 } },
+                Object.keys(plan.quotes).map(c => e('option', { key: c, value: c }, c))
+              ),
+              e('button', { onClick: () => startCheckout('prepaid'), disabled: checkoutLoading, style: st.btn('primary') }, checkoutLoading ? 'Opening...' : 'Pay ' + priceLabel + ' for 30 days'),
+              plan.autoCurrencies.includes(curSel) && e('button', { onClick: () => startCheckout('auto'), disabled: checkoutLoading, style: st.btn('outline') }, 'Auto-renew ' + priceLabel + '/month (card)')
+            )
+          )
+    ),
     e('div', { style: st.tabs },
       [['scanner','🔍 Scanner'], ['calculator','🧮 Calculator'], ['manual','✏️ Manual Arb'], ['ev','📈 +EV Bets'], ['edge','⚡ Edge Tools'], ['analyzer','🧠 Bet Analyzer'], ['tracker','📒 Bets (' + bets.length + ')'], ['cashout','💸 Cash Out'], ['earn','💰 Earn'], ['guide','📚 Guide']].map(([k, l]) =>
         e('button', { key: k, style: st.tab(tab === k), onClick: () => setTab(k) }, l)
