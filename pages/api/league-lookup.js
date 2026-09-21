@@ -26,6 +26,20 @@ export default async function handler(req, res) {
     const response = await fetch(url, { headers: { 'x-apisports-key': apiKey } });
     const json = await response.json();
 
+    // Surface API-Football's own error/status info instead of silently
+    // returning an empty result — a 0-match response and a failed-auth
+    // response both look like `{}` shaped data if you only check
+    // json.response, and that ambiguity is exactly what hid the real
+    // problem here.
+    if (!response.ok || (json.errors && Object.keys(json.errors).length > 0)) {
+      return res.status(502).json({
+        error: 'API-Football returned an error',
+        httpStatus: response.status,
+        apiErrors: json.errors || null,
+        rawResponse: json,
+      });
+    }
+
     const results = (json.response || []).map(l => ({
       id: l.league.id,
       name: l.league.name,
@@ -34,7 +48,16 @@ export default async function handler(req, res) {
       currentSeason: (l.seasons || []).find(s => s.current)?.year,
     }));
 
-    return res.status(200).json({ query: q, country: country || null, count: results.length, results });
+    return res.status(200).json({
+      query: q,
+      country: country || null,
+      count: results.length,
+      results,
+      // Included so a genuine 0-match search is distinguishable from a
+      // hidden API error — check this alongside `count` if results ever
+      // look surprising.
+      apiFootballResultsInEnvelope: json.results,
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
