@@ -15,8 +15,8 @@ export default async function handler(req, res) {
     return { status: r.status, body };
   }
 
-  // One clean call — just msport, no repeated tests, no wasted quota.
-  const result = await callOddsPapi('msport');
+  // One clean call — mozzartbet confirmed to have live data for this tournament earlier
+  const result = await callOddsPapi('mozzartbet');
 
   if (result.status >= 400) {
     return res.status(200).json({
