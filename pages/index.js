@@ -1169,6 +1169,39 @@ useEffect(() => {
     if (j && j.isPremium) setPlanCheckMsg('Your Premium is active.');
     else setPlanCheckMsg('Still showing the Free plan. If you paid a minute ago, wait a little and check again. If it has been longer, email us with your payment receipt and we will fix it.');
   };
+  const renderPremiumCard = () => {
+    const e = createElement;
+    const features = [
+      'Every league we scan — not just the free set',
+      'Every sportsbook we cover, in one scan',
+      '+EV bet finder with sharp-book consensus',
+      'AI Bet Analyzer for match context',
+      'Bet tracker with closing line value (CLV)',
+      'Cash-out analyzer',
+      'Affiliate earnings tracker',
+    ];
+    return e('div', {
+      style: { border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, marginTop: 10, background: '#fafafa' }
+    },
+      e('div', { style: { fontSize: 13, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 } }, 'Premium'),
+      e('div', { style: { fontSize: 24, fontWeight: 800, color: '#111827', marginBottom: 2 } }, priceLabel),
+      e('div', { style: { fontSize: 12, color: '#6b7280', marginBottom: 12 } }, 'per 30 days'),
+      e('div', { style: { marginBottom: 14 } },
+        features.map((f, i) => e('div', {
+          key: i,
+          style: { display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, color: '#374151', marginBottom: 6 }
+        },
+          e('span', { style: { color: '#10b981', fontWeight: 700 } }, '✓'),
+          e('span', null, f)
+        ))
+      ),
+      e('button', {
+        onClick: () => startCheckout('prepaid'),
+        disabled: checkoutLoading,
+        style: { ...st.btn('primary'), width: '100%' }
+      }, checkoutLoading ? 'Opening...' : (plan.isPremium ? 'Renew for 30 days' : 'Upgrade to Premium'))
+    );
+  };
   const renderMenu = () => {
     if (!menuOpen) return null;
     const e = createElement;
@@ -1200,7 +1233,7 @@ useEffect(() => {
           e('div', { style: h }, 'Account'),
           e('div', { style: p }, userEmail),
           e('div', { style: p }, 'Plan: ' + planLine),
-          !plan.isOwner && canPay && e('button', { onClick: () => startCheckout('prepaid'), disabled: checkoutLoading, style: st.btn('primary') }, checkoutLoading ? 'Opening...' : (plan.isPremium ? 'Renew for 30 days (' + priceLabel + ')' : 'Upgrade to Premium (' + priceLabel + ')')),
+          !plan.isOwner && canPay && renderPremiumCard(),
           !plan.isPremium && e('div', { style: { marginTop: 10 } },
             e('button', { onClick: checkPayment, style: st.btn('outline') }, 'Paid but still on Free?'),
             planCheckMsg && e('div', { style: { ...p, marginTop: 8 } }, planCheckMsg)
