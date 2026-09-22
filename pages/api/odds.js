@@ -176,7 +176,9 @@ const waHealth = {
   msport:    { ok: null, reason: null, fetchedAt: null },
   '22bet':   { ok: null, reason: null, fetchedAt: null },
   paripesa:  { ok: null, reason: null, fetchedAt: null },
-  mozzart:   { ok: null, reason: null, fetchedAt: null },
+  mozzartbet: { ok: null, reason: null, fetchedAt: null },
+  melbet:     { ok: null, reason: null, fetchedAt: null },
+  betway:     { ok: null, reason: null, fetchedAt: null },
   betfox:    { ok: null, reason: null, fetchedAt: null },
 };
 
@@ -212,13 +214,15 @@ async function getWAOdds(sportKey) {
     return { events: cached.data, health: cached.health, fromCache: true };
   }
 
-  const [sportybet, betano, msport, twobet, paripesa, mozzart, betfox] = await Promise.allSettled([
+  const [sportybet, betano, msport, twobet, paripesa, mozzartbet, melbet, betway, betfox] = await Promise.allSettled([
     fetchSportybetOdds(sportKey),
     fetchBetanoOdds(sportKey),
     fetchMsportOdds(sportKey),
     fetch22BetOdds(sportKey),
     fetchParipesaOdds(sportKey),
-    fetchMozzartOdds(sportKey),
+    fetchMozzartbetOdds(sportKey),
+    fetchMelbetOdds(sportKey),
+    fetchBetwayOdds(sportKey),
     fetchBetfoxOdds(sportKey),
   ]);
 
