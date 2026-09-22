@@ -1,10 +1,12 @@
 import { getUserPlan, FREE_SPORTS, SCANNED_SPORTS } from '../../lib/serverAuth';
 import { fetchSportybetOdds } from './scrapers/sportybet';
 import { fetchBetanoOdds }    from './scrapers/betano';
-import { fetchMsportOdds }    from './scrapers/msport';
-import { fetch22BetOdds }     from './scrapers/22bet';
-import { fetchParipesaOdds }  from './scrapers/Paripesa';
-import { fetchMozzartOdds }   from './scrapers/mozzart';
+import { fetchMsportOdds }      from './scrapers/msport';
+import { fetch22BetOdds }       from './scrapers/22bet';
+import { fetchParipesaOdds }    from './scrapers/Paripesa';
+import { fetchMozzartbetOdds }  from './scrapers/mozzartbet';
+import { fetchMelbetOdds }      from './scrapers/melbet';
+import { fetchBetwayOdds }      from './scrapers/betway';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
