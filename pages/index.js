@@ -950,7 +950,7 @@ const [apiKey, setApiKey] = useState('server');
   // basketball/tennis/MMA/cricket/NFL, which fragmented the shared scan cache
   // across sports nobody was actually comparing). Every entry here has a
   // confirmed WA-scraper tournament ID, so capping doesn't lose WA coverage.
-  const TOP_SPORTS = ['soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_italy_serie_a','soccer_france_ligue_one','soccer_africa_cup_of_nations','soccer_ghana_premiership','soccer_fifa_world_cup','soccer_uefa_europa_league','soccer_conmebol_copa_libertadores','soccer_usa_mls','soccer_efl_champ','soccer_netherlands_eredivisie','soccer_portugal_primeira_liga','soccer_belgium_first_div','soccer_spl','soccer_norway_eliteserien','soccer_sweden_allsvenskan','soccer_brazil_campeonato'];
+  const TOP_SPORTS = ['soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_italy_serie_a','soccer_france_ligue_one','soccer_africa_cup_of_nations','soccer_ghana_premiership','soccer_fifa_world_cup','soccer_uefa_europa_league','soccer_conmebol_copa_libertadores','soccer_usa_mls','soccer_efl_champ','soccer_netherlands_eredivisie','soccer_portugal_primeira_liga','soccer_belgium_first_div','soccer_spl','soccer_norway_eliteserien','soccer_sweden_allsvenskan','soccer_brazil_campeonato','basketball_nba'];
 const [selectedSports, setSelectedSports] = useState(() => {
   try { const saved = localStorage.getItem('arb_sports'); return saved ? JSON.parse(saved) : TOP_SPORTS; } catch { return TOP_SPORTS; }
 });
