@@ -8,7 +8,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const url = `${BASE_URL}?apikey=${API_KEY}`;
+   const url = `${BASE_URL}?apiKey=${API_KEY}`;
     const r = await fetch(url);
     const status = r.status;
     let body;
