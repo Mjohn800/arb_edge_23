@@ -14,7 +14,7 @@ export default async function handler(req, res) {
   }
 
   // Resolve the two participant IDs from our real fixture (42, 34)
-  const participants = await get('/participants?participantIds=42,34');
+ const participants = await get('/participants?participantIds=42,34&sportId=10');
 
   // Pull the full soccer market reference table
   const markets = await get('/markets?sportId=10');
