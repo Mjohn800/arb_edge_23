@@ -2,7 +2,7 @@ export default async function handler(req, res) {
   const API_KEY = process.env.ODDSPAPI_KEY;
   const TOURNAMENT_ID = process.env.TEST_TOURNAMENT_ID;
   const BASE_URL = 'https://api.oddspapi.io/v4/odds-by-tournaments';
-  const BOOKS = ['msport', 'mozzart', 'melbet'];
+  const BOOKS = ['msport', 'mozzartbet', 'melbet', 'betway'];
 
   if (!API_KEY || !TOURNAMENT_ID) {
     return res.status(500).json({ error: 'Missing ODDSPAPI_KEY or TEST_TOURNAMENT_ID env var' });
@@ -16,25 +16,39 @@ export default async function handler(req, res) {
     return { status: r.status, body };
   }
 
-  function seenBooks(body) {
-    const str = JSON.stringify(body).toLowerCase();
-    return BOOKS.filter(b => str.includes(b));
+  // Only look inside actual odds data (bookmakerOdds keys), not the whole
+  // response — avoids false positives from error messages listing valid slugs.
+  function booksInResponse(body) {
+    if (!body || typeof body !== 'object') return [];
+    const found = new Set();
+    const fixtures = Array.isArray(body) ? body : (body.fixtures || body.data || [body]);
+    for (const fixture of fixtures) {
+      const odds = fixture?.bookmakerOdds;
+      if (odds && typeof odds === 'object') {
+        for (const key of Object.keys(odds)) found.add(key);
+      }
+    }
+    return [...found];
   }
 
   const combined = await callOddsPapi(BOOKS.join(','));
-  const combinedSeen = seenBooks(combined.body);
+  const combinedSeen = booksInResponse(combined.body);
 
   const separate = {};
   for (const book of BOOKS) {
     const r = await callOddsPapi(book);
-    separate[book] = { status: r.status, seen: seenBooks(r.body) };
-    await new Promise(r2 => setTimeout(r2, 300));
+    separate[book] = { status: r.status, seen: booksInResponse(r.body) };
+    await new Promise(r2 => setTimeout(r2, 1500)); // longer gap to avoid 429s
   }
 
   let verdict;
-  if (combinedSeen.length === BOOKS.length) verdict = 'Comma-separated param WORKS — all 3 books in one call.';
-  else if (combinedSeen.length <= 1) verdict = 'Comma-separated param likely IGNORED — use separate calls per bookmaker.';
-  else verdict = 'Ambiguous — inspect raw below manually.';
+  if (combined.status >= 400) {
+    verdict = `Combined call errored (status ${combined.status}) — see combinedRawSample.`;
+  } else if (combinedSeen.length >= 2) {
+    verdict = `Comma-separated param WORKS — found ${combinedSeen.length} books in one call: ${combinedSeen.join(', ')}`;
+  } else if (combinedSeen.length <= 1) {
+    verdict = `Comma-separated param likely IGNORED — only found: ${combinedSeen.join(', ') || '(none)'}`;
+  }
 
   return res.status(200).json({
     verdict,
