@@ -1,5 +1,15 @@
 import { LEAGUE_IDS, defaultSeason, normaliseTeamName, fetchLeagueForm } from '../../lib/teamForm';
 
+// ─── REAL FORM DATA: OFF FOR NOW ─────────────────────────────────────────────
+// API-Football's free tier only allows fixtures from 2022-2024 — not the
+// current season — so "real current form" isn't actually available yet on
+// this account. Rather than ship stale 2024 data labeled as current, or burn
+// API calls that just error out, this whole real-data path stays off until
+// the account is upgraded to a paid tier (Pro, $19/mo, unlocks current
+// seasons). Flip it on later by setting ENABLE_REAL_FORM_DATA=true in Vercel
+// — no code changes needed, everything below is already built and ready.
+const REAL_FORM_DATA_ENABLED = process.env.ENABLE_REAL_FORM_DATA === 'true';
+
 // ─── RATE LIMITING (in-memory, per-IP, 5 requests / 10 min) ─────────────────
 const rateLimitLog = {};
 const RATE_LIMIT_WINDOW = 10 * 60 * 1000;
@@ -98,6 +108,9 @@ function headToHead(homeRecords, awayKey, n = 5) {
 // covers, or when either team name didn't normalise-match anything in the
 // season's fixtures — both are real, expected gaps, not bugs.
 async function buildRealMatchData(sport, match) {
+  if (!REAL_FORM_DATA_ENABLED) {
+    return { available: false, reason: 'Real-team-form data is currently disabled (requires a paid API-Football tier with current-season access)' };
+  }
   if (!LEAGUE_IDS[sport]) {
     return { available: false, reason: `No results data for sport key "${sport}" (only Top-5 European leagues are covered)` };
   }
@@ -228,7 +241,11 @@ export default async function handler(req, res) {
   const realData = await buildRealMatchData(sport, match);
   const dataQuality = assessDataQuality(realData);
 
-  const prompt = `You are a sports betting analyst writing for West African bettors. You are given REAL verified data below (or told plainly when none exists) — you must reason only from it, never from your own general knowledge of these teams, players, or recent news.
+  // Scoped deliberately to what free-tier data actually supports: the odds
+  // and arb/EV math ArbEdge already has, nothing about team form or match
+  // outcome prediction (that needs real form data — see REAL_FORM_DATA_ENABLED
+  // above). No field below claims anything the app can't currently back up.
+  const prompt = `You are a sports betting analyst writing for West African bettors. You must reason ONLY from the odds/market data below — you have no team form, injury, or news data for this match, so do not predict a match outcome, discuss team form, or mention players, injuries, or news of any kind.
 
 Match: ${match}
 Sport: ${sport}
@@ -239,24 +256,13 @@ ${outcomes.map(o => `- ${o.label}: ${o.odds} on ${o.bookName}`).join('\n')}
 
 ${describeRealData(realData)}
 
-Data quality for this match: ${dataQuality.level} (${dataQuality.note})
-
 Respond ONLY with this exact JSON, no markdown, no extra text:
 {
-  "predictedOutcome": "most likely result based on the data above",
-  "confidence": 65,
-  "valueLeg": "best value bet given the odds and data above",
-  "riskLevel": "Low",
-  "form": { "home": "as given above, or null if no data", "away": "as given above, or null if no data" },
-  "goalsAvg": { "homeScoredPer90": 1.8, "homeConceededPer90": 0.9, "awayScoredPer90": 1.2, "awayConceededPer90": 1.4 },
-  "h2h": "summarise the head-to-head data given above, or state plainly if none exists",
-  "keyInsight": "one sentence, grounded only in the data provided",
-  "additionalBets": [
-    { "market": "Over 2.5 Goals", "recommendation": "Yes or No", "confidence": 60, "reasoning": "cite the Over 2.5 rate given above" },
-    { "market": "Both Teams to Score", "recommendation": "Yes or No", "confidence": 60, "reasoning": "cite the BTTS rate given above" }
-  ],
-  "tip": "one actionable sentence for the bettor",
-  "reasoning": "2 sentences explaining your read, citing only the data given above — if data quality is Low or None, say so and hedge accordingly"
+  "valueAssessment": "is this a genuine odds/arb edge, based only on the margin and odds spread above — explain why",
+  "riskLevel": "Low, Medium, or High — based on the margin size and how many bookmakers agree on price, not on who is likely to win",
+  "keyInsight": "one sentence about what makes this price interesting or risky, grounded only in the odds/margin data given",
+  "tip": "one actionable sentence about executing this bet — e.g. odds-movement risk, stake sizing, timing — not a prediction about the match result",
+  "reasoning": "2 sentences explaining your read, citing only the odds/margin data given"
 }`;
 
   try {
