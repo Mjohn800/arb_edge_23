@@ -16,6 +16,14 @@ export default async function handler(req, res) {
     return { status: r.status, body };
   }
 
+  async function callWithoutBookmaker() {
+    const url = `${BASE_URL}?apiKey=${API_KEY}&tournamentIds=${TOURNAMENT_ID}`;
+    const r = await fetch(url);
+    let body;
+    try { body = await r.json(); } catch { body = { raw: await r.text() }; }
+    return { status: r.status, body };
+  }
+
   // Only look inside actual odds data (bookmakerOdds keys), not the whole
   // response — avoids false positives from error messages listing valid slugs.
   function booksInResponse(body) {
@@ -31,9 +39,11 @@ export default async function handler(req, res) {
     return [...found];
   }
 
+  // Test 1: comma-separated bookmaker param
   const combined = await callOddsPapi(BOOKS.join(','));
   const combinedSeen = booksInResponse(combined.body);
 
+  // Test 2: separate call per bookmaker
   const separate = {};
   for (const book of BOOKS) {
     const r = await callOddsPapi(book);
@@ -41,12 +51,16 @@ export default async function handler(req, res) {
     await new Promise(r2 => setTimeout(r2, 1500)); // longer gap to avoid 429s
   }
 
+  // Test 3: omit bookmaker param entirely — does it return the full board?
+  const noParam = await callWithoutBookmaker();
+  const noParamSeen = booksInResponse(noParam.body);
+
   let verdict;
   if (combined.status >= 400) {
     verdict = `Combined call errored (status ${combined.status}) — see combinedRawSample.`;
   } else if (combinedSeen.length >= 2) {
     verdict = `Comma-separated param WORKS — found ${combinedSeen.length} books in one call: ${combinedSeen.join(', ')}`;
-  } else if (combinedSeen.length <= 1) {
+  } else {
     verdict = `Comma-separated param likely IGNORED — only found: ${combinedSeen.join(', ') || '(none)'}`;
   }
 
@@ -56,5 +70,8 @@ export default async function handler(req, res) {
     combinedBooksSeen: combinedSeen,
     separateCalls: separate,
     combinedRawSample: JSON.stringify(combined.body).slice(0, 800),
+    noBookmakerParamStatus: noParam.status,
+    noBookmakerParamBooksSeen: noParamSeen,
+    noBookmakerParamCount: noParamSeen.length,
   });
 }
