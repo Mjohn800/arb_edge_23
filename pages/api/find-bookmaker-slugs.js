@@ -1,7 +1,7 @@
 export default async function handler(req, res) {
   const API_KEY = process.env.ODDSPAPI_KEY;
   const BASE = 'https://api.oddspapi.io/v4';
-  const SEARCH_TERMS = ['msport', 'mozzart', 'melbet'];
+ const SEARCH_TERMS = ['msport', 'mozzart', 'melbet', 'betway'];
 
   if (!API_KEY) {
     return res.status(500).json({ error: 'Missing ODDSPAPI_KEY env var' });
