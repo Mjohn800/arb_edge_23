@@ -598,7 +598,12 @@ function findArbs(events, mode = 'global', userRegion = null) {
     //              line, so home -0.25 and away +0.25 share one slot)
     // Outcomes are keyed by resolved side, not raw name, so two spellings of
     // one team can never appear as two separate legs.
-    const marketSlots = {};
+    // Pass 1: collect every quote. Pass 2: build slots, ignoring any bookmaker
+    // that quotes the SAME slot+side at two different prices — that means the
+    // feed leaked more than one market (half-time, early-payout, team total…)
+    // into this slot and we can't tell which one is the real full-time price.
+    // Skipping is safe; guessing (or taking the max) is how fake arbs appear.
+    const quotes = [];
     for (const bm of ev.bookmakers) {
       if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
       for (const mkt of (bm.markets || [])) {
@@ -635,14 +640,24 @@ function findArbs(events, mode = 'global', userRegion = null) {
             slotKey = 'outrights'; sideKey = o.name;
             marketLabel = 'Outright';
           }
-
-          if (!marketSlots[slotKey]) marketSlots[slotKey] = { mktKey: mkt.key, line, best: {}, all: {} };
-          const slot = marketSlots[slotKey];
-          (slot.all[sideKey] = slot.all[sideKey] || []).push({ book: bm.key, price: o.price });
-          if (!slot.best[sideKey] || o.price > slot.best[sideKey].price) {
-            slot.best[sideKey] = { sideKey, price: o.price, book: bm.key, bookName: bm.title, displayLabel, marketLabel, marketKey: mkt.key, point: o.point ?? null };
-          }
+          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, displayLabel, marketLabel, point: o.point ?? null });
         }
+      }
+    }
+
+    const priceSets = {};
+    for (const q of quotes) {
+      const k = q.slotKey + '|' + q.sideKey + '|' + q.book;
+      (priceSets[k] = priceSets[k] || new Set()).add(q.price);
+    }
+    const marketSlots = {};
+    for (const q of quotes) {
+      if (priceSets[q.slotKey + '|' + q.sideKey + '|' + q.book].size > 1) continue; // ambiguous — skip this book here
+      if (!marketSlots[q.slotKey]) marketSlots[q.slotKey] = { mktKey: q.mktKey, line: q.line, best: {}, all: {} };
+      const slot = marketSlots[q.slotKey];
+      (slot.all[q.sideKey] = slot.all[q.sideKey] || []).push({ book: q.book, price: q.price });
+      if (!slot.best[q.sideKey] || q.price > slot.best[q.sideKey].price) {
+        slot.best[q.sideKey] = { sideKey: q.sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point };
       }
     }
 
