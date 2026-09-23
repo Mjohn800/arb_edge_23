@@ -3,14 +3,14 @@ import { fetchSportybetOdds } from './scrapers/sportybet';
 import { fetchBetanoOdds }    from './scrapers/betano';
 import { fetch22BetOdds }       from './scrapers/22bet';
 import { fetchParipesaOdds }    from './scrapers/Paripesa';
-import { fetchMozzartbetOdds }  from './scrapers/mozzartbet';
 import { fetchMelbetOdds }      from './scrapers/melbet';
 import { fetchBetwayOdds }      from './scrapers/betway';
+import { fetchBetanoOddsPapi, fetch22BetOddsPapi } from '../../lib/oddspapi-wa';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
 export const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet', '1xbet']; // same Pinnacle reference as global, output filtered to WA-accessible books client-side
-export const WA_BOOKS               = ['sportybet', 'betano', '22bet', 'paripesa', 'melbet', 'betway', 'mozzartbet', 'betfox'];
+export const WA_BOOKS               = ['sportybet', 'betano', '22bet', 'paripesa', 'melbet', 'betway', 'betfox'];
 
 // Real Odds-API bookmaker keys we actually compare for the GLOBAL feed.
 // NOTE: We use regions= instead of bookmakers= because the bookmakers= param
@@ -23,8 +23,10 @@ export const WA_BOOKS               = ['sportybet', 'betano', '22bet', 'paripesa
 //   uk  → Betfair UK, William Hill UK
 //   us  → DraftKings, FanDuel (not needed)
 const GLOBAL_REGIONS = 'eu,uk';
-// mozzartbet, melbet, and betway are sourced via OddsPapi (lib/oddspapi.js)
-// rather than direct scraping — see pages/api/scrapers/{mozzartbet,melbet,betway}.js.
+// melbet and betway are sourced via OddsPapi (lib/oddspapi.js)
+// rather than direct scraping — see pages/api/scrapers/{melbet,betway}.js.
+// Mozzart removed entirely (23 Sep 2026): dead .com.gh link-out and broken
+// OddsPapi data path (404s on /odds-by-tournaments for this bookmaker).
 // msport dropped entirely (23 Sep 2026): confirmed OddsPapi only carries
 // "MSPORT NG" (Nigeria), not the Ghana operation this app targets — zero
 // fixtures returned across every tested league, liveOdds:false on their own
@@ -172,7 +174,6 @@ const waHealth = {
   betano:     { ok: null, reason: null, fetchedAt: null },
   '22bet':    { ok: null, reason: null, fetchedAt: null },
   paripesa:   { ok: null, reason: null, fetchedAt: null },
-  mozzartbet: { ok: null, reason: null, fetchedAt: null },
   melbet:     { ok: null, reason: null, fetchedAt: null },
   betway:     { ok: null, reason: null, fetchedAt: null },
   betfox:     { ok: null, reason: null, fetchedAt: null },
@@ -204,18 +205,34 @@ function globalCacheKey(sport, markets) { return `${sport}::${markets}`; }
 // even with caching in place.
 const inFlightGlobal = {};
 
+// Betano and 22Bet are geo/bot-blocked at ScraperAPI's free tier (see the
+// pre-launch notes above), so try OddsPapi first — it's a clean JSON source
+// with no proxy needed — and only fall back to the direct scraper if
+// OddsPapi has no tournament mapped for this sport yet (ODDSPAPI_TOURNAMENT_MAP
+// in lib/oddspapi-wa.js still has TODOs for most leagues).
+async function getBetanoOdds(sportKey) {
+  const papi = await fetchBetanoOddsPapi(sportKey);
+  if (papi.status.ok && papi.events.length > 0) return papi;
+  return fetchBetanoOdds(sportKey);
+}
+
+async function get22BetOdds(sportKey) {
+  const papi = await fetch22BetOddsPapi(sportKey);
+  if (papi.status.ok && papi.events.length > 0) return papi;
+  return fetch22BetOdds(sportKey);
+}
+
 async function getWAOdds(sportKey) {
   const cached = waCache[sportKey];
   if (cached && Date.now() - cached.ts < WA_CACHE_TTL) {
     return { events: cached.data, health: cached.health, fromCache: true };
   }
 
-  const [sportybet, betano, twobet, paripesa, mozzartbet, melbet, betway, betfox] = await Promise.allSettled([
+  const [sportybet, betano, twobet, paripesa, melbet, betway, betfox] = await Promise.allSettled([
     fetchSportybetOdds(sportKey),
-    fetchBetanoOdds(sportKey),
-    fetch22BetOdds(sportKey),
+    getBetanoOdds(sportKey),
+    get22BetOdds(sportKey),
     fetchParipesaOdds(sportKey),
-    fetchMozzartbetOdds(sportKey),
     fetchMelbetOdds(sportKey),
     fetchBetwayOdds(sportKey),
     fetchBetfoxOdds(sportKey),
@@ -230,7 +247,6 @@ async function getWAOdds(sportKey) {
   waHealth.betano      = extractStatus(betano,      'promise_rejected: ' + (betano.reason?.message      || 'unknown'));
   waHealth['22bet']    = extractStatus(twobet,      'promise_rejected: ' + (twobet.reason?.message      || 'unknown'));
   waHealth.paripesa    = extractStatus(paripesa,    'promise_rejected: ' + (paripesa.reason?.message    || 'unknown'));
-  waHealth.mozzartbet  = extractStatus(mozzartbet,  'promise_rejected: ' + (mozzartbet.reason?.message  || 'unknown'));
   waHealth.melbet      = extractStatus(melbet,      'promise_rejected: ' + (melbet.reason?.message      || 'unknown'));
   waHealth.betway      = extractStatus(betway,      'promise_rejected: ' + (betway.reason?.message      || 'unknown'));
   waHealth.betfox      = extractStatus(betfox,      'promise_rejected: ' + (betfox.reason?.message      || 'unknown'));
@@ -240,7 +256,6 @@ async function getWAOdds(sportKey) {
     ...(betano.status      === 'fulfilled' ? betano.value?.events      || [] : []),
     ...(twobet.status      === 'fulfilled' ? twobet.value?.events      || [] : []),
     ...(paripesa.status    === 'fulfilled' ? paripesa.value?.events    || [] : []),
-    ...(mozzartbet.status  === 'fulfilled' ? mozzartbet.value?.events  || [] : []),
     ...(melbet.status      === 'fulfilled' ? melbet.value?.events      || [] : []),
     ...(betway.status      === 'fulfilled' ? betway.value?.events      || [] : []),
     ...(betfox.status      === 'fulfilled' ? betfox.value?.events      || [] : []),
@@ -251,7 +266,6 @@ async function getWAOdds(sportKey) {
     '| betano:',      betano.status      === 'fulfilled' ? (betano.value?.events?.length      ?? 0) : 'failed: ' + betano.reason?.message,
     '| 22bet:',       twobet.status      === 'fulfilled' ? (twobet.value?.events?.length      ?? 0) : 'failed: ' + twobet.reason?.message,
     '| paripesa:',    paripesa.status    === 'fulfilled' ? (paripesa.value?.events?.length    ?? 0) : 'failed: ' + paripesa.reason?.message,
-    '| mozzartbet:',  mozzartbet.status  === 'fulfilled' ? (mozzartbet.value?.events?.length   ?? 0) : 'failed: ' + mozzartbet.reason?.message,
     '| melbet:',      melbet.status      === 'fulfilled' ? (melbet.value?.events?.length      ?? 0) : 'failed: ' + melbet.reason?.message,
     '| betway:',      betway.status      === 'fulfilled' ? (betway.value?.events?.length      ?? 0) : 'failed: ' + betway.reason?.message,
     '| betfox:',      betfox.status      === 'fulfilled' ? (betfox.value?.events?.length      ?? 0) : 'failed: ' + betfox.reason?.message,
@@ -260,7 +274,7 @@ async function getWAOdds(sportKey) {
   const health = {
     sportybet: waHealth.sportybet, betano: waHealth.betano,
     '22bet': waHealth['22bet'], paripesa: waHealth.paripesa,
-    mozzartbet: waHealth.mozzartbet, melbet: waHealth.melbet, betway: waHealth.betway,
+    melbet: waHealth.melbet, betway: waHealth.betway,
     betfox: waHealth.betfox,
   };
   waCache[sportKey] = { data: results, health, ts: Date.now() };
@@ -476,7 +490,7 @@ export default async function handler(req, res) {
   // WA users: sportybet, betano, 1xbet, melbet, betway + new WA books
   // Global users: all books accessible (Betfair, Pinnacle, Bet365, William Hill etc.)
   const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','melbet','sportybet','betano','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag'];
-  const WA_ACCESSIBLE     = ['1xbet','melbet','betway','sportybet','betano','22bet','paripesa','betwinner','betking','bet9ja','1win','premierbet','mozzartbet','betfox'];
+  const WA_ACCESSIBLE     = ['1xbet','melbet','betway','sportybet','betano','22bet','paripesa','betwinner','betking','bet9ja','1win','premierbet','betfox'];
   const userAccessibleBooks = isWAUser ? WA_ACCESSIBLE : GLOBAL_ACCESSIBLE;
 
   return res.status(200).json({
