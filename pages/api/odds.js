@@ -333,3 +333,170 @@ async function fetchGlobalOddsFresh(sport, markets, keys, cacheKey) {
         let body = null;
         try { body = await response.json(); } catch {}
         lastError = (body && (body.message || body.error_code)) || `key error (${response.status})`;
+        lastErrorDetail = body;
+        console.log(`[odds] key ${keys.indexOf(key)+1} error body:`, lastError);
+        continue;
+      }
+      if (!response.ok) {
+        let body = null;
+        try { body = await response.json(); } catch {}
+        console.log(`[odds] key ${keys.indexOf(key)+1} status ${response.status} body:`, JSON.stringify(body));
+        lastError = response.status;
+        lastErrorDetail = body;
+        continue;
+      }
+
+      // Success — capture global data and move on
+      globalData = await response.json();
+      remainingRequests = response.headers.get('x-requests-remaining');
+      usedRequests      = response.headers.get('x-requests-used');
+      keyIndex          = keys.indexOf(key) + 1;
+
+      // Tag non-WA bookmakers
+      globalData.forEach(ev => {
+        (ev.bookmakers || []).forEach(bm => { bm._wa = WA_BOOKS.includes(bm.key); });
+      });
+
+      globalOddsCache[cacheKey] = { data: globalData, remainingRequests, usedRequests, keyIndex, ts: Date.now() };
+      break; // got data, stop trying keys
+    } catch (err) {
+      lastError = err.message;
+      continue;
+    }
+  }
+
+  return { globalData, remainingRequests, usedRequests, keyIndex, lastError, lastErrorDetail };
+}
+
+// ─── HANDLER ──────────────────────────────────────────────────────────────────
+export default async function handler(req, res) {
+  const { sport, region, market } = req.query;
+
+  // -- PAYWALL: must be logged in; free users only get FREE_SPORTS ----------
+  const plan = await getUserPlan(req);
+  if (!plan.user) return res.status(401).json({ error: 'login_required' });
+  if (!plan.isOwner && !SCANNED_SPORTS.includes(sport)) {
+    return res.status(403).json({ error: 'sport_not_available', sport });
+  }
+  if (!plan.isPremium && !FREE_SPORTS.includes(sport)) {
+    return res.status(402).json({ error: 'premium_required', sport });
+  }
+
+  const markets = market || 'h2h,spreads,totals';
+
+  // ── Multi-key rotation (your existing logic, unchanged) ───────────────────
+  const keys = [
+    process.env.ODDS_API_KEY,
+    process.env.ODDS_API_KEY_2,
+    process.env.ODDS_API_KEY_3,
+    process.env.ODDS_API_KEY_4,
+    process.env.ODDS_API_KEY_5,
+    process.env.ODDS_API_KEY_6,
+  ].filter(Boolean);
+
+  console.log('[odds] keys loaded:', keys.map((k, i) => `KEY_${i+1}=${k ? k.slice(0,8)+'...' : 'MISSING'}`));
+  console.log('[odds] requesting sport:', sport, 'regions:', GLOBAL_REGIONS, 'markets:', markets);
+
+  let lastError = null;
+  let lastErrorDetail = null;
+  let globalData = null;
+  let remainingRequests = null;
+  let usedRequests = null;
+  let keyIndex = null;
+  let globalFromCache = false;
+
+  // ── 0. Serve from cache if a recent fetch for this exact sport+markets exists ──
+  const cacheKey = globalCacheKey(sport, markets);
+  const cachedGlobal = globalOddsCache[cacheKey];
+  if (cachedGlobal && Date.now() - cachedGlobal.ts < GLOBAL_CACHE_TTL) {
+    globalData = cachedGlobal.data;
+    remainingRequests = cachedGlobal.remainingRequests;
+    usedRequests = cachedGlobal.usedRequests;
+    keyIndex = cachedGlobal.keyIndex;
+    globalFromCache = true;
+    console.log('[odds] serving', sport, 'from cache, age:', Math.round((Date.now() - cachedGlobal.ts) / 1000) + 's');
+  } else {
+    // ── 1. Cache miss: join an in-flight fetch for this sport if one's already
+    // running (another request beat us here by milliseconds), else start one. ──
+    if (inFlightGlobal[cacheKey]) {
+      console.log('[odds] joining in-flight fetch already running for', sport);
+    } else {
+      inFlightGlobal[cacheKey] = fetchGlobalOddsFresh(sport, markets, keys, cacheKey)
+        .finally(() => { delete inFlightGlobal[cacheKey]; });
+    }
+    const result = await inFlightGlobal[cacheKey];
+    globalData = result.globalData;
+    remainingRequests = result.remainingRequests;
+    usedRequests = result.usedRequests;
+    keyIndex = result.keyIndex;
+    lastError = result.lastError;
+    lastErrorDetail = result.lastErrorDetail;
+  }
+
+  // ── 2. WA scrapers run regardless of whether global API succeeded ─────────
+  const waResult = sport ? await getWAOdds(sport) : { events: [], health: waHealth, fromCache: false };
+  const waEvents = waResult.events;
+  const waBookHealth = waResult.health;
+
+  // ── 3. If global failed entirely, fall through to WA-only response ────────
+  if (!globalData && waEvents.length === 0) {
+    console.log('[odds] all keys failed, lastError:', lastError, 'detail:', JSON.stringify(lastErrorDetail));
+    return res.status(429).json({
+      error: 'All API keys exhausted. ' + lastError,
+      detail: lastErrorDetail,
+      sport, region, markets,
+      waBookHealth,
+    });
+  }
+
+  // ── 4. Merge global + WA events ───────────────────────────────────────────
+  const merged = mergeEvents(globalData || [], waEvents);
+
+  // ── 5. Annotate each event with region flags ──────────────────────────────
+  merged.forEach(ev => {
+    const books = ev.bookmakers || [];
+    ev._hasGlobal = books.some(b => !b._wa);
+    ev._hasWA     = books.some(b =>  b._wa);
+  });
+
+  console.log('[odds][merge]', sport, '-> globalEvents:', (globalData || []).length, '| waEvents in:', waEvents.length,
+    '| merged total:', merged.length, '| merged events carrying a WA book:', merged.filter(ev => ev._hasWA).length);
+
+  // ── 6. Respond ────────────────────────────────────────────────────────────
+  // ── Detect user region from Vercel's geo header ───────────────────────────
+  // x-vercel-ip-country is a 2-letter ISO code injected by Vercel on every request.
+  // WA countries: Ghana (GH), Nigeria (NG), Senegal (SN), Ivory Coast (CI),
+  // Cameroon (CM), Kenya (KE), Tanzania (TZ), Uganda (UG), Rwanda (RW), Zambia (ZM),
+  // Ethiopia (ET), Mozambique (MZ), Sierra Leone (SL), Liberia (LR), Gambia (GM).
+  const WA_COUNTRIES = new Set(['GH','NG','SN','CI','CM','KE','TZ','UG','RW','ZM','ET','MZ','SL','LR','GM','BJ','BF','ML','NE','GN','TG','MR','MW','ZW','AO','CD','CG','GA','TD','BI','DJ','ER','SO','SD','SS']);
+  const userCountry = req.headers['x-vercel-ip-country'] || 'unknown';
+  const isWAUser = WA_COUNTRIES.has(userCountry);
+
+  // Books accessible to this user based on their detected region.
+  // WA users: sportybet, betano, 1xbet, melbet, betway + new WA books
+  // Global users: all books accessible (Betfair, Pinnacle, Bet365, William Hill etc.)
+  const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','melbet','sportybet','betano','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag'];
+  const WA_ACCESSIBLE     = ['1xbet','melbet','betway','sportybet','betano','22bet','paripesa','betwinner','betking','bet9ja','1win','premierbet','mozzartbet','betfox'];
+  const userAccessibleBooks = isWAUser ? WA_ACCESSIBLE : GLOBAL_ACCESSIBLE;
+
+  return res.status(200).json({
+    data: merged,
+    remainingRequests,
+    usedRequests,
+    keyIndex,
+    globalFromCache,
+    waBookHealth,
+    userCountry,
+    isWAUser,
+    userAccessibleBooks,
+    meta: {
+      sport,
+      totalEvents:  merged.length,
+      globalEvents: (globalData || []).length,
+      waEvents:     waEvents.length,
+      sharpBooksGlobal: SHARP_BOOKS_GLOBAL,
+      sharpBooksWA:     SHARP_BOOKS_WESTAFRICA,
+      waBooks:          WA_BOOKS,
+    },
+  });
+}
