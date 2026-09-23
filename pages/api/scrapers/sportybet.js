@@ -69,7 +69,7 @@ const HEADERS = {
   'Referer': 'https://www.sportybet.com/gh/m/sport/football',
 };
 
-const MARKET_MAP = { '1_1': 'h2h', '1': 'h2h', '18_1': 'totals', '18': 'totals', '10_1': 'spreads', '10': 'spreads', '29_1': 'btts', '29': 'btts' };
+const MARKET_MAP = { '1_1': 'h2h', '1': 'h2h', '18_1': 'totals', '18': 'totals', '10_1': 'handicap_3way', '10': 'handicap_3way', '29_1': 'btts', '29': 'btts' };
 
 async function fetchSportybetOdds(sportKey) {
   const mapping = SPORTYBET_SPORT_MAP[sportKey];
@@ -223,7 +223,14 @@ function normaliseEvent(ev, sportKey) {
           const side = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
           const point = parseFloat(match[2]);
           totalsOutcomes.push({ name: side, price, point, desc });
-        } else if (mKey === 'spreads') {
+        } else if (mKey === 'handicap_3way') {
+          // NOT Asian Handicap: this market has a Draw outcome, so it's the 3-way
+          // (European) handicap — "Home (1:0)" / "Draw (1:0)" / "Away (1:0)" is one
+          // shared starting score. A handicap-draw LOSES the home/away legs, unlike
+          // AH where a push refunds, so these prices are NOT comparable with any
+          // 2-way AH line. `point` here is the shared home-perspective line for all
+          // three outcomes (away is NOT sign-flipped). Kept under its own key so
+          // findArbs()/findMiddles() (which only read 'spreads') ignore it.
           // desc is "Home (2:0)", "Draw (3:0)", "Away (4:0)" — parse point from it
           const match = desc.match(/^(Home|Draw|Away)\s+\((\d+):(\d+)\)$/i);
           if (!match) continue;
@@ -239,7 +246,7 @@ function normaliseEvent(ev, sportKey) {
     const markets = [];
     if (h2hOutcomes.length >= 2)   markets.push({ key: 'h2h',     outcomes: h2hOutcomes });
     if (totalsOutcomes.length >= 2) markets.push({ key: 'totals',  outcomes: totalsOutcomes });
-    if (ahOutcomes.length >= 2)     markets.push({ key: 'spreads', outcomes: ahOutcomes });
+    if (ahOutcomes.length >= 2)     markets.push({ key: 'handicap_3way', outcomes: ahOutcomes });
     if (bttsOutcomes.length >= 2)   markets.push({ key: 'btts',    outcomes: bttsOutcomes });
     if (markets.length === 0) return null;
 
