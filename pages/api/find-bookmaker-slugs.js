@@ -1,7 +1,6 @@
 export default async function handler(req, res) {
   const API_KEY = process.env.ODDSPAPI_KEY;
   const BASE = 'https://api.oddspapi.io/v4';
- const SEARCH_TERMS = ['msport', 'mozzart', 'melbet', 'betway'];
 
   if (!API_KEY) {
     return res.status(500).json({ error: 'Missing ODDSPAPI_KEY env var' });
@@ -19,19 +18,26 @@ export default async function handler(req, res) {
 
     const list = Array.isArray(body) ? body : (body.bookmakers || body.data || []);
 
-    // Show everything so we can see the real naming convention
-    const allSlugs = list.map(b => b.slug ?? b.id ?? b.name ?? JSON.stringify(b));
+    // Broad fuzzy match on slug AND name this time — catches things like
+    // "msport.gh" or a display name containing "Ghana" that a slug-only
+    // search would miss.
+    const msportVariants = list.filter(b => {
+      const slug = (b.slug || '').toLowerCase();
+      const name = (b.bookmakerName || b.name || '').toLowerCase();
+      return slug.includes('msport') || name.includes('msport') || name.includes('m-sport');
+    });
 
-    // Fuzzy-match against our search terms
-    const matches = {};
-    for (const term of SEARCH_TERMS) {
-      matches[term] = allSlugs.filter(s => String(s).toLowerCase().includes(term));
-    }
+    // Separately, anything mentioning Ghana specifically — in case MSport GH
+    // is listed under a totally different slug we wouldn't think to search.
+    const ghanaVariants = list.filter(b => {
+      const name = (b.bookmakerName || b.name || '').toLowerCase();
+      return name.includes('ghana') || name.includes(' gh') || name.endsWith('gh');
+    });
 
     return res.status(200).json({
       totalBookmakers: list.length,
-      matches,
-      allSlugsSample: allSlugs.slice(0, 60),
+      msportVariants,
+      ghanaVariants,
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
