@@ -510,60 +510,182 @@ const MOCK = [
   { id: 'm5', sport: 'cricket_ipl', match: 'Mumbai Indians vs CSK', commenceTime: new Date(Date.now() + 12 * 3600000).toISOString(), margin: 1.5, outcomes: [{ label: 'Mumbai Indians', book: '1xbet', bookName: '1xBet', odds: 2.05 }, { label: 'CSK', book: 'betway', bookName: 'Betway', odds: 1.90 }] },
 ];
 
+// Resolve which side of the fixture an outcome refers to. Tries the exact
+// normaliser first, then falls back to normaliseTeamName() so spelling
+// variants from different feeds ("Man City" / "Manchester City") still land
+// on the same side. Returns '__home__' | '__away__' | '__draw__' | null.
+// null = can't tell which side this is, so the caller skips it rather than
+// letting an unrecognised spelling become its own fake "outcome".
+function resolveSide(name, ev) {
+  const n = normaliseOutcome(name, ev.home_team, ev.away_team);
+  if (n === '__home__' || n === '__away__' || n === '__draw__') return n;
+  const t = normaliseTeamName(name);
+  if (t && t === normaliseTeamName(ev.home_team)) return '__home__';
+  if (t && t === normaliseTeamName(ev.away_team)) return '__away__';
+  return null;
+}
+
+// High-margin arbs are NOT dropped — they're often the most valuable ones
+// (pricing errors, lagging odds). Instead every arb gets cross-checked, and
+// anything at/above this margin, or that fails a check, is flagged "review"
+// with the specific reason, so you know exactly what to verify on the book.
+const HIGH_MARGIN_REVIEW = 5;   // % — at/above this, always flagged for review
+const OUTLIER_RATIO = 1.15;     // leg price >15% above other books' median = outlier
+
+function medianOf(arr) {
+  const a = [...arr].sort((x, y) => x - y);
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+// Cross-checks one arb against every OTHER bookmaker quoting the same slot
+// (same market, same home-perspective line, same side). Can't prove a price
+// is bookable — only a fresh look at the book can — but it separates the two
+// cases that need different action:
+//   - one leg far above the others  -> possible genuine pricing error; verify THAT leg
+//   - every leg matches consensus but the set still arbs -> the market/line is
+//     probably mislabelled, i.e. a bug, not a bet
+function assessArb(slot, outs, margin) {
+  const reasons = [];
+  const sideCount = outs.length;
+
+  // A single book pricing both sides of the same line below 100% is a data error.
+  const perBook = {};
+  for (const [side, quotes] of Object.entries(slot.all)) {
+    for (const q of quotes) {
+      perBook[q.book] = perBook[q.book] || {};
+      perBook[q.book][side] = Math.max(perBook[q.book][side] || 0, q.price);
+    }
+  }
+  for (const [book, sides] of Object.entries(perBook)) {
+    const ps = Object.values(sides);
+    if (ps.length === sideCount && ps.reduce((sum, p) => sum + 1 / p, 0) < 1) {
+      reasons.push(book + ' prices this whole market under 100% by itself — likely a parsing error');
+    }
+  }
+
+  let outliers = 0, uncheckable = 0;
+  for (const o of outs) {
+    const others = (slot.all[o.sideKey] || []).filter(q => q.book !== o.book).map(q => q.price);
+    if (others.length < 2) { uncheckable++; continue; }
+    const med = medianOf(others);
+    if (o.price / med > OUTLIER_RATIO) {
+      outliers++;
+      if (margin >= HIGH_MARGIN_REVIEW) {
+        reasons.push(o.displayLabel + ' @ ' + o.price + ' (' + o.bookName + ') is ' + Math.round((o.price / med - 1) * 100) + '% above other books (median ' + med.toFixed(2) + ') — verify this leg first');
+      }
+    }
+  }
+  if (margin >= HIGH_MARGIN_REVIEW) {
+    if (uncheckable > 0) reasons.push(uncheckable + ' leg(s) have fewer than 2 other books to cross-check against');
+    if (outliers === 0 && uncheckable === 0) reasons.push('every leg matches other books yet the set arbs — market or line is probably mislabelled');
+  }
+  return { level: reasons.length ? 'review' : 'standard', reasons };
+}
+
 function findArbs(events, mode = 'global', userRegion = null) {
   const arbs = [];
+  const SIDE_ORDER = { __home__: 0, over: 0, __draw__: 1, under: 1, __away__: 2 };
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
+    const isSoccer = typeof ev.sport_key === 'string' && ev.sport_key.startsWith('soccer');
 
-    // Collect all (marketKey, point) combinations that appear across books.
-    // A valid arb must have ALL its legs from the same market + same line —
-    // mixing h2h outcomes with AH outcomes is not an arb, it just looks like
-    // one because the implied probabilities happen to sum below 1 when you
-    // cherry-pick across unrelated markets.
+    // A valid arb needs ALL legs from the same market AND the same line, with
+    // legs that are genuine complements of each other:
+    //   h2h     -> home / (draw) / away
+    //   totals  -> Over X / Under X          (same point)
+    //   spreads -> home at line L / away at -L (grouped by the HOME-perspective
+    //              line, so home -0.25 and away +0.25 share one slot)
+    // Outcomes are keyed by resolved side, not raw name, so two spellings of
+    // one team can never appear as two separate legs.
     const marketSlots = {};
     for (const bm of ev.bookmakers) {
       if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
       for (const mkt of (bm.markets || [])) {
         if (!['h2h', 'spreads', 'totals', 'outrights'].includes(mkt.key)) continue;
         for (const o of mkt.outcomes) {
-          // For spreads/totals, group by line so Over 2.5 / Under 2.5 stay together
-          // and don't get mixed with Over 3.5 / Under 2.5 from another book.
-          const slotKey = mkt.key === 'h2h' || mkt.key === 'outrights'
-            ? mkt.key
-            : mkt.key + '_' + o.point;
-          if (!marketSlots[slotKey]) marketSlots[slotKey] = { mktKey: mkt.key, point: o.point ?? null, best: {} };
+          if (!(o.price > 1)) continue;
+          let slotKey, sideKey, line = null;
+          let displayLabel = o.name;
+          let marketLabel = 'Match Winner';
+
+          if (mkt.key === 'h2h') {
+            const side = resolveSide(o.name, ev);
+            if (!side) continue;
+            slotKey = 'h2h'; sideKey = side;
+            displayLabel = side === '__home__' ? ev.home_team : side === '__away__' ? ev.away_team : 'Draw';
+          } else if (mkt.key === 'spreads') {
+            const side = resolveSide(o.name, ev);
+            if (side !== '__home__' && side !== '__away__') continue;
+            if (typeof o.point !== 'number') continue;
+            line = side === '__home__' ? o.point : -o.point;
+            slotKey = 'spreads_' + line; sideKey = side;
+            marketLabel = 'Asian Handicap';
+            const team = side === '__home__' ? ev.home_team : ev.away_team;
+            displayLabel = team + ' (' + (o.point > 0 ? '+' : '') + o.point + ')';
+          } else if (mkt.key === 'totals') {
+            const n = String(o.name || '').trim().toLowerCase();
+            if (n !== 'over' && n !== 'under') continue;
+            if (typeof o.point !== 'number') continue;
+            line = o.point;
+            slotKey = 'totals_' + line; sideKey = n;
+            marketLabel = 'Over/Under';
+            displayLabel = (n === 'over' ? 'Over' : 'Under') + ' ' + o.point;
+          } else {
+            slotKey = 'outrights'; sideKey = o.name;
+            marketLabel = 'Outright';
+          }
+
+          if (!marketSlots[slotKey]) marketSlots[slotKey] = { mktKey: mkt.key, line, best: {}, all: {} };
           const slot = marketSlots[slotKey];
-          if (!slot.best[o.name] || o.price > slot.best[o.name].price) {
-            let displayLabel = o.name;
-            let marketLabel = 'Match Winner';
-            if (mkt.key === 'totals') {
-              marketLabel = 'Over/Under';
-              displayLabel = o.point != null ? o.name + ' ' + o.point : o.name;
-            } else if (mkt.key === 'spreads') {
-              marketLabel = 'Asian Handicap';
-              displayLabel = o.point != null ? o.name + ' (' + (o.point > 0 ? '+' : '') + o.point + ')' : o.name;
-            } else if (mkt.key === 'outrights') {
-              marketLabel = 'Outright';
-            }
-            slot.best[o.name] = { price: o.price, book: bm.key, bookName: bm.title, displayLabel, marketLabel, marketKey: mkt.key, point: o.point ?? null };
+          (slot.all[sideKey] = slot.all[sideKey] || []).push({ book: bm.key, price: o.price });
+          if (!slot.best[sideKey] || o.price > slot.best[sideKey].price) {
+            slot.best[sideKey] = { sideKey, price: o.price, book: bm.key, bookName: bm.title, displayLabel, marketLabel, marketKey: mkt.key, point: o.point ?? null };
           }
         }
       }
     }
 
-    // Now check each market slot independently for an arb
+    // Check each market slot independently for an arb
     for (const slot of Object.values(marketSlots)) {
-      const outs = Object.values(slot.best);
-      if (outs.length < 2) continue;
+      const sides = Object.keys(slot.best);
+      const has = s => sides.includes(s);
+
+      // Completeness: the slot must contain exactly the complementary legs.
+      // A partial set (e.g. soccer home+away with no draw) can sum below 1
+      // without being a real hedge.
+      if (slot.mktKey === 'h2h') {
+        const threeWay = isSoccer || has('__draw__');
+        if (threeWay ? !(has('__home__') && has('__draw__') && has('__away__')) : !(has('__home__') && has('__away__'))) continue;
+      } else if (slot.mktKey === 'spreads') {
+        if (!(has('__home__') && has('__away__') && sides.length === 2)) continue;
+      } else if (slot.mktKey === 'totals') {
+        if (!(has('over') && has('under') && sides.length === 2)) continue;
+      } else if (sides.length < 2) continue;
+
+      const outs = Object.values(slot.best)
+        .sort((a, b) => (SIDE_ORDER[a.sideKey] ?? 0) - (SIDE_ORDER[b.sideKey] ?? 0));
+
+      // All legs at one bookmaker is not a cross-book arb — it means a
+      // parsing/labelling error (this is exactly how the same-sign AH bug showed).
+      if (new Set(outs.map(o => o.book)).size < 2) continue;
+
       const imp = outs.reduce((s, o) => s + 1 / o.price, 0);
       if (imp < 1) {
+        const margin = parseFloat((((1 - imp) / imp) * 100).toFixed(2));
+        const verify = assessArb(slot, outs, margin);
+        if (verify.level === 'review') console.warn('[findArbs] review flag', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons);
         arbs.push({
-          id: ev.id + '_' + slot.mktKey + (slot.point != null ? '_' + slot.point : ''),
+          id: ev.id + '_' + slot.mktKey + (slot.line != null ? '_' + slot.line : ''),
           sport: ev.sport_key,
           match: ev.home_team + ' vs ' + ev.away_team,
           commenceTime: ev.commence_time,
-          margin: parseFloat((((1 - imp) / imp) * 100).toFixed(2)),
+          margin,
+          verify,
+          home: ev.home_team,
+          away: ev.away_team,
           outcomes: outs.map(o => ({
+            side: o.sideKey,
             label: o.displayLabel,
             marketLabel: o.marketLabel,
             marketKey: o.marketKey,
@@ -1022,6 +1144,8 @@ useEffect(() => {
   const [countdown, setCountdown] = useState(0);
   const [cardAnalysis, setCardAnalysis] = useState({});
   const [analyzingId, setAnalyzingId] = useState(null);
+  const [recheck, setRecheck] = useState({});
+  const [recheckingId, setRecheckingId] = useState(null);
   const [middles, setMiddles] = useState([]);
   const [middlesWA, setMiddlesWA] = useState([]); // West Africa middles — both legs accessible
   const [middleSection, setMiddleSection] = useState('global'); // 'global' | 'wa'
@@ -1592,6 +1716,23 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     setTab('cashout');
   };
 
+const recheckArb = async (arb) => {
+  if (recheckingId === arb.id) return;
+  setRecheckingId(arb.id);
+  try {
+    const res = await fetch('/api/verify-arb', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + await getToken() },
+      body: JSON.stringify({ sport: arb.sport, home: arb.home, away: arb.away, commenceTime: arb.commenceTime, outcomes: arb.outcomes })
+    });
+    const data = await res.json();
+    setRecheck(p => ({ ...p, [arb.id]: res.ok ? data : { error: data.error || 'Re-check failed' } }));
+  } catch (err) {
+    setRecheck(p => ({ ...p, [arb.id]: { error: 'Re-check failed' } }));
+  }
+  setRecheckingId(null);
+};
+
 const analyzeArb = async (arb) => {  
   if (analyzingId === arb.id) return;
   setAnalyzingId(arb.id);
@@ -1957,6 +2098,7 @@ const analyzeArb = async (arb) => {
               e('span', { style: st.profitBadge(arb.margin) }, '+' + arb.margin.toFixed(1) + '%')
             )
           ),
+          arb.verify && arb.verify.level === 'review' && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '⚠ Verify on the book before staking: ' + arb.verify.reasons.join(' · ')),
           Object.entries(marketGroups).map(([mktLabel, outs]) =>
             e('div', { key: mktLabel },
               multiMarket && e('div', { style: { fontSize: 10, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginTop: 8, marginBottom: 4 } }, mktLabel),
@@ -1974,7 +2116,22 @@ const analyzeArb = async (arb) => {
           ),
           sel && sel.id === arb.id && e('div', { style: { marginTop: 10, display: 'flex', gap: 8 } },
             e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →'),
-            e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis')
+            e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis'),
+            arb.verify && arb.verify.level === 'review' && arb.home && e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); recheckArb(arb); } }, recheckingId === arb.id ? 'Checking...' : '🔄 Re-check prices')
+          ),
+          recheck[arb.id] && e('div', { style: { marginTop: 10, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', fontSize: 12, lineHeight: 1.6 } },
+            recheck[arb.id].error
+              ? e('div', { style: { color: '#dc2626' } }, '⚠️ ' + recheck[arb.id].error)
+              : e('div', null,
+                  e('div', { style: { fontWeight: 700, marginBottom: 4 } },
+                    recheck[arb.id].verdict === 'confirmed' ? '✅ Confirmed live: +' + recheck[arb.id].freshMargin.toFixed(2) + '%'
+                    : recheck[arb.id].verdict === 'partial' ? '⚠️ Partly re-checked: +' + recheck[arb.id].freshMargin.toFixed(2) + '% (some legs could not be re-checked)'
+                    : recheck[arb.id].verdict === 'gone' ? '❌ Arb is gone at current prices (' + recheck[arb.id].freshMargin.toFixed(2) + '%)'
+                    : '❌ A leg is no longer offered or could not be fetched'),
+                  recheck[arb.id].legs.map((l, li) => e('div', { key: li, style: { color: C.muted } },
+                    l.label + ' · ' + l.book + ': ' + l.was.toFixed(2) + (l.now != null ? ' → ' + l.now.toFixed(2) : '') + ' (' + l.status.replace(/_/g, ' ') + ')')),
+                  e('div', { style: { fontSize: 10, color: C.muted, marginTop: 4 } }, 'Checked ' + new Date(recheck[arb.id].checkedAt).toLocaleTimeString())
+                )
           ),
           cardAnalysis[arb.id] && e('div', { style: { marginTop: 10, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 14px', fontSize: 12, lineHeight: 1.6 } },
             cardAnalysis[arb.id].error
