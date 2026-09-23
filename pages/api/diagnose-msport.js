@@ -1,24 +1,9 @@
-const { fetchOddsPapiOdds } = require('../../lib/oddspapi');
-
-// Same Sportradar tournament IDs confirmed against OddsPapi's own list earlier.
-const TEST_CASES = [
-  { sportKey: 'soccer_epl', tournamentId: 17 },
-  { sportKey: 'soccer_germany_bundesliga', tournamentId: 35 },
-  { sportKey: 'soccer_italy_serie_a', tournamentId: 23 },
-];
-
+// pages/api/diagnose-msport-coverage.js
 export default async function handler(req, res) {
-  const results = {};
-
-  for (const { sportKey, tournamentId } of TEST_CASES) {
-    const result = await fetchOddsPapiOdds('msport', tournamentId, 10, sportKey);
-    results[sportKey] = {
-      ok: result.status.ok,
-      reason: result.status.reason,
-      eventCount: result.events.length,
-      sample: result.events[0] || null,
-    };
-  }
-
-  return res.status(200).json(results);
+  const API_KEY = process.env.ODDSPAPI_KEY;
+  const r = await fetch(`https://api.oddspapi.io/v4/bookmakers?apiKey=${API_KEY}`);
+  const body = await r.json();
+  const list = Array.isArray(body) ? body : (body.bookmakers || body.data || []);
+  const msport = list.find(b => (b.slug || b.id || b.name) === 'msport');
+  return res.status(200).json({ msportEntry: msport || 'not found in list' });
 }
