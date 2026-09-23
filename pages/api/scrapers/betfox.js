@@ -73,6 +73,8 @@ const ALL_TOURNAMENT_IDS = [...new Set(Object.values(BETFOX_SPORT_MAP).map(m => 
 
 const BASE = 'https://www.betfox.com.gh/api/client/v4/offer/competitions';
 const CACHE_TTL_MS = 60 * 1000; // odds move fast — keep this short, unlike team-form's 6hr cache
+const MAX_BACKOFF_MS = 10 * 60 * 1000; // cap: never wait longer than 10 min between probes
+let _consecutiveFailures = 0;
 
 function buildHeaders() {
   return {
@@ -99,9 +101,16 @@ const MARKET_MAP = {
 // Module-scope cache — persists across warm serverless invocations, same as team-form.js.
 let _cache = { competitionsById: null, fetchedAt: 0, error: null };
 
+function currentTtl() {
+  if (_consecutiveFailures === 0) return CACHE_TTL_MS;
+  // Double the wait per consecutive failure (60s, 120s, 240s...), capped.
+  const backoff = CACHE_TTL_MS * Math.pow(2, _consecutiveFailures);
+  return Math.min(backoff, MAX_BACKOFF_MS);
+}
+
 async function fetchAllCompetitions() {
   const age = Date.now() - _cache.fetchedAt;
-  if (_cache.competitionsById && age < CACHE_TTL_MS) return _cache;
+  if (_cache.competitionsById && age < currentTtl()) return _cache;
 
   try {
     const url = `${BASE}?ids=${encodeURIComponent(ALL_TOURNAMENT_IDS.join(','))}&enriched=2&sport=Football`;
@@ -110,7 +119,14 @@ async function fetchAllCompetitions() {
     if (!res.ok) {
       let body = '';
       try { body = (await res.text()).slice(0, 300); } catch {}
-      console.warn('[Betfox] competitions', res.status, '| body:', body);
+      // Only log the full body on the first failure in a run of failures —
+      // repeating it every minute at unchanged content is just noise.
+      if (_consecutiveFailures === 0) {
+        console.warn('[Betfox] competitions', res.status, '| body:', body);
+      } else {
+        console.warn('[Betfox] competitions', res.status, '(still failing, attempt', _consecutiveFailures + 1, ') — backing off to', currentTtl() / 1000, 's');
+      }
+      _consecutiveFailures++;
       _cache = { competitionsById: _cache.competitionsById || {}, fetchedAt: Date.now(), error: 'http_' + res.status };
       return _cache;
     }
@@ -121,11 +137,13 @@ async function fetchAllCompetitions() {
     for (const c of competitions) { if (c?.id) byId[c.id] = c; }
 
     console.log('[Betfox] fetched', competitions.length, 'competitions,', ALL_TOURNAMENT_IDS.length, 'requested');
+    _consecutiveFailures = 0;
     _cache = { competitionsById: byId, fetchedAt: Date.now(), error: null };
     return _cache;
 
   } catch (err) {
     console.warn('[Betfox] fetchAllCompetitions error:', err.message);
+    _consecutiveFailures++;
     _cache = { competitionsById: _cache.competitionsById || {}, fetchedAt: Date.now(), error: err.name === 'TimeoutError' ? 'timeout' : err.message };
     return _cache;
   }
