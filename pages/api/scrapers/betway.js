@@ -9,6 +9,6 @@ const TOURNAMENT_MAP = {
 async function fetchBetwayOdds(sportKey) {
   const tournamentId = TOURNAMENT_MAP[sportKey];
   if (!tournamentId) return { events: [], status: { ok: true, reason: 'unsupported_sport', fetchedAt: new Date().toISOString() } };
-  return fetchOddsPapiOdds('mozzartbet', tournamentId, 10, sportKey);
+return fetchOddsPapiOdds('betway', tournamentId, 10, sportKey);
 }
 module.exports = { fetchBetwayOdds };
