@@ -7,6 +7,8 @@
  * web app calls — returns clean JSON, no scraping needed.
  */
 
+const { isScraperApiExhausted, markScraperApiExhausted } = require('../../../lib/scraperapi-status');
+
 const BETANO_SPORT_MAP = {
   soccer_epl:                   { sportId: 4, leagueId: 5 },
   soccer_uefa_champs_league:    { sportId: 4, leagueId: 3 },
@@ -75,12 +77,23 @@ async function fetchBetanoOdds(sportKey) {
     let finalRes = res;
     if (res.status === 403 || res.status === 429) {
       const scraperKey = process.env.SCRAPER_API_KEY;
-      if (scraperKey) {
+      if (!scraperKey) {
+        console.warn('[Betano] geo-blocked and no SCRAPER_API_KEY set');
+      } else if (isScraperApiExhausted()) {
+        console.warn('[Betano] geo-blocked, but ScraperAPI is known-exhausted this cycle — skipping retry');
+        return { events: [], status: { ok: false, reason: 'scraperapi_exhausted', fetchedAt: new Date().toISOString() } };
+      } else {
         const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&country_code=gh&premium=true`;
         console.log('[Betano] geo-blocked, retrying via ScraperAPI...');
         finalRes = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
-      } else {
-        console.warn('[Betano] geo-blocked and no SCRAPER_API_KEY set');
+
+        if (!finalRes.ok) {
+          let probeBody = '';
+          try { probeBody = (await finalRes.clone().text()).slice(0, 300); } catch {}
+          if (markScraperApiExhausted(probeBody)) {
+            console.warn('[Betano] ScraperAPI credits exhausted — marking shared flag for other scrapers');
+          }
+        }
       }
     }
 
