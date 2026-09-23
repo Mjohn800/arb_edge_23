@@ -1,37 +1,35 @@
 // pages/api/scrapers/msport.js
-const { fetchOddsPapiOdds } = require('../../../lib/oddspapi');
-
-// ⚠️ UNVERIFIED: 'msport' gets HTTP 400 from OddsPapi's /odds-by-tournaments
-// (confirmed in prod logs, 22:37:54 cycle — a 400, not a 429, so it's OddsPapi
-// rejecting the slug itself, not a rate limit). OddsPapi doesn't validate
-// bookmaker slugs client-side (see lib/oddspapi.js) — it just forwards
-// whatever string you pass. The only reliable source of the real slug is
-// GET /v4/bookmakers, which returns each bookmaker's canonical `slug` field.
-// Run scripts/find-msport-slug.js (one-off, uses your existing ODDSPAPI_KEY)
-// and replace the value below once you have it.
-const MSPORT_BOOKMAKER_SLUG = 'msport'; // TODO: replace after /v4/bookmakers lookup
-
-// Same Sportradar tournament IDs as BETFOX_TOURNAMENT_MAP in odds.js —
-// confirmed identical against OddsPapi's own tournament list.
-const TOURNAMENT_MAP = {
-  soccer_epl: 17,
-  soccer_uefa_champs_league: 7,
-  soccer_spain_la_liga: 8,
-  soccer_germany_bundesliga: 35,
-  soccer_italy_serie_a: 23,
-  soccer_france_ligue_one: 34,
-  soccer_netherlands_eredivisie: 37,
-  soccer_efl_champ: 18,
-  soccer_norway_eliteserien: 20,
-  soccer_fifa_world_cup: 16,
-};
+//
+// CONFIRMED 23 Sep 2026: MSport is not covered by OddsPapi at all. Tested
+// directly against /v4/odds-by-tournaments with bookmaker=msport (the
+// correct slug per /v4/bookmakers — "MSPORT NG") on two different
+// tournaments (Serie A id 23, EPL id 17) and both return the same error:
+//   { "error": { "code": "INVALID_PARAMETER",
+//       "details": "The bookmaker 'msport' is not supported or does not
+//       have any fixtures available." } }
+// Same result regardless of league, so this isn't a per-tournament gap —
+// OddsPapi just doesn't carry MSport data. Matches "liveOdds": false on
+// their bookmaker listing.
+//
+// Previously this called fetchOddsPapiOdds() unconditionally, which burned
+// a full pass through the OddsPapi key rotation (up to 6 requests) on every
+// scan for a call that was guaranteed to fail — that's what was flooding
+// the ALL KEYS FAILED logs for msport specifically.
+//
+// Short-circuiting here instead: no network call, no wasted quota. Getting
+// real MSport odds back would need a direct scraper (same pattern as
+// betano.js / betfox.js) built from a DevTools capture of msport's own
+// site — OddsPapi isn't a path to it.
 
 async function fetchMsportOdds(sportKey) {
-  const tournamentId = TOURNAMENT_MAP[sportKey];
-  if (!tournamentId) {
-    return { events: [], status: { ok: true, reason: 'unsupported_sport', fetchedAt: new Date().toISOString() } };
-  }
-  return fetchOddsPapiOdds(MSPORT_BOOKMAKER_SLUG, tournamentId, 10, sportKey);
+  return {
+    events: [],
+    status: {
+      ok: true,
+      reason: 'msport_not_covered_by_oddspapi',
+      fetchedAt: new Date().toISOString(),
+    },
+  };
 }
 
 module.exports = { fetchMsportOdds };
