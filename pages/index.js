@@ -525,12 +525,20 @@ const MOCK = [
 //      its neighbour (we don't guess which of the two is the wrong one).
 // Removed quotes are counted and reported, never silently lost. Mutates the
 // freshly built scan data in place.
+// Feeds held back from every finder until they are verified against the bookmaker's own site.
+// melbet: OddsPapi's melbet feed is price-for-price identical to its 22bet feed (feed audit,
+// EPL, 24 Sep 2026: identical statistics on every measure), and its fixture link points at
+// 22bet.com — so these may be 22bet's prices, not melbet's. Delete the entry once melbet's
+// own site has been compared with the feed.
+const QUARANTINED_FEEDS = {
+  melbet: "OddsPapi's melbet feed is identical to its 22bet feed and not yet verified against melbet's own site",
+};
 const EXCHANGE_RE = /betfair|matchbook|smarkets/i;
 const OVERROUND_MAX = { 2: 1.25, 3: 1.30 };
 const LADDER_TOL = 0.01;
 
 function sanitizeEvents(events) {
-  const report = { total: 0, byReason: {}, byBook: {}, examples: [] };
+  const report = { total: 0, byReason: {}, byBook: {}, examples: [], quarantined: {} };
   const note = (ev, bm, market, reason) => {
     report.total++;
     report.byReason[reason] = (report.byReason[reason] || 0) + 1;
@@ -556,6 +564,7 @@ function sanitizeEvents(events) {
   for (const ev of events) {
     const isSoccer = typeof ev.sport_key === 'string' && ev.sport_key.startsWith('soccer');
     for (const bm of ev.bookmakers || []) {
+      if (QUARANTINED_FEEDS[bm.key]) { report.quarantined[bm.key] = QUARANTINED_FEEDS[bm.key]; bm.markets = []; continue; }
       const exchange = EXCHANGE_RE.test(bm.key);
       const bad = new Set();
       const overroundReason = (imp, n) => (!exchange && imp < 1) ? 'own market totals under 100%' : imp > OVERROUND_MAX[n] ? 'own market margin implausibly high' : null;
@@ -2292,7 +2301,10 @@ const analyzeArb = async (arb) => {
           ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 5 min.'
           : '📌 Demo mode — tap Connect Live to scan real odds across the ' + 20 + ' top leagues. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'
       ),
-      integrity && integrity.total > 0 && e('div', { style: { fontSize: 11, color: '#1e3a8a', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '6px 8px', marginBottom: 8 } }, '🛡 ' + integrity.total + ' quote' + (integrity.total === 1 ? '' : 's') + ' excluded by data-integrity checks (impossible margins or out-of-order lines) — they never enter an arb. ' + Object.entries(integrity.byBook).map(([b, n]) => b + ': ' + n).join(', ')),
+      integrity && (integrity.total > 0 || Object.keys(integrity.quarantined || {}).length > 0) && e('div', { style: { fontSize: 11, color: '#1e3a8a', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
+        integrity.total > 0 && e('div', null, '🛡 ' + integrity.total + ' quote' + (integrity.total === 1 ? '' : 's') + ' excluded by data-integrity checks (impossible margins or out-of-order lines) — they never enter an arb. ' + Object.entries(integrity.byBook).map(([b, n]) => b + ': ' + n).join(', ')),
+        Object.entries(integrity.quarantined || {}).map(([b, why]) => e('div', { key: b }, '⏸ ' + b + ' is held back from all results: ' + why + '.'))
+      ),
       filteredArbs.length === 0 && !isDemo && e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
         e('div', { style: { fontSize: 28, marginBottom: 10 } }, '✅'),
         e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No arbitrage opportunities in this scan'),
