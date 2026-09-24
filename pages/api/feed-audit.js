@@ -14,13 +14,18 @@
 //   where to continue (add &skip=N):
 //     /api/feed-audit?token=TOKEN&sports=soccer
 //     /api/feed-audit?token=TOKEN&sports=soccer&skip=4
+//   ALL soccer leagues, duplicate-fixture counts ONLY (skips the cross-book
+//   audit entirely so more leagues fit per call — use this to see how far
+//   the "OddsPapi lists the same match twice" problem reaches):
+//     /api/feed-audit?token=TOKEN&sports=soccer&dupOnly=1
+//     /api/feed-audit?token=TOKEN&sports=soccer&dupOnly=1&skip=6
 //   List the sport keys:  /api/feed-audit?token=TOKEN&sport=list
 import { ODDSPAPI_TOURNAMENT_MAP, fetchBetanoOddsPapi, fetch22BetOddsPapi, fetchMelbetOddsPapi } from '../../lib/oddspapi-wa';
 import { catalogueSummary } from '../../lib/oddspapi';
 import { fetchSportybetOdds } from './scrapers/sportybet';
 import { auditEvents } from '../../lib/auditFeed';
 
-async function runLeague(sport, compact) {
+async function runLeague(sport, compact, dupOnly) {
   const m = ODDSPAPI_TOURNAMENT_MAP[sport];
   const fetchers = {
     betano: () => fetchBetanoOddsPapi(sport),
@@ -41,6 +46,19 @@ async function runLeague(sport, compact) {
       fetched[book] = { events: 0, ok: false, reason: err.message };
     }
   }));
+
+  // dupOnly: skip auditEvents (the expensive cross-book comparison) entirely —
+  // this mode exists just to see how far the duplicate-fixture problem reaches
+  // across leagues, as fast and cheap per call as possible so more leagues fit
+  // inside each 7s window.
+  if (dupOnly) {
+    const dup = {};
+    for (const [b, f] of Object.entries(fetched)) {
+      if (f.duplicatesDropped) dup[b] = f.duplicatesDropped;
+    }
+    return { events: Object.fromEntries(Object.entries(fetched).map(([b, f]) => [b, f.ok ? f.events : 'FAILED'])), duplicatesDropped: dup };
+  }
+
   const audit = auditEvents(eventsByBook);
   for (const [b, f] of Object.entries(fetched)) {
     if (f.duplicatesDropped) audit.flags.push(b + ': ' + f.duplicatesDropped + ' fixtures dropped because OddsPapi lists the same match more than once');
@@ -69,13 +87,24 @@ export default async function handler(req, res) {
   if (req.query.sports) {
     const all = Object.keys(ODDSPAPI_TOURNAMENT_MAP);
     const list = req.query.sports === 'soccer' ? all.filter(k => k.startsWith('soccer_')) : String(req.query.sports).split(',').filter(k => ODDSPAPI_TOURNAMENT_MAP[k]);
+    const dupOnly = req.query.dupOnly === '1';
     const skip = parseInt(req.query.skip || '0', 10) || 0;
     const started = Date.now();
     const results = {}; let done = skip;
     for (let i = skip; i < list.length; i++) {
       if (Date.now() - started > 7000) break;   // stay inside the serverless time limit
-      try { results[list[i]] = await runLeague(list[i], true); } catch (err) { results[list[i]] = { error: err.message }; }
+      try { results[list[i]] = await runLeague(list[i], true, dupOnly); } catch (err) { results[list[i]] = { error: err.message }; }
       done = i + 1;
+    }
+    if (dupOnly) {
+      // roll up a running total across the leagues in THIS response, so a
+      // glance at the top tells you the scale without reading every league
+      const totalsThisPage = {};
+      for (const r of Object.values(results)) {
+        if (!r || !r.duplicatesDropped) continue;
+        for (const [b, n] of Object.entries(r.duplicatesDropped)) totalsThisPage[b] = (totalsThisPage[b] || 0) + n;
+      }
+      return res.status(200).json({ totalLeagues: list.length, leaguesInThisResponse: Object.keys(results).length, continueWith: done < list.length ? '&dupOnly=1&skip=' + done : 'ALL DONE', totalsThisPage, results });
     }
     return res.status(200).json({ totalLeagues: list.length, leaguesInThisResponse: Object.keys(results).length, continueWith: done < list.length ? '&skip=' + done : 'ALL DONE', results });
   }
@@ -83,5 +112,5 @@ export default async function handler(req, res) {
   const sport = String(req.query.sport || 'soccer_epl');
   const m = ODDSPAPI_TOURNAMENT_MAP[sport];
   if (!m || !m.tournamentId) return res.status(400).json({ error: 'sport not mapped to an OddsPapi tournament (try sport=list)' });
-  return res.status(200).json(await runLeague(sport, false));
+  return res.status(200).json(await runLeague(sport, false, false));
 }
