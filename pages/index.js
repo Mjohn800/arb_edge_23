@@ -510,6 +510,112 @@ const MOCK = [
   { id: 'm5', sport: 'cricket_ipl', match: 'Mumbai Indians vs CSK', commenceTime: new Date(Date.now() + 12 * 3600000).toISOString(), margin: 1.5, outcomes: [{ label: 'Mumbai Indians', book: '1xbet', bookName: '1xBet', odds: 2.05 }, { label: 'CSK', book: 'betway', bookName: 'Betway', odds: 1.90 }] },
 ];
 
+// ── DATA-INTEGRITY FILTER ──────────────────────────────────────────────────
+// Runs once per scan on EVERY event, league and sport, before any finder (arbs,
+// EV, middles, best odds) sees the data. It does not need to know which league
+// or market is "right": it removes quotes that are internally impossible, so a
+// price problem in any feed is contained instead of surfacing as an arb.
+//   1. A bookmaker's own complete market can't total under 100% (it would mean
+//      the book itself offers a free arb) or over a sane margin. Betting
+//      exchanges are exempt from the lower bound — their back prices can sum
+//      just under 100%.
+//   2. A bookmaker's totals and handicap lines must be in order: Over prices
+//      rise with the line, Under prices fall, the home handicap price falls as
+//      the line rises. A quote that breaks the order is dropped together with
+//      its neighbour (we don't guess which of the two is the wrong one).
+// Removed quotes are counted and reported, never silently lost. Mutates the
+// freshly built scan data in place.
+const EXCHANGE_RE = /betfair|matchbook|smarkets/i;
+const OVERROUND_MAX = { 2: 1.25, 3: 1.30 };
+const LADDER_TOL = 0.01;
+
+function sanitizeEvents(events) {
+  const report = { total: 0, byReason: {}, byBook: {}, examples: [] };
+  const note = (ev, bm, market, reason) => {
+    report.total++;
+    report.byReason[reason] = (report.byReason[reason] || 0) + 1;
+    report.byBook[bm.key] = (report.byBook[bm.key] || 0) + 1;
+    if (report.examples.length < 8) report.examples.push({ match: ev.home_team + ' vs ' + ev.away_team, book: bm.key, market, reason });
+  };
+  const dropLadder = (items, violates, bad, onDrop) => {
+    let alive = items.slice();
+    for (;;) {
+      const counts = new Map();
+      for (let i = 1; i < alive.length; i++) if (violates(alive[i - 1], alive[i])) {
+        counts.set(alive[i - 1], (counts.get(alive[i - 1]) || 0) + 1);
+        counts.set(alive[i], (counts.get(alive[i]) || 0) + 1);
+      }
+      if (!counts.size) break;
+      const max = Math.max(...counts.values());
+      const drop = new Set([...counts].filter(([, c]) => c === max).map(([k]) => k));
+      drop.forEach(it => { it.refs.forEach(r => bad.add(r)); onDrop(it); });
+      alive = alive.filter(it => !drop.has(it));
+    }
+  };
+
+  for (const ev of events) {
+    const isSoccer = typeof ev.sport_key === 'string' && ev.sport_key.startsWith('soccer');
+    for (const bm of ev.bookmakers || []) {
+      const exchange = EXCHANGE_RE.test(bm.key);
+      const bad = new Set();
+      const overroundReason = (imp, n) => (!exchange && imp < 1) ? 'own market totals under 100%' : imp > OVERROUND_MAX[n] ? 'own market margin implausibly high' : null;
+
+      // 1a. match result markets
+      for (const mkt of bm.markets || []) {
+        if (mkt.key !== 'h2h') continue;
+        const outs = (mkt.outcomes || []).filter(o => o.price > 1);
+        if (outs.length < 2 || outs.length > 3 || (isSoccer && outs.length !== 3)) continue; // incomplete sets are handled by the finders
+        const reason = overroundReason(outs.reduce((s, o) => s + 1 / o.price, 0), outs.length);
+        if (reason) { (mkt.outcomes || []).forEach(o => bad.add(o)); note(ev, bm, 'match result', reason); }
+      }
+
+      // 1b/2. totals: pair check, then line order
+      const tot = {};
+      for (const mkt of bm.markets || []) if (mkt.key === 'totals') for (const o of mkt.outcomes || []) {
+        const n = String(o.name || '').trim().toLowerCase();
+        if ((n !== 'over' && n !== 'under') || typeof o.point !== 'number' || !(o.price > 1)) continue;
+        (tot[o.point] = tot[o.point] || {})[n] = o;
+      }
+      const totItems = [];
+      for (const L of Object.keys(tot).map(Number).sort((a, b) => a - b)) {
+        const t = tot[L];
+        if (t.over && t.under) {
+          const reason = overroundReason(1 / t.over.price + 1 / t.under.price, 2);
+          if (reason) { bad.add(t.over); bad.add(t.under); note(ev, bm, 'total ' + L, reason); continue; }
+        }
+        totItems.push({ L, refs: [t.over, t.under].filter(Boolean), over: t.over && t.over.price, under: t.under && t.under.price });
+      }
+      dropLadder(totItems, (a, b) => (a.over && b.over && b.over < a.over * (1 - LADDER_TOL)) || (a.under && b.under && b.under > a.under * (1 + LADDER_TOL)), bad, it => note(ev, bm, 'total ' + it.L, 'line out of order'));
+
+      // 1b/2. handicaps, by home-perspective line
+      const sp = {};
+      for (const mkt of bm.markets || []) if (mkt.key === 'spreads') for (const o of mkt.outcomes || []) {
+        const s = resolveSide(o.name, ev);
+        if ((s !== '__home__' && s !== '__away__') || typeof o.point !== 'number' || !(o.price > 1)) continue;
+        const L = s === '__home__' ? o.point : -o.point;
+        (sp[L] = sp[L] || {})[s === '__home__' ? 'home' : 'away'] = o;
+      }
+      const spItems = [];
+      for (const L of Object.keys(sp).map(Number).sort((a, b) => a - b)) {
+        const t = sp[L];
+        if (t.home && t.away) {
+          const reason = overroundReason(1 / t.home.price + 1 / t.away.price, 2);
+          if (reason) { bad.add(t.home); bad.add(t.away); note(ev, bm, 'handicap ' + L, reason); continue; }
+        }
+        spItems.push({ L, refs: [t.home, t.away].filter(Boolean), home: t.home && t.home.price, away: t.away && t.away.price });
+      }
+      dropLadder(spItems, (a, b) => (a.home && b.home && b.home > a.home * (1 + LADDER_TOL)) || (a.away && b.away && b.away < a.away * (1 - LADDER_TOL)), bad, it => note(ev, bm, 'handicap ' + it.L, 'line out of order'));
+
+      if (bad.size) {
+        for (const mkt of bm.markets || []) mkt.outcomes = (mkt.outcomes || []).filter(o => !bad.has(o));
+        bm.markets = (bm.markets || []).filter(m => (m.outcomes || []).length > 0);
+      }
+    }
+  }
+  if (report.total) console.warn('[integrity] excluded', report.total, 'quotes', JSON.stringify(report.byReason), JSON.stringify(report.byBook));
+  return report;
+}
+
 // Resolve which side of the fixture an outcome refers to. Tries the exact
 // normaliser first, then falls back to normaliseTeamName() so spelling
 // variants from different feeds ("Man City" / "Manchester City") still land
@@ -722,7 +828,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
 //               OUTPUT to WA-accessible books only. 1xBet/Singbet stay as
 //               supplementary references when Pinnacle is absent from the feed.
 const SHARP_BOOKS_GLOBAL    = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
-const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet', '1xbet', 'onexbet'];
+const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet']; // 1xBet removed: it's a soft book, not a sharp reference
 
 // Legacy alias — kept so existing steam/middles code that references it still works
 const SHARP_REFERENCE_BOOKS = SHARP_BOOKS_GLOBAL;
@@ -748,60 +854,97 @@ function normaliseOutcome(name, homeTeam, awayTeam) {
   return n; // fallback — keeps original normalised
 }
 
+// ── De-vigging ─────────────────────────────────────────────────────────────
+// Turns a book's prices into "fair" probabilities. Plain proportional removal
+// (divide each 1/price by their sum) spreads the margin evenly, but real books
+// load more margin onto longshots (favourite-longshot bias), so proportional
+// OVERSTATES longshot/draw probabilities and manufactures fake +EV on them.
+// The power method (find k so Σ (1/price)^k = 1) shaves longshots harder and
+// is the standard, more conservative fix. Falls back to proportional only if
+// the book has no margin to remove.
+function devigPower(prices) {
+  const p = prices.map(x => 1 / x);
+  const sum = p.reduce((s, x) => s + x, 0);
+  if (!(sum > 1)) return p.map(x => x / sum);
+  let lo = 1, hi = 30;
+  for (let i = 0; i < 80; i++) {
+    const mid = (lo + hi) / 2;
+    const f = p.reduce((s, x) => s + Math.pow(x, mid), 0);
+    if (f > 1) lo = mid; else hi = mid;
+  }
+  const k = (lo + hi) / 2;
+  const q = p.map(x => Math.pow(x, k));
+  const qs = q.reduce((s, x) => s + x, 0);
+  return q.map(x => x / qs);
+}
+
+// A book's h2h market, or null if it has none OR quotes more than one different
+// h2h market (a feed mix-up — we won't guess which one is the real match result).
+function uniqueH2H(bm) {
+  const ms = (bm.markets || []).filter(m => m.key === 'h2h');
+  if (ms.length === 0) return null;
+  if (ms.length === 1) return ms[0];
+  const sig = m => (m.outcomes || []).map(o => o.name + ':' + o.price).sort().join('|');
+  return ms.every(m => sig(m) === sig(ms[0])) ? ms[0] : null;
+}
+
+const EV_REVIEW_PCT = 8; // edges this large are far more often a data problem than a real mispricing
+
 function findEVBets(events, minEV = 2, mode = 'all', userRegion = null, teamForm = null) {
   const runMode = (sharpBooks, filterWA) => {
     const evBets = [];
+    const diag = { eventsTotal: 0, eventsWithSharp: 0, sharpBooksSeen: [], compared: 0, bestEV: null, skippedAmbiguous: 0 };
+    const sharpSeen = new Set();
     for (const ev of events) {
       if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
+      diag.eventsTotal++;
+      const isSoccer = typeof ev.sport_key === 'string' && ev.sport_key.startsWith('soccer');
 
-      // Sharp book consensus: average the de-vigged true probability across EVERY
-      // available sharp book for this event, not just whichever one happens to be
-      // first in the array. More sharp books agreeing on a price tightens the true-
-      // probability estimate — it's less exposed to any single book's own margin
-      // quirks or a temporarily stale/mispriced line.
-      const sharpBms = ev.bookmakers.filter(b => sharpBooks.includes(b.key));
-      if (sharpBms.length === 0) continue;
-
-      const probsByOutcome = {}; // outcome name -> [de-vigged prob from each sharp book]
+      // Sharp consensus: average the de-vigged true probability across every
+      // usable sharp book. A sharp book is only usable if its h2h market is
+      // COMPLETE (home + away, plus draw for soccer) and every outcome maps to a
+      // side — a partial market can't be de-vigged correctly and would give a
+      // wrong "fair" price.
+      const probsBySide = {};
       const usedSharpKeys = [];
-      for (const sharpBm of sharpBms) {
-        const sharpMkt = (sharpBm.markets || []).find(m => m.key === 'h2h');
-        if (!sharpMkt) continue;
-        const sharpOuts = sharpMkt.outcomes;
-        const rawImplied = sharpOuts.reduce((s, o) => s + 1 / o.price, 0);
-        if (!rawImplied) continue;
+      for (const sharpBm of ev.bookmakers.filter(b => sharpBooks.includes(b.key))) {
+        const sharpMkt = uniqueH2H(sharpBm);
+        if (!sharpMkt) { diag.skippedAmbiguous++; continue; }
+        const outs = (sharpMkt.outcomes || []).filter(o => o.price > 1);
+        const sides = outs.map(o => resolveSide(o.name, ev));
+        if (sides.some(s => !s) || new Set(sides).size !== sides.length) continue;
+        const need = isSoccer ? ['__home__', '__draw__', '__away__'] : ['__home__', '__away__'];
+        if (!need.every(s => sides.includes(s)) || sides.length !== need.length) continue;
+        const fair = devigPower(outs.map(o => o.price));
         usedSharpKeys.push(sharpBm.key);
-        sharpOuts.forEach(o => {
-          const key = normaliseOutcome(o.name, ev.home_team, ev.away_team);
-          const p = (1 / o.price) / rawImplied;
-          (probsByOutcome[key] = probsByOutcome[key] || []).push(p);
-        });
+        sharpSeen.add(sharpBm.key);
+        sides.forEach((s, idx) => { (probsBySide[s] = probsBySide[s] || []).push(fair[idx]); });
       }
       if (usedSharpKeys.length === 0) continue;
+      diag.eventsWithSharp++;
 
       const trueProbs = {};
-      Object.keys(probsByOutcome).forEach(name => {
-        const arr = probsByOutcome[name];
-        trueProbs[name] = arr.reduce((s, p) => s + p, 0) / arr.length;
+      Object.keys(probsBySide).forEach(s => {
+        trueProbs[s] = probsBySide[s].reduce((a, p) => a + p, 0) / probsBySide[s].length;
       });
 
       for (const bm of ev.bookmakers) {
         if (sharpBooks.includes(bm.key)) continue;
         if (filterWA && !isBookAccessible(bm.key, userRegion)) continue;
-        const mkt = (bm.markets || []).find(m => m.key === 'h2h');
-        if (!mkt) continue;
+        const mkt = uniqueH2H(bm);
+        if (!mkt) { if ((bm.markets || []).some(m => m.key === 'h2h')) diag.skippedAmbiguous++; continue; }
         for (const o of mkt.outcomes) {
-          const normKey = normaliseOutcome(o.name, ev.home_team, ev.away_team);
+          if (!(o.price > 1)) continue;
+          const normKey = resolveSide(o.name, ev);
+          if (!normKey) continue;
           const prob = trueProbs[normKey];
           if (!prob) continue;
           const ev_pct = parseFloat(((o.price * prob - 1) * 100).toFixed(2));
+          diag.compared++;
+          if (diag.bestEV === null || ev_pct > diag.bestEV) diag.bestEV = ev_pct;
           if (ev_pct >= minEV) {
             const isDraw = normKey === '__draw__';
-            // Which team (if any) this outcome actually refers to, so form
-            // context is only attached to the side it's relevant for.
-            const outcomeTeam = normKey === '__home__' ? ev.home_team
-                               : normKey === '__away__' ? ev.away_team
-                               : (!isDraw ? o.name : null); // fallback for books using team names directly
+            const outcomeTeam = normKey === '__home__' ? ev.home_team : normKey === '__away__' ? ev.away_team : null;
             evBets.push({
               id: ev.id + '_' + bm.key + '_' + o.name,
               eventId: ev.id,
@@ -815,95 +958,141 @@ function findEVBets(events, minEV = 2, mode = 'all', userRegion = null, teamForm
               trueProb: parseFloat((prob * 100).toFixed(1)),
               fairOdds: parseFloat((1 / prob).toFixed(2)),
               ev_pct,
+              flag: ev_pct >= EV_REVIEW_PCT ? 'Unusually large edge — check this price on the book and that the sharp line is current before betting.' : null,
               sharpRef: usedSharpKeys.join('+'),
               sharpBookCount: usedSharpKeys.length,
-              // Tag WA if the book is accessible in West Africa
               _wa: !!isBookAccessible(bm.key, userRegion),
-              // Draw-value context: only ever attached to Draw outcomes, and
-              // only when we have verified historical draw stats for the
-              // league (see DRAW_STATS). null for everything else — the UI
-              // treats null as "no badge", never as "0% draw rate".
               isDraw,
               drawContext: isDraw ? getDrawContext(ev.sport_key, ev.home_team, ev.away_team) : null,
-              // Form-divergence context: only attached to team-outcome bets
-              // (not Draw), and only once TEAM_FORM has real match history
-              // logged for that team — null otherwise, never a fabricated 0.
               formContext: (!isDraw && outcomeTeam) ? getFormContextForOutcome(ev.sport_key, outcomeTeam, teamForm) : null,
             });
           }
         }
       }
     }
+    diag.sharpBooksSeen = [...sharpSeen];
+    evBets.diag = diag;
     return evBets;
   };
 
-  if (mode === 'global') return runMode(SHARP_BOOKS_GLOBAL, false).sort((a, b) => b.ev_pct - a.ev_pct);
-  if (mode === 'wa')     return runMode(SHARP_BOOKS_WESTAFRICA, true).sort((a, b) => b.ev_pct - a.ev_pct);
+  const finish = (arr, diag) => { arr.diag = diag; return arr; };
+  if (mode === 'global') { const r = runMode(SHARP_BOOKS_GLOBAL, false); return finish(r.sort((a, b) => b.ev_pct - a.ev_pct), r.diag); }
+  if (mode === 'wa')     { const r = runMode(SHARP_BOOKS_WESTAFRICA, true); return finish(r.sort((a, b) => b.ev_pct - a.ev_pct), r.diag); }
 
-  // mode === 'all': run both, dedupe by id (global result preferred)
   const global = runMode(SHARP_BOOKS_GLOBAL, false);
   const wa     = runMode(SHARP_BOOKS_WESTAFRICA, true);
   const seen   = new Set(global.map(b => b.id));
   const merged = [...global, ...wa.filter(b => !seen.has(b.id))];
-  return merged.sort((a, b) => b.ev_pct - a.ev_pct);
+  return finish(merged.sort((a, b) => b.ev_pct - a.ev_pct), global.diag);
+}
+
+function evDiagLine(d) {
+  if (!d) return '';
+  return ' · Sharp references this scan: ' + (d.sharpBooksSeen.length ? d.sharpBooksSeen.join(', ') : 'NONE') + ' (' + d.eventsWithSharp + '/' + d.eventsTotal + ' events)';
 }
 
 // ── MIDDLE BETTING ─────────────────────────────────────────────────────────
-// A middle exists when two books have different spreads/totals lines on the same
-// event such that there is a range of outcomes where BOTH bets win.
-// e.g. Book A: Team -3.5  Book B: Team +4.5 → middle window = 1 point (score of 4)
+// A middle needs OPPOSITE sides of the same event at different lines, so that
+// a range of results makes BOTH bets win. e.g. Team A -3.5 at one book and
+// Team B +4.5 at another: if A wins by exactly 4, both win.
+// Betting the SAME team at two lines (Team A -0.25 and Team A +1.5) is not a
+// middle — both bets just ride on that team winning.
+// Every line a book quotes is considered (not just its first market), and a
+// middle is only reported if at least one whole-number result lands strictly
+// inside the window (a result exactly on a line is a push, not a double win).
+function integersBetween(lo, hi) {
+  const out = [];
+  for (let n = Math.floor(lo + 1e-9) + 1; n < hi - 1e-9; n++) out.push(n);
+  return out;
+}
+const fmtLine = p => (p > 0 ? '+' : '') + p;
+
 function findMiddles(events, mode = 'global', userRegion = null) {
   const middles = [];
-  // West Africa section: a middle is only placeable if BOTH legs are on WA-accessible books.
+  const MAX_PER_EVENT_TYPE = 3;
   const legsOk = (bookA, bookB) => mode !== 'wa' || (isBookAccessible(bookA, userRegion) && isBookAccessible(bookB, userRegion));
+
+  // All quotes for a market type across every market entry of every book. A book
+  // quoting the same side+line at two different prices is ambiguous — dropped.
+  const collect = (ev, marketKey) => {
+    const out = [];
+    const prices = {};
+    for (const bm of ev.bookmakers) {
+      for (const mkt of (bm.markets || [])) {
+        if (mkt.key !== marketKey) continue;
+        for (const o of (mkt.outcomes || [])) {
+          if (!(o.price > 1) || typeof o.point !== 'number') continue;
+          let side;
+          if (marketKey === 'spreads') {
+            side = resolveSide(o.name, ev);
+            if (side !== '__home__' && side !== '__away__') continue;
+          } else {
+            side = String(o.name || '').trim().toLowerCase();
+            if (side !== 'over' && side !== 'under') continue;
+          }
+          out.push({ book: bm.key, bookName: bm.title, side, point: o.point, price: o.price });
+          const k = bm.key + '|' + side + '|' + o.point;
+          (prices[k] = prices[k] || new Set()).add(o.price);
+        }
+      }
+    }
+    return out.filter(q => prices[q.book + '|' + q.side + '|' + q.point].size === 1);
+  };
+
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
+    const match = ev.home_team + ' vs ' + ev.away_team;
 
-    // ── Spreads middle ──
-    const spreadsByBook = ev.bookmakers
-      .map(bm => ({ book: bm.key, bookName: bm.title, outcomes: (bm.markets || []).find(m => m.key === 'spreads')?.outcomes || [] }))
-      .filter(b => b.outcomes.length > 0);
-
-    for (let i = 0; i < spreadsByBook.length; i++) {
-      for (let j = i + 1; j < spreadsByBook.length; j++) {
-        const a = spreadsByBook[i], b = spreadsByBook[j];
-        if (!legsOk(a.book, b.book)) continue;
-        for (const aOut of a.outcomes) {
-          const bOut = b.outcomes.find(o => o.name === aOut.name);
-          if (!bOut || aOut.point == null || bOut.point == null) continue;
-          // Middle: book A is sharper (closer to 0), book B is looser — there's a gap
-          if (aOut.point < 0 && bOut.point > 0) {
-            const window = bOut.point - Math.abs(aOut.point);
-            if (window > 0) {
-              const implied = 1 / aOut.price + 1 / bOut.price;
-              middles.push({ id: ev.id + '_sprd_' + aOut.name, sport: ev.sport_key, match: ev.home_team + ' vs ' + ev.away_team, commenceTime: ev.commence_time, type: 'Spread', team: aOut.name, legA: { book: a.book, bookName: a.bookName, line: aOut.point, odds: aOut.price, side: aOut.name + ' ' + aOut.point }, legB: { book: b.book, bookName: b.bookName, line: bOut.point, odds: bOut.price, side: aOut.name + ' ' + bOut.point }, window: parseFloat(window.toFixed(1)), implied: parseFloat(implied.toFixed(4)), isArb: implied < 1 });
-            }
-          }
-        }
-      }
+    // ── Spreads middle: home at line px  +  away at line py, different books ──
+    // Home covers if (home − away) > −px; away covers if (home − away) < py.
+    const sp = collect(ev, 'spreads');
+    const homes = sp.filter(q => q.side === '__home__');
+    const aways = sp.filter(q => q.side === '__away__');
+    const spCands = [];
+    for (const x of homes) for (const y of aways) {
+      if (x.book === y.book || !legsOk(x.book, y.book)) continue;
+      const lo = -x.point, hi = y.point;
+      const ints = integersBetween(lo, hi);
+      if (ints.length === 0) continue;
+      const implied = 1 / x.price + 1 / y.price;
+      spCands.push({
+        id: ev.id + '_sprd_' + x.book + x.point + '_' + y.book + y.point,
+        sport: ev.sport_key, match, commenceTime: ev.commence_time, type: 'Spread', team: 'Handicap',
+        legA: { book: x.book, bookName: x.bookName, line: x.point, odds: x.price, side: ev.home_team + ' ' + fmtLine(x.point) },
+        legB: { book: y.book, bookName: y.bookName, line: y.point, odds: y.price, side: ev.away_team + ' ' + fmtLine(y.point) },
+        window: parseFloat((x.point + y.point).toFixed(2)),
+        windowText: 'the final goal/point difference (' + ev.home_team + ' minus ' + ev.away_team + ') is ' + (ints.length === 1 ? 'exactly ' + ints[0] : 'one of ' + ints.join(', ')),
+        implied: parseFloat(implied.toFixed(4)), isArb: implied < 1,
+      });
     }
+    spCands.sort((a, b) => a.implied - b.implied);
+    middles.push(...spCands.slice(0, MAX_PER_EVENT_TYPE));
 
-    // ── Totals middle ──
-    const totalsByBook = ev.bookmakers
-      .map(bm => ({ book: bm.key, bookName: bm.title, outcomes: (bm.markets || []).find(m => m.key === 'totals')?.outcomes || [] }))
-      .filter(b => b.outcomes.length > 0);
-
-    for (let i = 0; i < totalsByBook.length; i++) {
-      for (let j = i + 1; j < totalsByBook.length; j++) {
-        const a = totalsByBook[i], b = totalsByBook[j];
-        if (!legsOk(a.book, b.book)) continue;
-        const aOver = a.outcomes.find(o => o.name === 'Over');
-        const bUnder = b.outcomes.find(o => o.name === 'Under');
-        if (!aOver || !bUnder || aOver.point == null || bUnder.point == null) continue;
-        if (aOver.point < bUnder.point) {
-          const window = parseFloat((bUnder.point - aOver.point).toFixed(1));
-          const implied = 1 / aOver.price + 1 / bUnder.price;
-          middles.push({ id: ev.id + '_tot_' + i + '_' + j, sport: ev.sport_key, match: ev.home_team + ' vs ' + ev.away_team, commenceTime: ev.commence_time, type: 'Total', team: 'Goals total', legA: { book: a.book, bookName: a.bookName, line: aOver.point, odds: aOver.price, side: 'Over ' + aOver.point }, legB: { book: b.book, bookName: b.bookName, line: bUnder.point, odds: bUnder.price, side: 'Under ' + bUnder.point }, window, implied: parseFloat(implied.toFixed(4)), isArb: implied < 1 });
-        }
-      }
+    // ── Totals middle: Over at a lower line, Under at a higher line ──
+    const tt = collect(ev, 'totals');
+    const overs = tt.filter(q => q.side === 'over');
+    const unders = tt.filter(q => q.side === 'under');
+    const totCands = [];
+    for (const o of overs) for (const u of unders) {
+      if (o.book === u.book || !legsOk(o.book, u.book)) continue;
+      if (!(o.point < u.point)) continue;
+      const ints = integersBetween(o.point, u.point);
+      if (ints.length === 0) continue;
+      const implied = 1 / o.price + 1 / u.price;
+      totCands.push({
+        id: ev.id + '_tot_' + o.book + o.point + '_' + u.book + u.point,
+        sport: ev.sport_key, match, commenceTime: ev.commence_time, type: 'Total', team: 'Goals total',
+        legA: { book: o.book, bookName: o.bookName, line: o.point, odds: o.price, side: 'Over ' + o.point },
+        legB: { book: u.book, bookName: u.bookName, line: u.point, odds: u.price, side: 'Under ' + u.point },
+        window: parseFloat((u.point - o.point).toFixed(2)),
+        windowText: 'the total is ' + (ints.length === 1 ? 'exactly ' + ints[0] : 'one of ' + ints.join(', ')),
+        implied: parseFloat(implied.toFixed(4)), isArb: implied < 1,
+      });
     }
+    totCands.sort((a, b) => a.implied - b.implied);
+    middles.push(...totCands.slice(0, MAX_PER_EVENT_TYPE));
   }
-  return middles.sort((a, b) => { if (a.isArb !== b.isArb) return a.isArb ? -1 : 1; return b.window - a.window; });
+  return middles.sort((a, b) => { if (a.isArb !== b.isArb) return a.isArb ? -1 : 1; return a.implied - b.implied; });
 }
 
 // ── STEAM CHASING ───────────────────────────────────────────────────────────
@@ -1138,6 +1327,9 @@ useEffect(() => {
   const [manualStake, setManualStake] = useState(500);
   const [manualResult, setManualResult] = useState(null);
   const [evBets, setEvBets] = useState(MOCK_EV);
+  const [integrity, setIntegrity] = useState(null);
+  const [evDiag, setEvDiag] = useState(null);
+  const [evDiagWA, setEvDiagWA] = useState(null);
   const [evWA, setEvWA] = useState([]); // West Africa EV bets — Pinnacle reference, WA-accessible books only
   const [evSection, setEvSection] = useState('global'); // 'global' | 'wa'
   const [minEV, setMinEV] = useState(2);
@@ -1512,17 +1704,22 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     if (sportsToScan.length > 0 && okCount === 0 && premiumBlocked === 0) {
       setError('Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. Showing demo data below.');
     }
+    const integrityReport = sanitizeEvents(all);
+    setIntegrity(integrityReport);
     const found = findArbs(all, 'global', regionNow);
     const foundArbsWA = findArbs(all, 'wa', regionNow);
     const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
     const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
     if (found.length > 0) { setArbs(found); setIsDemo(false); }
-    else { setArbs(MOCK); setIsDemo(true); }
+    else if (okCount === 0) { setArbs(MOCK); setIsDemo(true); } // scan failed entirely — labelled demo
+    else { setArbs([]); setIsDemo(false); } // scan worked, genuinely no arbs
     setArbsWAReal(foundArbsWA);
     if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
     else if (okCount === 0) { setEvBets(MOCK_EV); setIsDemoEV(true); } // scan failed entirely
     else { setEvBets([]); setIsDemoEV(false); } // scan worked, genuinely no +EV right now
     setEvWA(foundEVWA);
+    setEvDiag(foundEV.diag || null);
+    setEvDiagWA(foundEVWA.diag || null);
     const middlesWAResult = findMiddles(all, 'wa', regionNow);
     const bestOddsWAResult = findBestOdds(all, 'wa', regionNow);
     setMiddles(findMiddles(all, 'global', regionNow));
@@ -2095,6 +2292,12 @@ const analyzeArb = async (arb) => {
           ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 5 min.'
           : '📌 Demo mode — tap Connect Live to scan real odds across the ' + 20 + ' top leagues. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'
       ),
+      integrity && integrity.total > 0 && e('div', { style: { fontSize: 11, color: '#1e3a8a', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '6px 8px', marginBottom: 8 } }, '🛡 ' + integrity.total + ' quote' + (integrity.total === 1 ? '' : 's') + ' excluded by data-integrity checks (impossible margins or out-of-order lines) — they never enter an arb. ' + Object.entries(integrity.byBook).map(([b, n]) => b + ': ' + n).join(', ')),
+      filteredArbs.length === 0 && !isDemo && e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
+        e('div', { style: { fontSize: 28, marginBottom: 10 } }, '✅'),
+        e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No arbitrage opportunities in this scan'),
+        e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, 'The scan completed and no cross-book arbs passed the checks. That is a normal result — real arbs are rare and short-lived.')
+      ),
  filteredArbs.map(arb => {
         const info = getSportInfo(arb.sport);
         // Group outcomes by market so mixed-market arbs are easy to read
@@ -2304,9 +2507,9 @@ const analyzeArb = async (arb) => {
       ),
       // Reference book info banner
       e('div', { style: { background: evSection === 'wa' ? '#dcfce7' : '#eff6ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: evSection === 'wa' ? C.greenDark : '#1e3a8a' } },
-        evSection === 'wa'
+        (evSection === 'wa'
           ? (isWAUserNow ? '🇬🇭 Using Pinnacle / Betfair as sharp reference — showing only WA-accessible books (Betway, SportyBet, Betano, MSport, 1xBet, MelBet)' : 'Using Pinnacle / Betfair as sharp reference \u2014 showing only books available in your region.')
-          : '🌍 Using Pinnacle / Betfair as sharp reference — showing all books globally'
+          : '🌍 Using Pinnacle / Betfair as sharp reference — showing all books globally') + evDiagLine(evSection === 'wa' ? evDiagWA : evDiag)
       ),
       e('div', { style: st.metricsGrid },
         [
@@ -2352,9 +2555,13 @@ const analyzeArb = async (arb) => {
           e('div', { style: { fontSize: 12, lineHeight: 1.6 } },
             isDemoEV
               ? 'The odds API could not be reached. Check your API key or connection.'
-              : evSection === 'wa'
-                ? (isWAUserNow ? 'Scan completed successfully. No WA-accessible bets cleared the +EV threshold. Most likely cause: off-season (European leagues restart August). Try lowering Min EV or switching to Global.' : 'Scan completed successfully. No +EV bets cleared the threshold for books available in your region. Try lowering Min EV.')
-                : 'Scan completed successfully — odds data loaded but no edges found at this threshold. Most likely cause: off-season. European leagues restart August 15–22. Try cricket or MMA in the scanner for active markets.'
+              : (() => {
+                  const d = evSection === 'wa' ? evDiagWA : evDiag;
+                  if (!d) return 'Scan finished but no diagnostics were recorded.';
+                  if (d.eventsTotal === 0) return 'No events with 2+ bookmakers were found in this scan.';
+                  if (d.eventsWithSharp === 0) return 'None of the ' + d.eventsTotal + ' events scanned had a usable sharp reference (Pinnacle, Betfair, Singbet or SBOBet with a complete match-result market), so +EV cannot be calculated. This is a data gap, not a lack of value — the Odds API may be out of credits or not returning these books for the sports selected.';
+                  return d.eventsWithSharp + ' of ' + d.eventsTotal + ' events had a sharp reference; ' + d.compared + ' bookmaker prices were compared' + (d.bestEV !== null ? ' and the best edge was ' + (d.bestEV >= 0 ? '+' : '') + d.bestEV.toFixed(1) + '%' : '') + ', below your +' + minEV + '% threshold. Lower Min EV to see smaller edges.';
+                })()
           )
         );
         return e('div', null, activeBets.map(bet => {
@@ -2388,6 +2595,7 @@ const analyzeArb = async (arb) => {
                 e('span', { style: { background: '#eff6ff', color: '#1e40af', fontSize: 13, fontWeight: 700, padding: '4px 11px', borderRadius: 20 } }, '+' + bet.ev_pct.toFixed(1) + '% EV')
               )
             ),
+            bet.flag && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '⚠ ' + bet.flag),
             e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginTop: 4 } },
               [
                 ['Your odds', bet.odds.toFixed(2), C.green],
@@ -2574,7 +2782,7 @@ const analyzeArb = async (arb) => {
               })
             ),
             e('div', { style: { background: '#fdf4ff', borderRadius: 8, padding: '8px 10px', marginTop: 8, fontSize: 12, color: '#6b21a8' } },
-              '💡 If the final margin falls between ' + Math.abs(m.legA.line) + ' and ' + Math.abs(m.legB.line) + ', both legs win. Otherwise one leg wins, one loses.'
+              (m.windowText ? '💡 If ' + m.windowText + ', both legs win. Otherwise one wins and the other loses (or pushes on a whole-number line).' : '💡 If the final margin falls between ' + Math.abs(m.legA.line) + ' and ' + Math.abs(m.legB.line) + ', both legs win. Otherwise one leg wins, one loses.')
             )
           );
         });
