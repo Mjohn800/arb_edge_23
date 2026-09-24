@@ -698,6 +698,10 @@ function assessArb(slot, outs, margin) {
   return { level: reasons.length ? 'review' : 'standard', reasons };
 }
 
+function titleCase(str) {
+  return String(str || '').toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase());
+}
+
 function findArbs(events, mode = 'global', userRegion = null) {
   const arbs = [];
   const SIDE_ORDER = { __home__: 0, over: 0, __draw__: 1, under: 1, __away__: 2 };
@@ -748,8 +752,10 @@ function findArbs(events, mode = 'global', userRegion = null) {
             if (n !== 'over' && n !== 'under') continue;
             if (typeof o.point !== 'number') continue;
             line = o.point;
-            slotKey = 'totals_' + line; sideKey = n;
-            marketLabel = 'Over/Under';
+            const variant = mkt.marketName || 'totals';       // e.g. "over under full time"
+            slotKey = 'totals_' + variant + '_' + line;         // variant is part of the key: differently-named markets never pair up
+            sideKey = n;
+            marketLabel = mkt.marketName ? titleCase(mkt.marketName) : 'Over/Under'; // for the UI badge
             displayLabel = (n === 'over' ? 'Over' : 'Under') + ' ' + o.point;
           } else {
             slotKey = 'outrights'; sideKey = o.name;
