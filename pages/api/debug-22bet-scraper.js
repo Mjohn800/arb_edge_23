@@ -56,12 +56,35 @@ export default async function handler(req, res) {
     `&leagueId_in=${mapping.leagueId}&oddsExists_eq=1&lang=en&_trlang=en_gh`;
 
   let listJson;
+  let listRes;
   try {
-    const listRes = await fetch(listUrl, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
-    if (!listRes.ok) return res.status(502).json({ error: 'list_fetch_failed', status: listRes.status });
+    listRes = await fetch(listUrl, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+  } catch (err) {
+    listRes = null; // matches fetch22BetOdds's own behavior: a thrown fetch means try the proxy next
+  }
+
+  if (listRes && !listRes.ok) listRes = null;
+
+  if (!listRes) {
+    const scraperKey = process.env.SCRAPER_API_KEY;
+    if (!scraperKey) return res.status(502).json({ error: 'list_fetch_failed_no_scraper_key' });
+    const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(listUrl)}&country_code=gh&premium=true&ultra_premium=true`;
+    try {
+      listRes = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
+    } catch (err) {
+      return res.status(502).json({ error: 'list_fetch_error_both', message: err.message });
+    }
+    if (!listRes.ok) {
+      let body = '';
+      try { body = (await listRes.text()).slice(0, 300); } catch {}
+      return res.status(502).json({ error: 'list_fetch_failed_via_proxy', status: listRes.status, body });
+    }
+  }
+
+  try {
     listJson = await listRes.json();
   } catch (err) {
-    return res.status(502).json({ error: 'list_fetch_error', message: err.message });
+    return res.status(502).json({ error: 'list_json_parse_error', message: err.message });
   }
 
   const listItems = listJson?.data?.items;
