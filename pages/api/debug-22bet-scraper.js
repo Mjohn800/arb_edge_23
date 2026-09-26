@@ -18,7 +18,7 @@
 //     instead of just the first upcoming one (useful once you know which
 //     match actually has visible totals/AH lines on 22bet's own site)
 
-const { fetch22BetEventDetail, TWENTYTWOBET_SPORT_MAP, TYPE_HOME, TYPE_DRAW, TYPE_AWAY } = require('./scrapers/22bet');
+const { fetch22BetEventDetail, TWENTYTWOBET_SPORT_MAP, TYPE_HOME, TYPE_DRAW, TYPE_AWAY, fetchViaScraperApi } = require('./scrapers/22bet');
 
 const BASE = 'https://platform.22bet.com.gh';
 const HEADERS = {
@@ -66,19 +66,9 @@ export default async function handler(req, res) {
   if (listRes && !listRes.ok) listRes = null;
 
   if (!listRes) {
-    const scraperKey = process.env.SCRAPER_API_KEY;
-    if (!scraperKey) return res.status(502).json({ error: 'list_fetch_failed_no_scraper_key' });
-    const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(listUrl)}&country_code=gh&premium=true&ultra_premium=true`;
-    try {
-      listRes = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
-    } catch (err) {
-      return res.status(502).json({ error: 'list_fetch_error_both', message: err.message });
-    }
-    if (!listRes.ok) {
-      let body = '';
-      try { body = (await listRes.text()).slice(0, 300); } catch {}
-      return res.status(502).json({ error: 'list_fetch_failed_via_proxy', status: listRes.status, body });
-    }
+    const proxied = await fetchViaScraperApi(listUrl, { timeoutMs: 20000, label: 'debug-list' });
+    if (!proxied.res) return res.status(502).json({ error: 'list_fetch_failed_via_proxy', detail: proxied.error, lastBody: proxied.lastBody });
+    listRes = proxied.res;
   }
 
   try {
