@@ -625,6 +625,19 @@ function sanitizeEvents(events) {
   return report;
 }
 
+function titleCase(str) {
+  return String(str || '').toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase());
+}
+
+// Totals pair only if they are the same kind of market. OddsPapi totals reach this point already
+// restricted to the verified full-time market (whitelist in lib/oddspapi.js), and Odds API /
+// SportyBet totals carry no market name and are the full-time total. Any other named market keeps
+// its own slot, so it can never pair with full-time totals.
+function totalsVariant(mkt) {
+  const n = String(mkt.marketName || '').trim().toLowerCase();
+  return (!n || n === 'over under full time') ? 'fulltime' : n;
+}
+
 // Resolve which side of the fixture an outcome refers to. Tries the exact
 // normaliser first, then falls back to normaliseTeamName() so spelling
 // variants from different feeds ("Man City" / "Manchester City") still land
@@ -698,10 +711,6 @@ function assessArb(slot, outs, margin) {
   return { level: reasons.length ? 'review' : 'standard', reasons };
 }
 
-function titleCase(str) {
-  return String(str || '').toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase());
-}
-
 function findArbs(events, mode = 'global', userRegion = null) {
   const arbs = [];
   const SIDE_ORDER = { __home__: 0, over: 0, __draw__: 1, under: 1, __away__: 2 };
@@ -752,10 +761,9 @@ function findArbs(events, mode = 'global', userRegion = null) {
             if (n !== 'over' && n !== 'under') continue;
             if (typeof o.point !== 'number') continue;
             line = o.point;
-            const variant = mkt.marketName || 'totals';       // e.g. "over under full time"
-            slotKey = 'totals_' + variant + '_' + line;         // variant is part of the key: differently-named markets never pair up
-            sideKey = n;
-            marketLabel = mkt.marketName ? titleCase(mkt.marketName) : 'Over/Under'; // for the UI badge
+            const variant = totalsVariant(mkt);
+            slotKey = 'totals_' + variant + '_' + line; sideKey = n;   // a differently-named totals market never shares a slot with full-time totals
+            marketLabel = variant === 'fulltime' ? 'Over/Under' : titleCase(variant);
             displayLabel = (n === 'over' ? 'Over' : 'Under') + ' ' + o.point;
           } else {
             slotKey = 'outrights'; sideKey = o.name;
