@@ -9,7 +9,7 @@ import { fetchBetanoOddsPapi, fetch22BetOddsPapi } from '../../lib/oddspapi-wa';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
-export const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet', '1xbet']; // same Pinnacle reference as global, output filtered to WA-accessible books client-side
+export const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet', '1xbet', 'onexbet']; // 'onexbet' = the-odds-api's bookmaker key for 1xBet, '1xbet' = OddsPapi's; same book, two keys — both must be listed everywhere 1xBet is or the-odds-api leg gets wrongly excluded
 export const WA_BOOKS               = ['sportybet', 'betano', '22bet', 'paripesa', 'melbet', 'betway', 'betfox'];
 
 // Real Odds-API bookmaker keys we actually compare for the GLOBAL feed.
@@ -406,7 +406,6 @@ export default async function handler(req, res) {
     process.env.ODDS_API_KEY_4,
     process.env.ODDS_API_KEY_5,
     process.env.ODDS_API_KEY_6,
-    process.env.ODDS_API_KEY_8,
   ].filter(Boolean);
 
   console.log('[odds] keys loaded:', keys.map((k, i) => `KEY_${i+1}=${k ? k.slice(0,8)+'...' : 'MISSING'}`));
@@ -490,8 +489,8 @@ export default async function handler(req, res) {
   // Books accessible to this user based on their detected region.
   // WA users: sportybet, betano, 1xbet, melbet, betway + new WA books
   // Global users: all books accessible (Betfair, Pinnacle, Bet365, William Hill etc.)
-  const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','melbet','sportybet','betano','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag'];
-  const WA_ACCESSIBLE     = ['1xbet','melbet','betway','sportybet','betano','22bet','paripesa','betwinner','betking','bet9ja','1win','premierbet','betfox'];
+  const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','onexbet','melbet','sportybet','betano','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag']; // 'onexbet' added alongside '1xbet' — the-odds-api's bookmaker key for 1xBet differs from OddsPapi's
+  const WA_ACCESSIBLE     = ['1xbet','onexbet','melbet','betway','sportybet','betano','22bet','paripesa','betwinner','betking','bet9ja','1win','premierbet','betfox']; // 'onexbet' added alongside '1xbet', same reason as above
   const userAccessibleBooks = isWAUser ? WA_ACCESSIBLE : GLOBAL_ACCESSIBLE;
 
   return res.status(200).json({
