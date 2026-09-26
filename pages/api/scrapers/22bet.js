@@ -363,4 +363,4 @@ function normalise22BetEvent(ev, sportKey) {
   }
 }
 
-module.exports = { fetch22BetOdds };
+module.exports = { fetch22BetOdds, fetch22BetEventDetail, TWENTYTWOBET_SPORT_MAP, TYPE_HOME, TYPE_DRAW, TYPE_AWAY };
