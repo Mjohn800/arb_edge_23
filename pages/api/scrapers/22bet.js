@@ -177,8 +177,32 @@ async function fetch22BetOdds(sportKey) {
       const sample = detailed[0];
       console.log('[22Bet] sample detail keys:', Object.keys(sample).join(', '));
       console.log('[22Bet] sample odds (markets) count:', (sample.odds || []).length);
-      console.log('[22Bet] sample first market:', JSON.stringify((sample.odds || [])[0] || null).slice(0, 500));
       console.log('[22Bet] sample competitors:', JSON.stringify(sample.competitors || []));
+
+      // TEMP DIAGNOSTIC (25 Sep 2026) — remove once totals/AH market-type field
+      // is confirmed and normalise22BetEvent() is updated to use it.
+      // The old version of this log only dumped odds[0], which is virtually
+      // guaranteed to be the 1X2 market again — no help identifying totals/AH.
+      // This dumps every market's TOP-LEVEL fields (no outcomes, to keep it
+      // short) so we can see what varies between market types, then the FULL
+      // first market of each distinct outcome-count/shape we find, so we get
+      // at least one real totals example and one real AH example verbatim.
+      const markets = sample.odds || [];
+      console.log('[22Bet][DIAG] market count for this event:', markets.length);
+      markets.forEach((m, i) => {
+        const outcomeTypes = (m.outcomes || []).map(o => o.type);
+        const { outcomes, ...topLevel } = m; // strip outcomes so this line stays short
+        console.log(`[22Bet][DIAG] market[${i}] top-level:`, JSON.stringify(topLevel),
+          '| outcomeCount:', (m.outcomes || []).length, '| outcomeTypes:', JSON.stringify(outcomeTypes));
+      });
+      // Full dump (outcomes included) of up to 6 markets that do NOT look like
+      // 1X2 (i.e. not exactly types {1,2,3}) — these are our totals/AH candidates.
+      const nonH2H = markets.filter(m => {
+        const t = (m.outcomes || []).map(o => o.type);
+        return !(t.length === 3 && [TYPE_HOME, TYPE_DRAW, TYPE_AWAY].every(x => t.includes(x)));
+      }).slice(0, 6);
+      nonH2H.forEach((m, i) => console.log(`[22Bet][DIAG] non-1x2 market #${i} FULL:`, JSON.stringify(m)));
+      if (nonH2H.length === 0) console.log('[22Bet][DIAG] no non-1x2 markets found on this event — try a different match/league.');
     }
 
     const normalised = detailed.map(ev => normalise22BetEvent(ev, sportKey)).filter(Boolean);
