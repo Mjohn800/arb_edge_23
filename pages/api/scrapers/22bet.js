@@ -80,6 +80,48 @@ const TYPE_HOME = 1;
 const TYPE_DRAW = 2;
 const TYPE_AWAY = 3;
 
+// ─── SCRAPER API KEY ROTATION ────────────────────────────────────────────────
+// ScraperAPI is used as a Ghana-IP proxy in two places below (the list fetch,
+// and the per-event detail fetch when relations come back stripped). Both now
+// try every configured key in turn — SCRAPER_API_KEY, then SCRAPER_API_KEY_2,
+// and so on if more get added later — instead of giving up the moment the
+// first key is out of credits or invalid. A key is treated as "try the next
+// one" only on !res.ok (credits exhausted, auth error, etc.) or a thrown
+// fetch; a real target-side error (a good proxy response but 22bet itself
+// returned something wrong) is NOT retried across keys, since that's not what
+// a different ScraperAPI key would fix.
+function getScraperApiKeys() {
+  return [process.env.SCRAPER_API_KEY, process.env.SCRAPER_API_KEY_2].filter(Boolean);
+}
+
+function scraperApiUrl(key, targetUrl) {
+  return `http://api.scraperapi.com?api_key=${key}&url=${encodeURIComponent(targetUrl)}&country_code=gh&premium=true&ultra_premium=true`;
+}
+
+// Tries each configured ScraperAPI key against the same target url, in order.
+// Returns { res, keyIndex } on the first !res.ok-free success, or
+// { res: null, error } once every configured key has failed (or none configured).
+async function fetchViaScraperApi(targetUrl, { timeoutMs = 20000, label = '' } = {}) {
+  const keys = getScraperApiKeys();
+  if (keys.length === 0) return { res: null, error: 'no_scraper_key_configured' };
+
+  let lastStatus = null, lastBody = '';
+  for (let i = 0; i < keys.length; i++) {
+    try {
+      const res = await fetch(scraperApiUrl(keys[i], targetUrl), { signal: AbortSignal.timeout(timeoutMs) });
+      if (res.ok) return { res, keyIndex: i };
+      let body = '';
+      try { body = (await res.text()).slice(0, 300); } catch {}
+      console.warn(`[22Bet][ScraperAPI] key ${i + 1}/${keys.length} -> status ${res.status}${label ? ' (' + label + ')' : ''} | body:`, body);
+      lastStatus = res.status; lastBody = body;
+    } catch (err) {
+      console.warn(`[22Bet][ScraperAPI] key ${i + 1}/${keys.length} threw${label ? ' (' + label + ')' : ''}:`, err.message);
+      lastStatus = 'fetch_error'; lastBody = err.message;
+    }
+  }
+  return { res: null, error: `all_${keys.length}_scraper_keys_failed: last status ${lastStatus}`, lastBody };
+}
+
 // How many per-event detail requests to run concurrently. Keep this modest —
 // hammering the API in parallel is what triggers geo-block/rate-limit retries.
 const EVENT_DETAIL_CONCURRENCY = 3;
@@ -116,18 +158,13 @@ async function fetch22BetOdds(sportKey) {
     }
 
     if (!listRes) {
-      const scraperKey = process.env.SCRAPER_API_KEY;
-      if (scraperKey) {
-        const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(listUrl)}&country_code=gh&premium=true&ultra_premium=true`;
-        try {
-          listRes = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
-        } catch (err) {
-          console.warn('[22Bet] proxy list fetch also failed for', sportKey, '| err:', err.message);
-          return { events: [], status: { ok: false, reason: 'fetch_error_both: ' + err.message, fetchedAt: new Date().toISOString() } };
-        }
-      } else {
-        return { events: [], status: { ok: false, reason: 'fetch_failed_no_scraper_key', fetchedAt: new Date().toISOString() } };
+      const proxied = await fetchViaScraperApi(listUrl, { timeoutMs: 20000, label: 'list:' + sportKey });
+      if (!proxied.res) {
+        console.warn('[22Bet] proxy list fetch also failed for', sportKey, '|', proxied.error);
+        return { events: [], status: { ok: false, reason: 'fetch_error_both: ' + proxied.error, fetchedAt: new Date().toISOString() } };
       }
+      console.log('[22Bet] list fetch succeeded via ScraperAPI key', proxied.keyIndex + 1, 'for', sportKey);
+      listRes = proxied.res;
     }
 
     if (!listRes.ok) {
@@ -246,22 +283,40 @@ async function fetch22BetEventDetail(eventId) {
     && (!Array.isArray(item.competitors) || item.competitors.length === 0);
 
   if (relationsMissing) {
-    const scraperKey = process.env.SCRAPER_API_KEY;
-    if (scraperKey) {
-      console.log('[22Bet] relations stripped for event', eventId, '— retrying via ScraperAPI...');
-      // NOTE: two separate ScraperAPI requirements stacked here —
-      // 1) country_code=gh needs premium=true (residential proxies for country targeting)
-      // 2) platform.22bet.com.gh's bot protection needs ultra_premium=true on top of that
-      // Both flags combine credit costs — this is an expensive call per event, per run.
-      const proxyUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&country_code=gh&premium=true&ultra_premium=true`;
-      const proxied = await fetch22BetDetailAttempt(proxyUrl, eventId, { viaProxy: true });
-      if (proxied) item = proxied;
+    console.log('[22Bet] relations stripped for event', eventId, '— retrying via ScraperAPI...');
+    // NOTE: two separate ScraperAPI requirements stacked here —
+    // 1) country_code=gh needs premium=true (residential proxies for country targeting)
+    // 2) platform.22bet.com.gh's bot protection needs ultra_premium=true on top of that
+    // Both flags combine credit costs — this is an expensive call per event, per run,
+    // per key tried — so a dead first key here is doubly costly. fetchViaScraperApi
+    // moves to the next configured key only on a bad response/thrown fetch, not on a
+    // 200 that's merely missing relations again (that's a target-side outcome, not a
+    // reason to burn a second key on the same request).
+    const proxied = await fetchViaScraperApi(url, { timeoutMs: 20000, label: 'detail:' + eventId });
+    if (proxied.res) {
+      const parsed = await parseDetailJson(proxied.res, eventId, 'proxy (key ' + (proxied.keyIndex + 1) + ')');
+      if (parsed) item = parsed;
     } else {
-      console.warn('[22Bet] relations stripped for event', eventId, 'and no SCRAPER_API_KEY set');
+      console.warn('[22Bet] relations stripped for event', eventId, 'and ScraperAPI retry failed:', proxied.error);
     }
   }
 
   return item;
+}
+
+async function parseDetailJson(res, eventId, label) {
+  try {
+    const json = await res.json();
+    const items = json?.data?.items;
+    if (!Array.isArray(items) || items.length === 0) {
+      console.warn('[22Bet]', label, 'detail empty for event', eventId);
+      return null;
+    }
+    return items[0];
+  } catch (err) {
+    console.warn('[22Bet]', label, 'detail parse error for event', eventId, err.message);
+    return null;
+  }
 }
 
 async function fetch22BetDetailAttempt(url, eventId, { viaProxy }) {
@@ -279,13 +334,7 @@ async function fetch22BetDetailAttempt(url, eventId, { viaProxy }) {
       console.warn('[22Bet]', viaProxy ? 'proxy' : 'direct', 'detail fetch failed', res.status, 'for event', eventId, '| body:', body);
       return null;
     }
-    const json = await res.json();
-    const items = json?.data?.items;
-    if (!Array.isArray(items) || items.length === 0) {
-      console.warn('[22Bet]', viaProxy ? 'proxy' : 'direct', 'detail empty for event', eventId);
-      return null;
-    }
-    return items[0];
+    return parseDetailJson(res, eventId, viaProxy ? 'proxy' : 'direct');
   } catch (err) {
     console.warn('[22Bet]', viaProxy ? 'proxy' : 'direct', 'detail error for event', eventId, err.message);
     return null;
@@ -363,4 +412,4 @@ function normalise22BetEvent(ev, sportKey) {
   }
 }
 
-module.exports = { fetch22BetOdds, fetch22BetEventDetail, TWENTYTWOBET_SPORT_MAP, TYPE_HOME, TYPE_DRAW, TYPE_AWAY };
+module.exports = { fetch22BetOdds, fetch22BetEventDetail, TWENTYTWOBET_SPORT_MAP, TYPE_HOME, TYPE_DRAW, TYPE_AWAY, getScraperApiKeys, fetchViaScraperApi };
