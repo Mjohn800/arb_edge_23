@@ -406,6 +406,7 @@ export default async function handler(req, res) {
     process.env.ODDS_API_KEY_4,
     process.env.ODDS_API_KEY_5,
     process.env.ODDS_API_KEY_6,
+    process.env.ODDS_API_KEY_8,
   ].filter(Boolean);
 
   console.log('[odds] keys loaded:', keys.map((k, i) => `KEY_${i+1}=${k ? k.slice(0,8)+'...' : 'MISSING'}`));
