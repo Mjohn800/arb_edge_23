@@ -36,7 +36,7 @@ async function runLeague(sport, compact) {
       eventsByBook[book] = (r && r.events) || [];
       // OddsPapi books: how many fixtures were dropped as duplicates, and how many events have a bookmaker fixture id that differs from the id in their link
       const idMismatch = eventsByBook[book].filter(e => { const id = e.oddspapi && e.oddspapi.bookmakerFixtureId; const url = (e.bookmakers && e.bookmakers[0] && e.bookmakers[0].url) || ''; const mm = url.match(/(\d{6,})\/?$/); return id && mm && mm[1] !== id; }).length;
-      fetched[book] = { events: eventsByBook[book].length, ok: !(r && r.status && r.status.ok === false), reason: (r && r.status && r.status.reason) || null, duplicatesDropped: (r && r.status && r.status.duplicatesDropped) || 0, idMismatchDropped: (r && r.status && r.status.idMismatchDropped) || 0, unstableDropped: (r && r.status && r.status.unstableDropped) || 0, fixtureIdDiffersFromLinkId: idMismatch };
+      fetched[book] = { events: eventsByBook[book].length, ok: !(r && r.status && r.status.ok === false), reason: (r && r.status && r.status.reason) || null, duplicatesDropped: (r && r.status && r.status.duplicatesDropped) || 0, duplicatesDetail: (r && r.status && r.status.duplicatesDetail) || [], idMismatchDropped: (r && r.status && r.status.idMismatchDropped) || 0, unstableDropped: (r && r.status && r.status.unstableDropped) || 0, fixtureIdDiffersFromLinkId: idMismatch };
     } catch (err) {
       eventsByBook[book] = [];
       fetched[book] = { events: 0, ok: false, reason: err.message };
@@ -55,6 +55,11 @@ async function runLeague(sport, compact) {
       matchesSeenByTwoPlusBooks: audit.matchesSeenByTwoPlusBooks,
       flags: audit.flags,
       examples: Object.fromEntries(Object.entries(audit.perBook).filter(([, p]) => p.examples && p.examples.length).map(([b, p]) => [b, p.examples.slice(0, 3)])),
+      // per-record fixturePath hostname + bookmakerFixtureId for any dropped duplicate group,
+      // so you can check by hand whether it's the same domain twice or two different regional
+      // sites (e.g. 22bet.com vs 22bet.com.gh) under one bookmaker key. Present only when a
+      // duplicate actually occurred.
+      duplicatesDetail: Object.fromEntries(Object.entries(fetched).filter(([, f]) => f.duplicatesDetail && f.duplicatesDetail.length).map(([b, f]) => [b, f.duplicatesDetail])),
       biggestGaps: audit.crossBook.slice(0, 3).map(c => c.book + ' ' + c.type + ' ' + c.side + ' ' + ((c.meanRatioVsOthers - 1) * 100).toFixed(1) + '% (n=' + c.n + ')'),
     };
   }
