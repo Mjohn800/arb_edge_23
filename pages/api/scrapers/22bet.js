@@ -404,7 +404,14 @@ function normalise22BetEvent(ev, sportKey) {
       home_team: homeTeam,
       away_team: awayTeam,
       commence_time: new Date(startMs).toISOString(),
-      bookmakers: [{ key: '22bet', title: '22Bet', markets: normMarkets, _wa: true }],
+      // eventId is 22bet's OWN event id (same one fetch22BetEventDetail takes),
+      // attached directly on the bookmaker object — not just the outer `ev.id`
+      // (which is prefixed '22bet_' and gets discarded if this event is merged
+      // into a global the-odds-api event by mergeEvents() in odds.js, same
+      // reasoning as bookmakerFixtureId in lib/oddspapi.js). This is what lets
+      // /api/verify-top-candidates re-fetch this exact fixture later even when
+      // the arb came from THIS scraper rather than the OddsPapi path.
+      bookmakers: [{ key: '22bet', title: '22Bet', markets: normMarkets, eventId: String(ev.id), _wa: true }],
     };
   } catch (err) {
     console.warn('[22Bet] normalise error:', err.message);
