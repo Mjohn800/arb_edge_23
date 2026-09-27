@@ -801,7 +801,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
             slotKey = 'outrights'; sideKey = o.name;
             marketLabel = 'Outright';
           }
-          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, displayLabel, marketLabel, point: o.point ?? null });
+          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, displayLabel, marketLabel, point: o.point ?? null, fixtureRef: bm.bookmakerFixtureId || bm.eventId || null });
         }
       }
     }
@@ -818,7 +818,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
       const slot = marketSlots[q.slotKey];
       (slot.all[q.sideKey] = slot.all[q.sideKey] || []).push({ book: q.book, price: q.price });
       if (!slot.best[q.sideKey] || q.price > slot.best[q.sideKey].price) {
-        slot.best[q.sideKey] = { sideKey: q.sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point };
+        slot.best[q.sideKey] = { sideKey: q.sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef };
       }
     }
 
@@ -870,6 +870,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
             book: o.book,
             bookName: o.bookName,
             odds: o.price,
+            fixtureRef: o.fixtureRef,
           }))
         });
       }
@@ -1764,12 +1765,23 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     setIntegrity(integrityReport);
     const found = findArbs(all, 'global', regionNow);
     const foundArbsWA = findArbs(all, 'wa', regionNow);
+    // Auto-verify the scan's top candidates (see verifyTopCandidates above) —
+    // server picks which ones actually get checked (top-N by margin, or
+    // anything ≥ HIGH_MARGIN_REVIEW); anything it confirms as gone is dropped
+    // here, everything else is stamped with its liveVerify result so cards
+    // can show "live-verified" / "margin adjusted" without another round trip.
+    const verifyMap = await verifyTopCandidates(found.concat(foundArbsWA));
+    const applyVerification = (list) => list
+      .filter(a => !verifyMap[a.id] || verifyMap[a.id].status !== 'dropped')
+      .map(a => verifyMap[a.id] ? { ...a, liveVerify: verifyMap[a.id] } : a);
+    const foundVerified = applyVerification(found);
+    const foundArbsWAVerified = applyVerification(foundArbsWA);
     const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
     const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
-    if (found.length > 0) { setArbs(found); setIsDemo(false); }
+    if (foundVerified.length > 0) { setArbs(foundVerified); setIsDemo(false); }
     else if (okCount === 0) { setArbs(MOCK); setIsDemo(true); } // scan failed entirely — labelled demo
     else { setArbs([]); setIsDemo(false); } // scan worked, genuinely no arbs
-    setArbsWAReal(foundArbsWA);
+    setArbsWAReal(foundArbsWAVerified);
     if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
     else if (okCount === 0) { setEvBets(MOCK_EV); setIsDemoEV(true); } // scan failed entirely
     else { setEvBets([]); setIsDemoEV(false); } // scan worked, genuinely no +EV right now
@@ -1983,6 +1995,28 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     setCoCurrentOdds(liveOdds != null ? String(liveOdds) : '');
     setTab('cashout');
   };
+
+// Auto-verifies the scan's highest-value/highest-risk candidates against the
+// live bookmaker API BEFORE they're shown (see pages/api/verify-top-candidates.js
+// for the server-side selection/checking logic and why it re-queries the
+// bookmaker directly rather than OddsPapi again). Distinct from recheckArb()
+// below, which is the manual per-arb "recheck" button the user triggers
+// themselves on an arb already on screen.
+const verifyTopCandidates = async (candidates) => {
+  if (!candidates || candidates.length === 0) return {};
+  try {
+    const res = await fetch('/api/verify-top-candidates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + await getToken() },
+      body: JSON.stringify({ candidates }),
+    });
+    const data = await res.json();
+    if (!res.ok) return {};
+    return Object.fromEntries(data.results.map(r => [r.id, r]));
+  } catch {
+    return {}; // verification failing should never block showing the scan results
+  }
+};
 
 const recheckArb = async (arb) => {
   if (recheckingId === arb.id) return;
