@@ -660,6 +660,21 @@ function resolveSide(name, ev) {
 const HIGH_MARGIN_REVIEW = 5;   // % — at/above this, always flagged for review
 const OUTLIER_RATIO = 1.15;     // leg price >15% above other books' median = outlier
 
+// A single leg priced way above consensus can still be a real, valuable arb —
+// a book slow to react to a red card or injury news genuinely does look like
+// an outlier for a while. So OUTLIER_RATIO above only ever flags for review,
+// never excludes. But TWO OR MORE legs of the same market, from the SAME
+// book, independently priced this far above consensus at once is a different
+// shape of signal: a real news-driven repricing moves one side of a market,
+// not several unrelated outcomes at once. Seen directly on 22bet Malaga CF vs
+// Espanyol — Malaga @9.3 (median 2.70) AND Draw @7.9 (median 3.24)
+// simultaneously — confirmed via /api/oddspapi-debug as one single, clean,
+// non-duplicated, active market record; not a parsing bug, just bad data at
+// the source. That combination is exclude-worthy; a single extreme leg alone
+// is not.
+const MULTI_OUTLIER_RATIO = 1.5;   // stricter bound used only for the multi-leg check
+const MULTI_OUTLIER_MIN_LEGS = 2;  // this many simultaneous outliers from one book -> exclude
+
 function medianOf(arr) {
   const a = [...arr].sort((x, y) => x - y);
   const m = Math.floor(a.length / 2);
@@ -693,17 +708,34 @@ function assessArb(slot, outs, margin) {
   }
 
   let outliers = 0, uncheckable = 0;
+  const multiOutlierRatiosByBook = {}; // book -> ratios of legs in THIS arb that clear the stricter bound
   for (const o of outs) {
     const others = (slot.all[o.sideKey] || []).filter(q => q.book !== o.book).map(q => q.price);
     if (others.length < 2) { uncheckable++; continue; }
     const med = medianOf(others);
-    if (o.price / med > OUTLIER_RATIO) {
+    const ratio = o.price / med;
+    if (ratio > OUTLIER_RATIO) {
       outliers++;
       if (margin >= HIGH_MARGIN_REVIEW) {
         reasons.push(o.displayLabel + ' @ ' + o.price + ' (' + o.bookName + ') is ' + Math.round((o.price / med - 1) * 100) + '% above other books (median ' + med.toFixed(2) + ') — verify this leg first');
       }
     }
+    if (ratio > MULTI_OUTLIER_RATIO) {
+      (multiOutlierRatiosByBook[o.book] = multiOutlierRatiosByBook[o.book] || []).push(ratio);
+    }
   }
+
+  for (const [book, ratios] of Object.entries(multiOutlierRatiosByBook)) {
+    if (ratios.length >= MULTI_OUTLIER_MIN_LEGS) {
+      return {
+        level: 'excluded',
+        reasons: [book + ' prices ' + ratios.length + ' legs of this market simultaneously at ' +
+          ratios.map(r => '+' + Math.round((r - 1) * 100) + '%').join(' and ') +
+          ' above consensus — a real repricing moves one side, not several unrelated outcomes at once; looks like broken data for this match on ' + book + ', not a real price'],
+      };
+    }
+  }
+
   if (margin >= HIGH_MARGIN_REVIEW) {
     if (uncheckable > 0) reasons.push(uncheckable + ' leg(s) have fewer than 2 other books to cross-check against');
     if (outliers === 0 && uncheckable === 0) reasons.push('every leg matches other books yet the set arbs — market or line is probably mislabelled');
@@ -818,6 +850,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
       if (imp < 1) {
         const margin = parseFloat((((1 - imp) / imp) * 100).toFixed(2));
         const verify = assessArb(slot, outs, margin);
+        if (verify.level === 'excluded') { console.warn('[findArbs] excluded (multi-outlier)', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons); continue; }
         if (verify.level === 'review') console.warn('[findArbs] review flag', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons);
         arbs.push({
           id: ev.id + '_' + slot.mktKey + (slot.line != null ? '_' + slot.line : ''),
