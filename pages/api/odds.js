@@ -303,7 +303,10 @@ function mergeEvents(globalEvents, waEvents) {
     if (match) {
       for (const bm of waEv.bookmakers) {
         if (!match.bookmakers.find(b => b.key === bm.key)) {
-          match.bookmakers.push(bm);
+          // Keep the WA source's OWN event label (teams + kickoff as that feed lists
+          // them). After the merge the event only carries the global feed's names, so
+          // without this a mis-matched fixture is invisible on the card.
+          match.bookmakers.push({ ...bm, srcEvent: { home: waEv.home_team, away: waEv.away_team, start: waEv.commence_time } });
         }
       }
     } else {
