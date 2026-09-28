@@ -675,6 +675,59 @@ const OUTLIER_RATIO = 1.15;     // leg price >15% above other books' median = ou
 const MULTI_OUTLIER_RATIO = 1.5;   // stricter bound used only for the multi-leg check
 const MULTI_OUTLIER_MIN_LEGS = 2;  // this many simultaneous outliers from one book -> exclude
 
+// ── QUOTE FRESHNESS ─────────────────────────────────────────────────────────
+// Every leg of an arb has its OWN "last updated" time (the-odds-api sends
+// last_update per bookmaker and per market; OddsPapi quotes are mapped to the
+// same field in lib/oddspapi.js when it exposes one). Fake arbs are very often
+// just one stale leg next to a fresh one: the other book already moved, this
+// one hasn't refreshed. A leg with no timestamp is "unknown", never "fresh".
+const PRE_STALE_MS  = 15 * 60 * 1000; // pre-match: a leg this old gets flagged for review
+const PRE_SPREAD_MS = 10 * 60 * 1000; // pre-match: legs updated this far apart get flagged
+// ── PROFIT CAP, ARB AGE, USER REPORTS ───────────────────────────────────────
+// Real arbs between books are usually small; a very large one is far more often a
+// bad price than a gift. So arbs above DEFAULT_MAX_PROFIT are hidden by default
+// (one tap shows them) — hidden, not deleted, so a genuine one is never lost.
+const DEFAULT_MAX_PROFIT = 10; // %
+// Arb age = how long the same arb (same legs, same prices) has been seen in
+// consecutive scans on THIS device. Real edges are usually closed within minutes;
+// a big one that just sits there is more likely stale data. Heuristic only — it
+// adds a warning, it never removes the arb.
+const PERSIST_SUSPICIOUS_MS = 30 * 60 * 1000;
+// The four report reasons Surebet uses. A report hides the affected leg's
+// fixture (or the whole arb) for this user until it expires. "Odds differ" is
+// short-lived because prices move; the others describe a wrong link/match and
+// last longer.
+const REPORT_REASONS = [
+  { key: 'event_not_found',  label: 'Event not found',           ttlHours: 24 * 7 },
+  { key: 'odds_different',   label: 'Odds have different values', ttlHours: 6 },
+  { key: 'wrong_markets',    label: 'Wrong markets',             ttlHours: 24 * 7 },
+  { key: 'different_teams',  label: 'Different teams',           ttlHours: 24 * 7 },
+];
+// Identifies one book's record of one match. Uses the book's own fixture id when the
+// feed gives one, otherwise falls back to match + kickoff.
+function legKey(arb, o) {
+  return o.book + ':' + (o.fixtureRef ? o.fixtureRef : arb.match + '|' + arb.commenceTime);
+}
+const normLabel = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+const KICKOFF_DIFF_MS = 15 * 60 * 1000; // a book's kickoff this far from the merged event's gets flagged
+function fmtAgeShort(ms) {
+  const m = Math.floor(ms / 60000);
+  return m < 1 ? 'new this scan' : m < 90 ? m + ' min' : (m / 60).toFixed(1) + ' h';
+}
+
+const LIVE_MAX_AGE_MS = 2 * 60 * 1000; // in-play prices go stale in seconds: any leg older than this -> excluded
+
+function parseQuoteTime(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return v > 1e12 ? v : v > 1e9 ? v * 1000 : null;
+  const t = Date.parse(v);
+  return isNaN(t) ? null : t;
+}
+function fmtAge(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 90 ? s + 's' : s < 5400 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h';
+}
+
 function medianOf(arr) {
   const a = [...arr].sort((x, y) => x - y);
   const m = Math.floor(a.length / 2);
@@ -688,9 +741,36 @@ function medianOf(arr) {
 //   - one leg far above the others  -> possible genuine pricing error; verify THAT leg
 //   - every leg matches consensus but the set still arbs -> the market/line is
 //     probably mislabelled, i.e. a bug, not a bet
-function assessArb(slot, outs, margin) {
+function assessArb(slot, outs, margin, ev) {
   const reasons = [];
   const sideCount = outs.length;
+
+  // Quote freshness (constants above). In-play prices move in seconds, so a
+  // stale leg there is excluded outright; pre-match a stale leg, or legs
+  // refreshed far apart, are flagged for review rather than dropped, because
+  // quiet pre-match markets can legitimately sit unchanged for a while.
+  const nowMs = Date.now();
+  const startMs = ev && ev.commence_time ? new Date(ev.commence_time).getTime() : NaN;
+  const inPlay = !isNaN(startMs) && startMs <= nowMs;
+  const aged = outs.filter(o => typeof o.updatedMs === 'number').map(o => ({ o, age: Math.max(0, nowMs - o.updatedMs) }));
+  if (inPlay) {
+    const tooOld = aged.filter(a => a.age > LIVE_MAX_AGE_MS);
+    if (tooOld.length) {
+      return {
+        level: 'excluded',
+        reasons: ['in-play, but ' + tooOld.map(a => a.o.displayLabel + ' (' + a.o.bookName + ') was last updated ' + fmtAge(a.age) + ' ago').join(' and ') + ' — live prices move in seconds, so these legs are not from the same moment'],
+      };
+    }
+    if (aged.length < outs.length) reasons.push('in-play arb — ' + (outs.length - aged.length) + ' leg(s) carry no quote timestamp, so their freshness is unknown');
+  } else if (aged.length > 0) {
+    const stale = aged.filter(a => a.age > PRE_STALE_MS);
+    stale.forEach(a => reasons.push(a.o.displayLabel + ' @ ' + a.o.price + ' (' + a.o.bookName + ') was last updated ' + fmtAge(a.age) + ' ago — it may have moved since'));
+    if (aged.length >= 2) {
+      const ages = aged.map(a => a.age);
+      const spread = Math.max(...ages) - Math.min(...ages);
+      if (spread > PRE_SPREAD_MS && stale.length === 0) reasons.push('legs were last updated ' + fmtAge(spread) + ' apart — the older price may already have moved');
+    }
+  }
 
   // A single book pricing both sides of the same line below 100% is a data error.
   const perBook = {};
@@ -801,7 +881,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
             slotKey = 'outrights'; sideKey = o.name;
             marketLabel = 'Outright';
           }
-          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, displayLabel, marketLabel, point: o.point ?? null, fixtureRef: bm.bookmakerFixtureId || bm.eventId || null });
+          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, displayLabel, marketLabel, point: o.point ?? null, fixtureRef: bm.bookmakerFixtureId || bm.eventId || null, updatedMs: parseQuoteTime(mkt.last_update || bm.last_update), srcEvent: bm.srcEvent || null });
         }
       }
     }
@@ -818,7 +898,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
       const slot = marketSlots[q.slotKey];
       (slot.all[q.sideKey] = slot.all[q.sideKey] || []).push({ book: q.book, price: q.price });
       if (!slot.best[q.sideKey] || q.price > slot.best[q.sideKey].price) {
-        slot.best[q.sideKey] = { sideKey: q.sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef };
+        slot.best[q.sideKey] = { sideKey: q.sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, updatedMs: q.updatedMs, srcEvent: q.srcEvent };
       }
     }
 
@@ -849,7 +929,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
       const imp = outs.reduce((s, o) => s + 1 / o.price, 0);
       if (imp < 1) {
         const margin = parseFloat((((1 - imp) / imp) * 100).toFixed(2));
-        const verify = assessArb(slot, outs, margin);
+        const verify = assessArb(slot, outs, margin, ev);
         if (verify.level === 'excluded') { console.warn('[findArbs] excluded (multi-outlier)', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons); continue; }
         if (verify.level === 'review') console.warn('[findArbs] review flag', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons);
         arbs.push({
@@ -871,6 +951,9 @@ function findArbs(events, mode = 'global', userRegion = null) {
             bookName: o.bookName,
             odds: o.price,
             fixtureRef: o.fixtureRef,
+            updatedAt: o.updatedMs || null,
+            srcLabel: o.srcEvent ? o.srcEvent.home + ' vs ' + o.srcEvent.away : null,
+            srcStart: o.srcEvent ? o.srcEvent.start : null,
           }))
         });
       }
@@ -1339,6 +1422,15 @@ const [selectedSports, setSelectedSports] = useState(() => {
 });
   const [showSportPicker, setShowSportPicker] = useState(false);
   const [minMargin, setMinMargin] = useState(0);
+  const [showHighProfit, setShowHighProfit] = useState(false);
+  // user's active reports = their personal denylist (table arb_reports, see arb_reports.sql)
+  const [reports, setReports] = useState([]);
+  const [reportOpenId, setReportOpenId] = useState(null);
+  const [reportReason, setReportReason] = useState('');
+  const [reportLeg, setReportLeg] = useState('all');
+  const [reportStatus, setReportStatus] = useState('idle');
+  // arb signature -> first time it was seen (kept across reloads on this device)
+  const firstSeenRef = React.useRef((() => { try { return JSON.parse(localStorage.getItem('arb_firstSeen') || '{}'); } catch { return {}; } })());
   const [wayFilter, setWayFilter] = useState('all');
   const [accessOnly, setAccessOnly] = useState(false);
   const [bets, setBets] = useState([]);
@@ -1351,6 +1443,40 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [coLoadedBetId, setCoLoadedBetId] = useState(null);
   const [partialPct, setPartialPct] = useState(50);
   useEffect(() => { betsRef.current = bets; }, [bets]);
+  useEffect(() => {
+    if (!session || !session.user) return;
+    let cancelled = false;
+    supabase.from('arb_reports').select('arb_id, leg_key, reason, expires_at')
+      .eq('user_id', session.user.id).gt('expires_at', new Date().toISOString())
+      .then(({ data, error }) => { if (!cancelled && !error && data) setReports(data); }); // no table yet -> just no denylist
+    return () => { cancelled = true; };
+  }, [session && session.user && session.user.id]);
+  const isDenied = a => reports.some(r => {
+    if (new Date(r.expires_at).getTime() < Date.now()) return false;
+    if (!r.leg_key) return r.arb_id === a.id;
+    return a.outcomes.some(o => legKey(a, o) === r.leg_key);
+  });
+  const submitReport = async arb => {
+    if (!reportReason) { setReportStatus('pick'); return; }
+    const reason = REPORT_REASONS.find(x => x.key === reportReason);
+    const leg = reportLeg === 'all' ? null : arb.outcomes.find(o => o.book === reportLeg);
+    const row = {
+      user_id: session.user.id,
+      arb_id: arb.id,
+      leg_key: leg ? legKey(arb, leg) : null,
+      book: leg ? leg.book : null,
+      reason: reason.key,
+      match: arb.match,
+      margin: arb.margin,
+      odds_snapshot: arb.outcomes.map(o => ({ book: o.book, label: o.label, odds: o.odds, fixtureRef: o.fixtureRef || null, srcLabel: o.srcLabel || null, updatedAt: o.updatedAt || null })),
+      expires_at: new Date(Date.now() + reason.ttlHours * 3600000).toISOString(),
+    };
+    setReportStatus('sending');
+    const { error } = await supabase.from('arb_reports').insert(row);
+    if (error) { setReportStatus('error'); return; }
+    setReports(p => [...p, row]);
+    setReportOpenId(null); setReportReason(''); setReportLeg('all'); setReportStatus('idle');
+  };
   const [bankroll, setBankroll] = useState(() => { try { return parseFloat(localStorage.getItem('arb_bankroll') || '500'); } catch { return 500; } });
   const [referrals, setReferrals] = useState(() => {
     try { return JSON.parse(localStorage.getItem('arb_referrals') || '{}'); } catch { return {}; }
@@ -1774,14 +1900,30 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     const applyVerification = (list) => list
       .filter(a => !verifyMap[a.id] || verifyMap[a.id].status !== 'dropped')
       .map(a => verifyMap[a.id] ? { ...a, liveVerify: verifyMap[a.id] } : a);
-    const foundVerified = applyVerification(found);
-    const foundArbsWAVerified = applyVerification(foundArbsWA);
+    // arb age: stamp each arb with when this exact arb (same legs + prices) was first seen
+    const stampAge = list => {
+      const seen = firstSeenRef.current, now = Date.now();
+      return list.map(a => {
+        const sig = a.id + '|' + a.outcomes.map(o => o.book + ':' + o.odds).join(',');
+        if (!seen[sig]) seen[sig] = now;
+        return { ...a, firstSeenMs: seen[sig] };
+      });
+    };
+    const foundVerified = stampAge(applyVerification(found));
+    const foundArbsWAVerified = stampAge(applyVerification(foundArbsWA));
     const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
     const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
     if (foundVerified.length > 0) { setArbs(foundVerified); setIsDemo(false); }
     else if (okCount === 0) { setArbs(MOCK); setIsDemo(true); } // scan failed entirely — labelled demo
     else { setArbs([]); setIsDemo(false); } // scan worked, genuinely no arbs
     setArbsWAReal(foundArbsWAVerified);
+    // Only forget arbs that disappeared when the scan itself worked — a failed scan
+    // must not reset every arb's age. An arb that vanishes and later returns starts over.
+    if (okCount > 0) {
+      const live = new Set(foundVerified.concat(foundArbsWAVerified).map(a => a.id + '|' + a.outcomes.map(o => o.book + ':' + o.odds).join(',')));
+      Object.keys(firstSeenRef.current).forEach(k => { if (!live.has(k)) delete firstSeenRef.current[k]; });
+      try { localStorage.setItem('arb_firstSeen', JSON.stringify(firstSeenRef.current)); } catch {}
+    }
     if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
     else if (okCount === 0) { setEvBets(MOCK_EV); setIsDemoEV(true); } // scan failed entirely
     else { setEvBets([]); setIsDemoEV(false); } // scan worked, genuinely no +EV right now
@@ -2079,6 +2221,8 @@ const analyzeArb = async (arb) => {
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
+    if (isDenied(a)) return false;
+    if (!showHighProfit && a.margin > DEFAULT_MAX_PROFIT) return false;
     if (accessOnly && !isFullyAccessible(a.outcomes, userRegion)) return false;
     if (arbSection === 'global' && isFullyAccessible(a.outcomes, userRegion)) return false;
     return a.margin >= minMargin;
@@ -2087,6 +2231,8 @@ const analyzeArb = async (arb) => {
   // Independent totals for the metrics grid — each computed from its own properly-sourced
   // array (not a partition of one mixed array), same pattern as Line Shopping/Middles/+EV.
   const sameFilters = a => {
+    if (isDenied(a)) return false;
+    if (!showHighProfit && a.margin > DEFAULT_MAX_PROFIT) return false;
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
@@ -2095,6 +2241,8 @@ const analyzeArb = async (arb) => {
   const arbsGlobal = arbs.filter(sameFilters);
   const arbsWA     = arbsWAReal.filter(sameFilters);
 
+  const hiddenHighProfit = arbsBase.filter(a => !isDenied(a) && a.margin > DEFAULT_MAX_PROFIT).length;
+  const hiddenByReports = arbsBase.filter(a => isDenied(a)).length;
   const calc = sel ? calcStakes(sel.outcomes, stake) : null;
 
   // ── KEY FIX: use named import instead of React.createElement
@@ -2391,6 +2539,11 @@ const analyzeArb = async (arb) => {
         e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No arbitrage opportunities in this scan'),
         e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, 'The scan completed and no cross-book arbs passed the checks. That is a normal result — real arbs are rare and short-lived.')
       ),
+ (hiddenHighProfit > 0 || showHighProfit || hiddenByReports > 0) && e('div', { style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
+   hiddenHighProfit > 0 && !showHighProfit && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden — that size is far more often a bad price than a real edge. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(true); } }, 'Show them')),
+   showHighProfit && e('div', null, 'Showing arbs above +' + DEFAULT_MAX_PROFIT + '% — treat each as unverified until checked on the book. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(false); } }, 'Hide again')),
+   hiddenByReports > 0 && e('div', null, '🚩 ' + hiddenByReports + ' arb' + (hiddenByReports === 1 ? '' : 's') + ' hidden because you reported them.')
+ ),
  filteredArbs.map(arb => {
         const info = getSportInfo(arb.sport);
         // Group outcomes by market so mixed-market arbs are easy to read
@@ -2409,6 +2562,8 @@ const analyzeArb = async (arb) => {
               e('span', { style: st.profitBadge(arb.margin) }, '+' + arb.margin.toFixed(1) + '%')
             )
           ),
+          arb.firstSeenMs && e('div', { style: { fontSize: 10, color: C.muted, marginTop: 4 } }, '⏳ Seen for ' + fmtAgeShort(Date.now() - arb.firstSeenMs)),
+          arb.firstSeenMs && arb.margin >= HIGH_MARGIN_REVIEW && (Date.now() - arb.firstSeenMs) >= PERSIST_SUSPICIOUS_MS && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '⚠ This arb has stayed open for ' + fmtAgeShort(Date.now() - arb.firstSeenMs) + '. Real edges of this size are usually closed within minutes — a price that never moves is more likely stale.'),
           arb.verify && arb.verify.level === 'review' && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '⚠ Verify on the book before staking: ' + arb.verify.reasons.join(' · ')),
           Object.entries(marketGroups).map(([mktLabel, outs]) =>
             e('div', { key: mktLabel },
@@ -2418,6 +2573,8 @@ const analyzeArb = async (arb) => {
                   e('div', { style: { fontSize: 10, color: C.muted, marginBottom: 1 } }, mktLabel + (multiMarket ? '' : '')),
                   e('div', { style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 1 } }, o.label),
                   e('div', { style: { fontSize: 12, color: C.muted, marginBottom: 1 } }, o.bookName),
+                  o.srcLabel && e('div', { style: { fontSize: 9, lineHeight: 1.3, marginBottom: 1, color: (o.srcStart && Math.abs(new Date(o.srcStart) - new Date(arb.commenceTime)) > KICKOFF_DIFF_MS) ? '#b45309' : C.muted } },
+                    '📄 ' + o.srcLabel + ((o.srcStart && Math.abs(new Date(o.srcStart) - new Date(arb.commenceTime)) > KICKOFF_DIFF_MS) ? ' · kickoff ' + new Date(o.srcStart).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' ≠ other books' : '')),
                   !isBookAccessible(o.book, userRegion) && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b91c1c', marginBottom: 1 } }, '🚫 Not accessible'),
                   e('div', { style: { fontSize: 16, fontWeight: 700, color: C.green } }, o.odds.toFixed(2)),
                   e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportUrls[arb.sport.split('_')[0]]) || (BOOKS[o.book] && BOOKS[o.book].url) || '#', target: '_blank', style: { display: 'block', marginTop: 4, fontSize: 10, fontWeight: 700, color: '#fff', background: C.green, borderRadius: 6, padding: '3px 6px', textDecoration: 'none', textAlign: 'center' } }, 'Bet Now →')
@@ -2425,8 +2582,9 @@ const analyzeArb = async (arb) => {
               )
             )
           ),
-          sel && sel.id === arb.id && e('div', { style: { marginTop: 10, display: 'flex', gap: 8 } },
+          sel && sel.id === arb.id && e('div', { style: { marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' } },
             e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →'),
+            e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); setReportOpenId(reportOpenId === arb.id ? null : arb.id); setReportStatus('idle'); } }, '🚩 Report'),
             e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis'),
             arb.verify && arb.verify.level === 'review' && arb.home && e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); recheckArb(arb); } }, recheckingId === arb.id ? 'Checking...' : '🔄 Re-check prices')
           ),
@@ -2443,6 +2601,23 @@ const analyzeArb = async (arb) => {
                     l.label + ' · ' + l.book + ': ' + l.was.toFixed(2) + (l.now != null ? ' → ' + l.now.toFixed(2) : '') + ' (' + l.status.replace(/_/g, ' ') + ')')),
                   e('div', { style: { fontSize: 10, color: C.muted, marginTop: 4 } }, 'Checked ' + new Date(recheck[arb.id].checkedAt).toLocaleTimeString())
                 )
+          ),
+          reportOpenId === arb.id && e('div', { onClick: ev => ev.stopPropagation(), style: { marginTop: 10, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '10px 12px', fontSize: 12, lineHeight: 1.6 } },
+            e('div', { style: { fontWeight: 700, marginBottom: 6 } }, '🚩 What is wrong with this arb?'),
+            e('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+              REPORT_REASONS.map(r => e('button', { key: r.key, style: { ...st.btn(reportReason === r.key ? 'primary' : 'outline'), fontSize: 11 }, onClick: () => { setReportReason(r.key); setReportStatus('idle'); } }, r.label))
+            ),
+            e('div', { style: { fontWeight: 600, margin: '8px 0 4px' } }, 'Which leg looks wrong?'),
+            e('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+              [{ book: 'all', name: 'Not sure — hide the whole arb' }].concat([...new Set(arb.outcomes.map(o => o.book))].map(b => ({ book: b, name: arb.outcomes.find(o => o.book === b).bookName }))).map(x =>
+                e('button', { key: x.book, style: { ...st.btn(reportLeg === x.book ? 'primary' : 'outline'), fontSize: 11 }, onClick: () => setReportLeg(x.book) }, x.name))
+            ),
+            e('div', { style: { marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+              e('button', { style: { ...st.btn('primary'), fontSize: 12 }, onClick: () => submitReport(arb) }, reportStatus === 'sending' ? 'Sending...' : 'Submit report'),
+              reportStatus === 'pick' && e('span', { style: { color: '#b91c1c' } }, 'Pick a reason first.'),
+              reportStatus === 'error' && e('span', { style: { color: '#b91c1c' } }, 'Could not save the report — try again.')
+            ),
+            e('div', { style: { fontSize: 10, color: C.muted, marginTop: 6 } }, 'Hides this ' + (reportLeg === 'all' ? 'arb' : 'book\'s record of this match') + ' for you' + (reportReason ? ' for ' + REPORT_REASONS.find(r => r.key === reportReason).ttlHours + ' hours.' : ' until the report expires.'))
           ),
           cardAnalysis[arb.id] && e('div', { style: { marginTop: 10, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 14px', fontSize: 12, lineHeight: 1.6 } },
             cardAnalysis[arb.id].error
