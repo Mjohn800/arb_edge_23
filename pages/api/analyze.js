@@ -210,7 +210,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { match, sport, outcomes, margin, marketType } = req.body;
+  const { match, sport, outcomes, margin, marketType, oddsAvailable } = req.body;
 
   if (!match || typeof match !== 'string') {
     return res.status(400).json({ error: 'Missing or invalid "match"' });
@@ -222,6 +222,22 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing or invalid "outcomes" — expected a non-empty array' });
   }
 
+  // Only real prices count. The Bet Analyzer sends labels with no odds for a match that isn't in
+  // the latest scan; feeding that to the model made it "analyse" a market with no prices.
+  // Answer honestly instead, before touching the rate limit or the model.
+  const pricedOutcomes = outcomes.filter(o => typeof o.odds === 'number' && o.odds > 1);
+  if (oddsAvailable === false || pricedOutcomes.length < 2) {
+    return res.status(200).json({
+      unpriced: true,
+      riskLevel: null,
+      valueAssessment: null,
+      keyInsight: 'No bookmaker prices are loaded for this match, so there is nothing to assess for value.',
+      tip: 'Scan this sport first (Scanner tab), then tap Analyze again.',
+      reasoning: null,
+      dataQuality: { level: 'None', note: 'No price data for this match in your latest scan' },
+    });
+  }
+
   const ip = getClientIp(req);
   const rl = checkRateLimit(ip);
   if (!rl.allowed) {
@@ -231,7 +247,7 @@ export default async function handler(req, res) {
     });
   }
 
-  const cacheKey = analysisCacheKey(match, sport, marketType, outcomes);
+  const cacheKey = analysisCacheKey(match, sport, marketType, pricedOutcomes);
   const cached = analysisCache[cacheKey];
   if (cached && Date.now() - cached.ts < ANALYSIS_CACHE_TTL) {
     console.log('[analyze] serving', match, 'from cache, age:', Math.round((Date.now() - cached.ts) / 1000) + 's');
@@ -252,7 +268,7 @@ Sport: ${sport}
 Market: ${marketType || 'Match Winner'}
 ${margin > 0 ? 'Arbitrage margin: ' + margin + '%' : ''}
 Odds:
-${outcomes.map(o => `- ${o.label}: ${o.odds} on ${o.bookName}`).join('\n')}
+${pricedOutcomes.map(o => `- ${o.label}: ${o.odds} on ${o.bookName}`).join('\n')}
 
 ${describeRealData(realData)}
 
@@ -289,7 +305,8 @@ Respond ONLY with this exact JSON, no markdown, no extra text:
 
     const text = data.choices?.[0]?.message?.content || '';
     const clean = text.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
+    const jsonStart = clean.indexOf('{'), jsonEnd = clean.lastIndexOf('}');
+    const parsed = JSON.parse(jsonStart >= 0 && jsonEnd > jsonStart ? clean.slice(jsonStart, jsonEnd + 1) : clean);
 
     // dataQuality is computed in code, not by the model — attached
     // separately so it can't be softened or exaggerated by the LLM.
