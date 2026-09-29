@@ -3435,6 +3435,7 @@ const analyzeArb = async (arb) => {
                       ].filter(Boolean);
                       return cells.length ? e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 } }, cells) : null;
                     })(),
+                    analysis.dataQuality && analysis.dataQuality.note && e('div', { style: { fontSize: 10, color: C.muted, marginBottom: 8, lineHeight: 1.4 } }, '📎 Data used: ' + (analysis.dataQuality.level || 'None') + ' — ' + analysis.dataQuality.note + (analysis.priced === false ? ' · Prices: none in your latest scan for this match.' : '')),
                     analysis.valueAssessment && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8, fontSize: 12, lineHeight: 1.5 } },
                       e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, '⚖️ VALUE ASSESSMENT'),
                       e('div', { style: { color: C.text } }, analysis.valueAssessment)
