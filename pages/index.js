@@ -2808,11 +2808,20 @@ const analyzeArb = async (arb) => {
               ? e('div', { style: { color: '#dc2626' } }, '⚠️ ' + cardAnalysis[arb.id].error)
               : e('div', null,
                   e('div', { style: { fontWeight: 700, fontSize: 13, color: C.greenDark, marginBottom: 8 } }, '🤖 AI Analysis'),
-                  e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 } },
-                    e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Predicted'), e('div', { style: { fontWeight: 700, color: C.text } }, cardAnalysis[arb.id].predictedOutcome)),
-                    e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Confidence'), e('div', { style: { fontWeight: 700, color: C.blue } }, cardAnalysis[arb.id].confidence + '%')),
-                    e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Risk'), e('div', { style: { fontWeight: 700, color: C.amber } }, cardAnalysis[arb.id].riskLevel)),
-                    e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Best Value'), e('div', { style: { fontWeight: 700, color: C.green } }, cardAnalysis[arb.id].valueLeg))
+                  (() => {
+                    const ca = cardAnalysis[arb.id];
+                    const cell = (kk, label, val, color) => val ? e('div', { key: kk, style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, label), e('div', { style: { fontWeight: 700, color } }, val)) : null;
+                    const cells = [
+                      cell('p', 'Predicted', ca.predictedOutcome, C.text),
+                      cell('c', 'Confidence', ca.confidence ? ca.confidence + '%' : null, C.blue),
+                      cell('r', 'Risk', ca.riskLevel, C.amber),
+                      cell('v', 'Best Value', ca.valueLeg, C.green),
+                    ].filter(Boolean);
+                    return cells.length ? e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 } }, cells) : null;
+                  })(),
+                  cardAnalysis[arb.id].valueAssessment && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8, fontSize: 12, lineHeight: 1.5 } },
+                    e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, '⚖️ VALUE ASSESSMENT'),
+                    e('div', { style: { color: C.text } }, cardAnalysis[arb.id].valueAssessment)
                   ),
                   cardAnalysis[arb.id].form && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8 } },
                     e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '📊 RECENT FORM'),
@@ -3380,7 +3389,7 @@ const analyzeArb = async (arb) => {
                   try {
                     const priced = findScannedOddsForGame(game, prevEventsRef.current, userRegion);
                     // No fake zeros: an unpriced match sends labels only, and oddsAvailable:false tells the API.
-                    const outcomes = priced || [{ label: game.homeTeam }, { label: 'Draw' }, { label: game.awayTeam }];
+                    const outcomes = priced || (String(game.sport || '').startsWith('soccer') ? [{ label: game.homeTeam }, { label: 'Draw' }, { label: game.awayTeam }] : [{ label: game.homeTeam }, { label: game.awayTeam }]);
                     const res = await fetch('/api/analyze', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + await getToken() },
@@ -3415,11 +3424,20 @@ const analyzeArb = async (arb) => {
                     e('div', { style: { fontWeight: 700, fontSize: 13, color: C.greenDark, marginBottom: 10 } }, '🤖 AI Analysis — ' + game.match),
                     analysis._priced === false && e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '6px 10px', marginBottom: 8, fontSize: 11, color: '#78350f' } },
                       'This match is not in your latest scan, so there is no price data: form and context only, no value pricing. Scan this sport first for price-based analysis.'),
-                    e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 } },
-                      e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Predicted'), e('div', { style: { fontWeight: 700, color: C.text } }, analysis.predictedOutcome || '—')),
-                      e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, analysis.confidenceLabel || 'Confidence'), e('div', { style: { fontWeight: 700, color: C.blue } }, analysis.confidence ? analysis.confidence + '%' : '—')),
-                      e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Risk'), e('div', { style: { fontWeight: 700, color: C.amber } }, analysis.riskLevel || '—')),
-                      e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Best Value'), e('div', { style: { fontWeight: 700, color: C.green } }, analysis.valueLeg || '—'))
+                    (() => {
+                      const cell = (k, label, val, color) => val ? e('div', { key: k, style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, label), e('div', { style: { fontWeight: 700, color } }, val)) : null;
+                      const cells = [
+                        cell('p', 'Predicted', analysis.predictedOutcome, C.text),
+                        cell('c', analysis.confidenceLabel || 'Confidence', analysis.confidence ? analysis.confidence + '%' : null, C.blue),
+                        cell('r', 'Risk', analysis.riskLevel, C.amber),
+                        cell('v', 'Best Value', analysis.valueLeg, C.green),
+                        cell('d', 'Data quality', analysis.dataQuality && analysis.dataQuality.level, C.muted),
+                      ].filter(Boolean);
+                      return cells.length ? e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 } }, cells) : null;
+                    })(),
+                    analysis.valueAssessment && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8, fontSize: 12, lineHeight: 1.5 } },
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, '⚖️ VALUE ASSESSMENT'),
+                      e('div', { style: { color: C.text } }, analysis.valueAssessment)
                     ),
                     analysis.form && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8 } },
                       e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '📊 RECENT FORM'),
