@@ -286,9 +286,13 @@ async function getWAOdds(sportKey) {
 }
 
 // ─── MERGE LOGIC ──────────────────────────────────────────────────────────────
-// Match global + WA events by team name (fuzzy) + commence time (±30 min).
+// Match global + WA events by team name (fuzzy) + commence time (±MERGE_KICKOFF_MS).
 // If matched: inject WA bookmakers into the global event.
 // If WA-only (e.g. Ghana Premier League): add as standalone event.
+// Same fixture only if kickoffs are this close. Was 30 min, which let a 19:00 and a 19:30
+// listing (often two different fixtures, or a rescheduled one) merge into one event.
+const MERGE_KICKOFF_MS = 10 * 60 * 1000;
+
 function mergeEvents(globalEvents, waEvents) {
   const merged = globalEvents.map(ev => ({ ...ev, bookmakers: [...(ev.bookmakers || [])] }));
 
@@ -296,7 +300,7 @@ function mergeEvents(globalEvents, waEvents) {
     const match = merged.find(ev => {
       const homeMatch = fuzzyMatch(ev.home_team, waEv.home_team);
       const awayMatch = fuzzyMatch(ev.away_team, waEv.away_team);
-      const timeMatch = Math.abs(new Date(ev.commence_time) - new Date(waEv.commence_time)) < 30 * 60 * 1000;
+      const timeMatch = Math.abs(new Date(ev.commence_time) - new Date(waEv.commence_time)) < MERGE_KICKOFF_MS;
       return homeMatch && awayMatch && timeMatch;
     });
 
@@ -317,11 +321,55 @@ function mergeEvents(globalEvents, waEvents) {
   return merged;
 }
 
+// Squad qualifiers: a team name carrying one must be matched by a name carrying the SAME one,
+// so "Arsenal" never matches "Arsenal Women" / "Arsenal U21" / "Arsenal II" through the
+// substring rule below.
+function squadTags(s) {
+  const t = ' ' + String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ') + ' ';
+  const tags = [];
+  if (/ (women|womens|ladies|w|fem|feminino|femenino|femminile|frauen) /.test(t)) tags.push('w');
+  if (/ u ?(17|18|19|20|21|23) /.test(t) || / (youth|juniors?) /.test(t)) tags.push('youth');
+  if (/ (reserves?|res|ii|2|b|c|castilla|primavera|juvenil|amateur) /.test(t)) tags.push('res');
+  return tags.sort().join(',');
+}
+
+// Whole-name equivalents that token rules can't derive (nickname / abbreviation -> full name).
+// Add to this list whenever a real feed pair fails to merge; every entry is a deliberate,
+// reviewable decision, unlike a loose substring rule.
+const TEAM_ALIASES = {
+  'man utd': 'manchester united', 'man united': 'manchester united', 'man u': 'manchester united',
+  'man city': 'manchester city', 'spurs': 'tottenham hotspur', 'tottenham': 'tottenham hotspur',
+  'wolves': 'wolverhampton wanderers', 'wolverhampton': 'wolverhampton wanderers',
+  'psg': 'paris saint germain', 'paris sg': 'paris saint germain', 'newcastle': 'newcastle united',
+  'west ham': 'west ham united', 'leeds': 'leeds united', 'brighton': 'brighton hove albion',
+  'nottm forest': 'nottingham forest', 'nott m forest': 'nottingham forest',
+  'inter': 'inter milan', 'internazionale': 'inter milan', 'ac milan': 'milan',
+  'atletico madrid': 'atletico', 'atl madrid': 'atletico', 'athletic bilbao': 'athletic club',
+  'bayern munchen': 'bayern munich', 'gladbach': 'borussia monchengladbach',
+  'celta': 'celta vigo', 'leverkusen': 'bayer leverkusen', 'dortmund': 'borussia dortmund', 'sociedad': 'real sociedad',
+  'betis': 'real betis', 'valladolid': 'real valladolid', 'alaves': 'deportivo alaves', 'rayo': 'rayo vallecano',
+  'villarreal': 'villarreal', 'napoli': 'napoli', 'juventus': 'juventus', 'roma': 'as roma', 'lazio': 'lazio',
+  'crystal palace': 'crystal palace', 'palace': 'crystal palace', 'villa': 'aston villa', 'fulham': 'fulham',
+};
+const TEAM_STOPWORDS = new Set(['fc', 'cf', 'afc', 'sc', 'ac', 'rcd', 'cd', 'ud', 'fk', 'sk', 'bk', 'ca', 'club', 'de', 'the']);
+function teamTokens(name) {
+  let t = String(name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/&/g, ' and ').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (TEAM_ALIASES[t]) t = TEAM_ALIASES[t];
+  return t.split(' ').filter(w => w && !TEAM_STOPWORDS.has(w)).map(w => (w === 'utd' ? 'united' : w));
+}
+
 function fuzzyMatch(a, b) {
   if (!a || !b) return false;
-  const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const na = norm(a), nb = norm(b);
-  return na === nb || na.includes(nb) || nb.includes(na);
+  if (squadTags(a) !== squadTags(b)) return false;
+  // Strict word-level matching. The old "one name contains the other" rule is gone: it merged
+  // "Inter" with "Inter Miami", "Newcastle" with "Newcastle Jets", "Leeds" with "Leeds Rhinos".
+  // Now a shorter or longer spelling only matches through TEAM_ALIASES (a reviewed list), so a
+  // real pair that fails to merge is fixed by adding one alias line.
+  const ta = teamTokens(a), tb = teamTokens(b);
+  if (!ta.length || ta.length !== tb.length) return false;
+  // Each word pair: equal, or one is a >=3-letter prefix of the other ("Man" ~ "Manchester").
+  return ta.every((w, i) => w === tb[i] || (Math.min(w.length, tb[i].length) >= 3 && (w.startsWith(tb[i]) || tb[i].startsWith(w))));
 }
 
 // Does the actual work of trying each API key until one succeeds, and writes
