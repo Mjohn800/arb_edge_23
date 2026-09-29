@@ -1296,6 +1296,7 @@ function middleEV(model, o, u) {
   return { ev, windowProb };
 }
 
+const MIN_MIDDLE_EV_PCT = -2; // default view hides middles estimated worse than this (%), unless they are arbs
 const MIN_WINDOW_PROB = 0.10; // a middle must land at least ~1 in 10 by the market's own pricing
 // Arbs first; then by estimated EV (probability-weighted, from the match's own ladder);
 // middles without a ladder model fall back to cost and sort after modelled ones.
@@ -1716,6 +1717,7 @@ useEffect(() => {
   const [middles, setMiddles] = useState([]);
   const [middlesWA, setMiddlesWA] = useState([]); // West Africa middles — both legs accessible
   const [middleSection, setMiddleSection] = useState('global'); // 'global' | 'wa'
+  const [showAllMiddles, setShowAllMiddles] = useState(false); // false = hide middles whose estimated EV is clearly negative
   const [steam, setSteam] = useState([]);
   const [bestOdds, setBestOdds] = useState([]);
   const [bestOddsWA, setBestOddsWA] = useState([]); // West Africa line shopping — accessible books only
@@ -2741,6 +2743,11 @@ const analyzeArb = async (arb) => {
           ),
           arb.firstSeenMs && e('div', { style: { fontSize: 10, color: C.muted, marginTop: 4 } }, '⏳ Seen for ' + fmtAgeShort(Date.now() - arb.firstSeenMs)),
           arb.firstSeenMs && arb.margin >= HIGH_MARGIN_REVIEW && (Date.now() - arb.firstSeenMs) >= PERSIST_SUSPICIOUS_MS && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '⚠ This arb has stayed open for ' + fmtAgeShort(Date.now() - arb.firstSeenMs) + '. Real edges of this size are usually closed within minutes — a price that never moves is more likely stale.'),
+          e('div', { style: { fontSize: 11, marginTop: 6, fontWeight: 600, color: (recheck[arb.id] && recheck[arb.id].verdict === 'confirmed') ? C.greenDark : (arb.liveVerify ? '#1e3a8a' : '#92400e') } },
+            recheck[arb.id] && recheck[arb.id].verdict === 'confirmed' ? '✅ Verified live · ' + fmtAgeShort(Date.now() - new Date(recheck[arb.id].checkedAt).getTime()) + ' ago'
+            : recheck[arb.id] && recheck[arb.id].verdict ? '⚠️ Re-checked: see result below'
+            : arb.liveVerify ? '🔎 Live-checked at scan: ' + String(arb.liveVerify.status || 'checked').replace(/_/g, ' ')
+            : '⏳ Detected in feed data — not live-verified. Tap the card and press Re-check before staking.'),
           arb.verify && arb.verify.level === 'review' && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '⚠ Verify on the book before staking: ' + arb.verify.reasons.join(' · ')),
           Object.entries(marketGroups).map(([mktLabel, outs]) =>
             e('div', { key: mktLabel },
@@ -2763,7 +2770,7 @@ const analyzeArb = async (arb) => {
             e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →'),
             e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); setReportOpenId(reportOpenId === arb.id ? null : arb.id); setReportStatus('idle'); } }, '🚩 Report'),
             e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis'),
-            arb.verify && arb.verify.level === 'review' && arb.home && e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); recheckArb(arb); } }, recheckingId === arb.id ? 'Checking...' : '🔄 Re-check prices')
+            arb.home && e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); recheckArb(arb); } }, recheckingId === arb.id ? 'Checking...' : '🔄 Re-check prices')
           ),
           recheck[arb.id] && e('div', { style: { marginTop: 10, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', fontSize: 12, lineHeight: 1.6 } },
             recheck[arb.id].error
@@ -3199,7 +3206,21 @@ const analyzeArb = async (arb) => {
                 : 'No middles found yet. Run a scan — middles appear most often in NBA and NFL spreads/totals.'
             )
           );
-          return activeMiddles.map(m => {
+          // Middles with a market-implied EV estimate below the floor are hidden by default. Middles the
+          // model can't score (e.g. spreads) are kept, since hiding them would be a guess.
+          const isWeak = m => !m.isArb && m.evPct != null && m.evPct < MIN_MIDDLE_EV_PCT;
+          const hiddenWeak = activeMiddles.filter(isWeak).length;
+          const shownMiddles = showAllMiddles ? activeMiddles : activeMiddles.filter(m => !isWeak(m));
+          const banner = (hiddenWeak > 0 || showAllMiddles) && e('div', { key: '__weak', style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
+            showAllMiddles
+              ? e('span', null, 'Showing all middles, including ones with negative estimated EV. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowAllMiddles(false); } }, 'Hide weak ones'))
+              : e('span', null, '🔒 ' + hiddenWeak + ' middle' + (hiddenWeak === 1 ? '' : 's') + ' hidden: estimated EV below ' + MIN_MIDDLE_EV_PCT + '% (the books\' margins cost more than the window can win back). ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowAllMiddles(true); } }, 'Show all')));
+          if (shownMiddles.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
+            banner,
+            e('div', { style: { fontSize: 32, marginBottom: 8 } }, '↔'),
+            e('div', { style: { fontSize: 14 } }, 'No middles worth taking in this scan.')
+          );
+          return [banner].concat(shownMiddles.map(m => {
           const info = getSportInfo(m.sport);
           const overround = ((m.implied - 1) * 100).toFixed(1);
           return e('div', { key: m.id, style: { background: C.white, border: '1px solid ' + (m.isArb ? C.green : '#e9d5ff'), borderRadius: 12, padding: '13px 14px', marginBottom: 10 } },
@@ -3232,7 +3253,7 @@ const analyzeArb = async (arb) => {
               m.staleNote && e('div', { style: { marginTop: 4, fontSize: 11, color: '#92400e' } }, '⚠ ' + m.staleNote)
             )
           );
-        });
+        }));
         })()
       ),
 
