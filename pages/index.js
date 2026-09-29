@@ -655,25 +655,60 @@ function resolveSide(name, ev) {
 
 // High-margin arbs are NOT dropped — they're often the most valuable ones
 // (pricing errors, lagging odds). Instead every arb gets cross-checked, and
-// anything at/above this margin, or that fails a check, is flagged "review"
-// with the specific reason, so you know exactly what to verify on the book.
-const HIGH_MARGIN_REVIEW = 5;   // % — at/above this, always flagged for review
-const OUTLIER_RATIO = 1.15;     // leg price >15% above other books' median = outlier
+// anything that fails a check is flagged "review" with the specific reason,
+// so you know exactly what to verify on the book. This used to only surface
+// the outlier reasons below when margin >= 5% — but a single wrong odd from
+// a bad upstream feed produces a LOW margin, believable arb just as often as
+// a high one (arguably more dangerously, since a modest margin reads as
+// "safe"). The detection always ran either way; only the warning text was
+// margin-gated. Removed 28 Sep 2026 — every arb now gets the same scrutiny
+// regardless of size.
+const HIGH_MARGIN_REVIEW = 5;   // % — kept for the "persisted suspicious" badge elsewhere; no longer gates outlier checks
+
+// A fixed "15% above median" bar has a blind spot: it's the same bar whether
+// the other books agree with each other to within 1% or are already 12%
+// apart on their own. In a market where every other book agrees tightly, a
+// leg just 6-8% off is genuinely suspicious — a single bad upstream odd
+// (OddsPapi/Odds API feed error) is exactly this shape: not absurd enough to
+// hit a fixed 15%, low enough margin to look "safe", but still wrong. In a
+// naturally volatile market (thin liquidity, few books), 15% apart can be
+// completely normal. So the bar now scales with how tightly the OTHER books
+// actually agree, instead of using one number for every market:
+//   threshold = 1 + max(OUTLIER_MIN_DEVIATION, OUTLIER_SPREAD_MULTIPLIER × spread-of-others)
+// Tight consensus (others within ~2%) -> ~12% bar (tighter than the old fixed 15%).
+// Others already ~10% apart -> ~15% bar (about the same as before).
+// Others already ~20% apart -> ~30% bar (looser — a genuinely volatile market
+// isn't penalized for its own natural spread).
+const OUTLIER_MIN_DEVIATION = 0.12;     // floor: even with perfect consensus, this much deviation still isn't flagged
+const OUTLIER_SPREAD_MULTIPLIER = 1.5;  // how much extra room a leg gets per unit of the other books' own disagreement
+
+// Relative range of a set of prices: (max-min)/median. 0 when 0-1 prices, or
+// all identical. This is the "how much do the other books already disagree"
+// input to the adaptive threshold above.
+function relativeSpread(arr) {
+  if (!arr || arr.length < 2) return 0;
+  const med = medianOf(arr);
+  if (!med) return 0;
+  return (Math.max(...arr) - Math.min(...arr)) / med;
+}
 
 // A single leg priced way above consensus can still be a real, valuable arb —
 // a book slow to react to a red card or injury news genuinely does look like
-// an outlier for a while. So OUTLIER_RATIO above only ever flags for review,
-// never excludes. But TWO OR MORE legs of the same market, from the SAME
-// book, independently priced this far above consensus at once is a different
-// shape of signal: a real news-driven repricing moves one side of a market,
-// not several unrelated outcomes at once. Seen directly on 22bet Malaga CF vs
-// Espanyol — Malaga @9.3 (median 2.70) AND Draw @7.9 (median 3.24)
-// simultaneously — confirmed via /api/oddspapi-debug as one single, clean,
-// non-duplicated, active market record; not a parsing bug, just bad data at
-// the source. That combination is exclude-worthy; a single extreme leg alone
-// is not.
+// an outlier for a while. So the adaptive check above only ever flags for
+// review, never excludes. But TWO OR MORE legs of the same market, from the
+// SAME book, independently priced this far above consensus at once is a
+// different shape of signal: a real news-driven repricing moves one side of
+// a market, not several unrelated outcomes at once. Seen directly on 22bet
+// Malaga CF vs Espanyol — Malaga @9.3 (median 2.70) AND Draw @7.9 (median
+// 3.24) simultaneously — confirmed via /api/oddspapi-debug as one single,
+// clean, non-duplicated, active market record; not a parsing bug, just bad
+// data at the source. That combination is exclude-worthy; a single extreme
+// leg alone is not. This bound stays fixed (not adaptive) — two-plus legs
+// from one book this far off consensus is abnormal in any market, volatile
+// or not.
 const MULTI_OUTLIER_RATIO = 1.5;   // stricter bound used only for the multi-leg check
 const MULTI_OUTLIER_MIN_LEGS = 2;  // this many simultaneous outliers from one book -> exclude
+
 
 // ── QUOTE FRESHNESS ─────────────────────────────────────────────────────────
 // Every leg of an arb has its OWN "last updated" time (the-odds-api sends
@@ -794,11 +829,14 @@ function assessArb(slot, outs, margin, ev) {
     if (others.length < 2) { uncheckable++; continue; }
     const med = medianOf(others);
     const ratio = o.price / med;
-    if (ratio > OUTLIER_RATIO) {
+    const spread = relativeSpread(others);
+    const adaptiveThreshold = 1 + Math.max(OUTLIER_MIN_DEVIATION, OUTLIER_SPREAD_MULTIPLIER * spread);
+    if (ratio > adaptiveThreshold) {
       outliers++;
-      if (margin >= HIGH_MARGIN_REVIEW) {
-        reasons.push(o.displayLabel + ' @ ' + o.price + ' (' + o.bookName + ') is ' + Math.round((o.price / med - 1) * 100) + '% above other books (median ' + med.toFixed(2) + ') — verify this leg first');
-      }
+      // No margin gate — a wrong single leg produces a low, believable margin
+      // just as often as a high one, so this needs to surface either way.
+      const tightness = spread < 0.05 ? ' (other books tightly agree, within ' + Math.round(spread * 100) + '%)' : '';
+      reasons.push(o.displayLabel + ' @ ' + o.price + ' (' + o.bookName + ') is ' + Math.round((ratio - 1) * 100) + '% above other books (median ' + med.toFixed(2) + ')' + tightness + ' — verify this leg first');
     }
     if (ratio > MULTI_OUTLIER_RATIO) {
       (multiOutlierRatiosByBook[o.book] = multiOutlierRatiosByBook[o.book] || []).push(ratio);
@@ -816,11 +854,48 @@ function assessArb(slot, outs, margin, ev) {
     }
   }
 
-  if (margin >= HIGH_MARGIN_REVIEW) {
-    if (uncheckable > 0) reasons.push(uncheckable + ' leg(s) have fewer than 2 other books to cross-check against');
-    if (outliers === 0 && uncheckable === 0) reasons.push('every leg matches other books yet the set arbs — market or line is probably mislabelled');
-  }
+  // No margin gate here either — a mislabelled market or a thin-book arb is
+  // just as real a concern at 2% margin as at 8%.
+  if (uncheckable > 0) reasons.push(uncheckable + ' leg(s) have fewer than 2 other books to cross-check against');
+  if (outliers === 0 && uncheckable === 0) reasons.push('every leg matches other books yet the set arbs — market or line is probably mislabelled');
   return { level: reasons.length ? 'review' : 'standard', reasons };
+}
+
+// Bet Analyzer: real prices for one fixture, from the latest scan. /api/fixtures has no odds and the
+// Analyze button used to send odds: 0 for every outcome, so the AI answered "no price to evaluate".
+// Matches the fixture to a scanned event (normalised team names, kickoff within 12h) and returns, per
+// side, the best price across accessible books plus the median price and how many books quote it
+// (the server uses median as the market consensus to measure edge). null = not in the scan / no prices.
+function findScannedOddsForGame(game, events, userRegion) {
+  const h = normaliseTeamName(game.homeTeam), a = normaliseTeamName(game.awayTeam);
+  if (!h || !a) return null;
+  const gt = new Date(game.commenceTime).getTime();
+  const ev = (events || []).find(e2 => {
+    if (normaliseTeamName(e2.home_team) !== h || normaliseTeamName(e2.away_team) !== a) return false;
+    const et = new Date(e2.commence_time).getTime();
+    return isNaN(gt) || isNaN(et) || Math.abs(et - gt) < 12 * 3600 * 1000;
+  });
+  if (!ev) return null;
+  const side = { __home__: [], __draw__: [], __away__: [] };
+  for (const bm of (ev.bookmakers || [])) {
+    if (!isBookAccessible(bm.key, userRegion)) continue;
+    const name = (BOOKS[bm.key] && BOOKS[bm.key].name) || bm.title || bm.key;
+    for (const mkt of (bm.markets || [])) {
+      if (mkt.key !== 'h2h') continue;
+      for (const o of (mkt.outcomes || [])) {
+        const sd = resolveSide(o.name, ev);
+        if (sd && typeof o.price === 'number' && o.price > 1) side[sd].push({ price: o.price, book: name });
+      }
+    }
+  }
+  const summarise = (label, arr) => {
+    if (!arr.length) return null;
+    const bestRow = arr.reduce((x, y) => (y.price > x.price ? y : x));
+    return { label, odds: bestRow.price, bookName: bestRow.book, medianOdds: medianOf(arr.map(r => r.price)), bookCount: arr.length };
+  };
+  const home = summarise(game.homeTeam, side.__home__), draw = summarise('Draw', side.__draw__), away = summarise(game.awayTeam, side.__away__);
+  if (!home || !away) return null;
+  return [home, ...(draw ? [draw] : []), away];
 }
 
 function findArbs(events, mode = 'global', userRegion = null) {
@@ -2185,7 +2260,7 @@ const analyzeArb = async (arb) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + await getToken() },
       body: JSON.stringify({
-        match: arb.match, sport: getSportInfo(arb.sport).label,
+        match: arb.match, sport: getSportInfo(arb.sport).label, sportKey: arb.sport,
         outcomes: arb.outcomes, margin: arb.margin,
         marketType: arb.marketType || 'Match Winner'
       })
@@ -3178,18 +3253,18 @@ const analyzeArb = async (arb) => {
                   if (analyzingGameId === game.id) return;
                   setAnalyzingGameId(game.id);
                   try {
-                    const outcomes = [
-                      { label: game.homeTeam, odds: 0, bookName: 'Check bookmakers' },
-                      { label: 'Draw', odds: 0, bookName: 'Check bookmakers' },
-                      { label: game.awayTeam, odds: 0, bookName: 'Check bookmakers' },
-                    ];
+                    const priced = findScannedOddsForGame(game, prevEventsRef.current, userRegion);
+                    // No fake zeros: an unpriced match sends labels only, and oddsAvailable:false tells the API.
+                    const outcomes = priced || [{ label: game.homeTeam }, { label: 'Draw' }, { label: game.awayTeam }];
                     const res = await fetch('/api/analyze', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + await getToken() },
                       body: JSON.stringify({
                         match: game.match,
                         sport: game.league || getSportInfo(game.sport).label,
+                        sportKey: game.sport,
                         outcomes,
+                        oddsAvailable: !!priced,
                         margin: 0,
                         marketType: 'Match Winner',
                         venue: game.venue || '',
@@ -3198,7 +3273,7 @@ const analyzeArb = async (arb) => {
                     });
                     const data = await res.json();
                     if (res.status === 402) { data.error = data.message || 'AI analysis is a Premium feature.'; setUpgradeNotice(data.error); }
-                    setGameAnalyses(p => ({ ...p, [game.id]: data }));
+                    setGameAnalyses(p => ({ ...p, [game.id]: { ...data, _priced: !!priced } }));
                   } catch (err) {
                     setGameAnalyses(p => ({ ...p, [game.id]: { error: 'Analysis failed: ' + err.message } }));
                   }
@@ -3213,9 +3288,11 @@ const analyzeArb = async (arb) => {
                 ? e('div', { style: { color: '#dc2626', fontSize: 12 } }, '⚠️ ' + analysis.error)
                 : e('div', { style: { background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 14px', fontSize: 12 } },
                     e('div', { style: { fontWeight: 700, fontSize: 13, color: C.greenDark, marginBottom: 10 } }, '🤖 AI Analysis — ' + game.match),
+                    analysis._priced === false && e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '6px 10px', marginBottom: 8, fontSize: 11, color: '#78350f' } },
+                      'This match is not in your latest scan, so there is no price data: form and context only, no value pricing. Scan this sport first for price-based analysis.'),
                     e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 } },
                       e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Predicted'), e('div', { style: { fontWeight: 700, color: C.text } }, analysis.predictedOutcome || '—')),
-                      e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Confidence'), e('div', { style: { fontWeight: 700, color: C.blue } }, (analysis.confidence || '—') + '%')),
+                      e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, analysis.confidenceLabel || 'Confidence'), e('div', { style: { fontWeight: 700, color: C.blue } }, analysis.confidence ? analysis.confidence + '%' : '—')),
                       e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Risk'), e('div', { style: { fontWeight: 700, color: C.amber } }, analysis.riskLevel || '—')),
                       e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Best Value'), e('div', { style: { fontWeight: 700, color: C.green } }, analysis.valueLeg || '—'))
                     ),
