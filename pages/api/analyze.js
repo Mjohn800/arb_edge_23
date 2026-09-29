@@ -438,6 +438,20 @@ function extractJson(text) {
   return JSON.parse(text.slice(a, b + 1));
 }
 
+// Code-written key insight for form-only matches: states the counts, never judges them.
+function formOnlyInsight(rd) {
+  const parts = [];
+  const o = (a, b) => a && b ? `${rd.homeTeam} ${a.hits}/${a.sample}, ${rd.awayTeam} ${b.hits}/${b.sample}` : null;
+  const over = o(rd.home.over25, rd.away.over25);
+  const btts = o(rd.home.btts, rd.away.btts);
+  if (over) parts.push(`over 2.5 goals in recent games: ${over}`);
+  if (btts) parts.push(`both teams scored: ${btts}`);
+  return parts.length ? `Recent hit rates, ${parts.join('; ')}. No price data for this match.` : 'Form and goals numbers are shown below; no price data was available for this match.';
+}
+
+// Judgement words the AI must not attach to raw counts (it once called Arsenal's 3/5 "low").
+const JUDGEMENT_WORDS = /\b(low|high|strong|weak|poor|good|impressive|dominant|indicat\w*)\b/i;
+
 // Code-written text used when Groq is unavailable, so the card is never empty.
 function fallbackText(view, realData, match) {
   if (view && view.isArb) {
@@ -456,7 +470,7 @@ function fallbackText(view, realData, match) {
     };
   }
   return {
-    keyInsight: realData.available ? 'Form and goals numbers are shown below; no price data was available for this match.' : 'No price data or results data was available for this match.',
+    keyInsight: realData.available ? formOnlyInsight(realData) : 'No price data or results data was available for this match.',
     tip: 'Scan this sport first to get prices, then analyze again.',
     reasoning: 'This analysis only reports what could be verified.',
   };
@@ -541,6 +555,7 @@ RESULTS FACTS (computed, exact):
 ${describeRealData(realData)}
 
 Write the notes using ONLY the facts above. Do not predict the match result. Do not mention injuries, suspensions, transfers or news. If a sample is small (under 5 games), say so. Keep every field to what is asked.
+Quote numbers exactly as given (e.g. "3/5") and NEVER describe them with judgement words such as low, high, strong, weak, poor, good, impressive or dominant. Let the numbers speak; do not say what they "indicate".
 
 Reply with exactly this JSON and nothing else:
 {
@@ -553,9 +568,13 @@ Reply with exactly this JSON and nothing else:
   try {
     const text = await callGroq(prompt);
     const parsed = extractJson(text);
-    if (parsed.keyInsight) result.keyInsight = String(parsed.keyInsight);
+    const fb = fallbackText(view, realData, match);
+    // On form-only matches (no prices) the AI must not editorialise the raw counts:
+    // if it used a judgement word, swap in the code-written line for that field.
+    const guard = (aiText, codeText) => (!view && JUDGEMENT_WORDS.test(aiText)) ? codeText : aiText;
+    if (parsed.keyInsight) result.keyInsight = guard(String(parsed.keyInsight), fb.keyInsight);
     if (parsed.tip) result.tip = String(parsed.tip);
-    if (parsed.reasoning) result.reasoning = String(parsed.reasoning);
+    if (parsed.reasoning) result.reasoning = guard(String(parsed.reasoning), fb.reasoning);
     llmOk = !!(result.keyInsight && result.tip);
   } catch (err) {
     console.warn('[analyze] Groq unavailable, using code-written text:', err.message);
