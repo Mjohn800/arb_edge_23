@@ -1222,6 +1222,92 @@ function integersBetween(lo, hi) {
 }
 const fmtLine = p => (p > 0 ? '+' : '') + p;
 
+// ── MIDDLES: MARKET-IMPLIED PLAUSIBILITY ────────────────────────────────────
+// Builds the match's own goal-total distribution from every book's full-time Over/Under
+// ladder (each line de-vigged per book, then median across books). No external data:
+// the market's pricing IS the probability model. Returns null if fewer than 3 half-lines.
+function buildTotalsModel(ev) {
+  const byBook = {};
+  for (const bm of (ev.bookmakers || [])) {
+    for (const mkt of (bm.markets || [])) {
+      if (mkt.key !== 'totals' || totalsVariant(mkt) !== 'fulltime') continue;
+      for (const o of (mkt.outcomes || [])) {
+        if (!(o.price > 1) || typeof o.point !== 'number') continue;
+        const side = String(o.name || '').trim().toLowerCase();
+        if (side !== 'over' && side !== 'under') continue;
+        const b = (byBook[bm.key] = byBook[bm.key] || {});
+        const p = (b[o.point] = b[o.point] || {});
+        if (p[side] == null) p[side] = o.price;
+      }
+    }
+  }
+  const perLine = {};
+  for (const pts of Object.values(byBook)) {
+    for (const [pt, pr] of Object.entries(pts)) {
+      const x = parseFloat(pt);
+      if (Math.abs((x % 1) - 0.5) > 1e-9 || !pr.over || !pr.under) continue; // half-lines, both sides
+      (perLine[x] = perLine[x] || []).push((1 / pr.over) / (1 / pr.over + 1 / pr.under));
+    }
+  }
+  const xs = Object.keys(perLine).map(Number).sort((a, b) => a - b);
+  if (xs.length < 3) return null;
+  const med = arr => { const a = [...arr].sort((p, q) => p - q); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+  const pts = [{ x: -0.5, s: 1 }];
+  let prev = 1;
+  for (const x of xs) { prev = Math.min(prev, med(perLine[x])); pts.push({ x, s: prev }); }
+  return { pts };
+}
+
+// P(total > x) for a half-line x, interpolated on the consensus ladder.
+function totalsSurvival(model, x) {
+  const p = model.pts;
+  if (x <= p[0].x) return 1;
+  for (let i = 1; i < p.length; i++) {
+    if (x <= p[i].x) { const a = p[i - 1], b = p[i]; return a.s + (b.s - a.s) * (x - a.x) / (b.x - a.x); }
+  }
+  const last = p[p.length - 1], before = p[p.length - 2];
+  const ratio = Math.min(0.9, Math.max(0.05, before.s > 0 ? last.s / before.s : 0.3));
+  return last.s * Math.pow(ratio, x - last.x);
+}
+
+// The line where the market thinks Over/Under is 50/50 — its own expected total.
+function totalsMedian(model) {
+  const p = model.pts;
+  for (let i = 1; i < p.length; i++) {
+    if (p[i].s <= 0.5) { const a = p[i - 1], b = p[i]; return a.x + (a.s - 0.5) / (a.s - b.s || 1) * (b.x - a.x); }
+  }
+  return p[p.length - 1].x;
+}
+
+// Expected value of a middle per 1 unit staked in total, staking so either single win returns the same.
+function middleEV(model, o, u) {
+  const imp = 1 / o.price + 1 / u.price;
+  const sa = (1 / o.price) / imp, sb = (1 / u.price) / imp;
+  const ints = integersBetween(o.point, u.point);
+  let ev = -1, windowProb = 0;
+  for (let n = 0; n <= 20; n++) {
+    const pn = Math.max(0, totalsSurvival(model, n - 0.5) - totalsSurvival(model, n + 0.5));
+    let ret = 0;
+    ret += n > o.point ? sa * o.price : (n === o.point ? sa : 0);
+    ret += n < u.point ? sb * u.price : (n === u.point ? sb : 0);
+    ev += pn * ret;
+    if (ints.includes(n)) windowProb += pn;
+  }
+  return { ev, windowProb };
+}
+
+const MIN_WINDOW_PROB = 0.10; // a middle must land at least ~1 in 10 by the market's own pricing
+// Arbs first; then by estimated EV (probability-weighted, from the match's own ladder);
+// middles without a ladder model fall back to cost and sort after modelled ones.
+function compareMiddles(a, b) {
+  if (a.isArb !== b.isArb) return a.isArb ? -1 : 1;
+  const ae = a.evPct, be = b.evPct;
+  if (ae != null && be != null) return be - ae;
+  if (ae != null) return -1;
+  if (be != null) return 1;
+  return a.implied - b.implied;
+}
+
 function findMiddles(events, mode = 'global', userRegion = null) {
   const middles = [];
   const MAX_PER_EVENT_TYPE = 3;
@@ -1235,8 +1321,10 @@ function findMiddles(events, mode = 'global', userRegion = null) {
     for (const bm of ev.bookmakers) {
       for (const mkt of (bm.markets || [])) {
         if (mkt.key !== marketKey) continue;
+        if (marketKey === 'totals' && totalsVariant(mkt) !== 'fulltime') continue; // same market-name rule as arbs
         for (const o of (mkt.outcomes || [])) {
           if (!(o.price > 1) || typeof o.point !== 'number') continue;
+          if (marketKey === 'totals' && Math.abs(o.point * 2 - Math.round(o.point * 2)) > 1e-9) continue; // no quarter lines
           let side;
           if (marketKey === 'spreads') {
             side = resolveSide(o.name, ev);
@@ -1245,7 +1333,7 @@ function findMiddles(events, mode = 'global', userRegion = null) {
             side = String(o.name || '').trim().toLowerCase();
             if (side !== 'over' && side !== 'under') continue;
           }
-          out.push({ book: bm.key, bookName: bm.title, side, point: o.point, price: o.price });
+          out.push({ book: bm.key, bookName: bm.title, side, point: o.point, price: o.price, updatedMs: parseQuoteTime(mkt.last_update || bm.last_update) });
           const k = bm.key + '|' + side + '|' + o.point;
           (prices[k] = prices[k] || new Set()).add(o.price);
         }
@@ -1287,6 +1375,8 @@ function findMiddles(events, mode = 'global', userRegion = null) {
     const tt = collect(ev, 'totals');
     const overs = tt.filter(q => q.side === 'over');
     const unders = tt.filter(q => q.side === 'under');
+    const model = buildTotalsModel(ev);
+    const median = model ? totalsMedian(model) : null;
     const totCands = [];
     for (const o of overs) for (const u of unders) {
       if (o.book === u.book || !legsOk(o.book, u.book)) continue;
@@ -1294,6 +1384,14 @@ function findMiddles(events, mode = 'global', userRegion = null) {
       const ints = integersBetween(o.point, u.point);
       if (ints.length === 0) continue;
       const implied = 1 / o.price + 1 / u.price;
+      let ev_ = null, windowProb = null;
+      if (model) {
+        const r = middleEV(model, o, u);
+        ev_ = r.ev; windowProb = r.windowProb;
+        if (windowProb < MIN_WINDOW_PROB) continue; // tail windows the market itself calls near-impossible
+      }
+      const ages = [o.updatedMs, u.updatedMs].filter(t => t != null).map(t => Date.now() - t);
+      const staleNote = ages.length && Math.max(...ages) > PRE_STALE_MS ? 'A leg was last updated ' + fmtAge(Math.max(...ages)) + ' ago — verify it on the book.' : null;
       totCands.push({
         id: ev.id + '_tot_' + o.book + o.point + '_' + u.book + u.point,
         sport: ev.sport_key, match, commenceTime: ev.commence_time, type: 'Total', team: 'Goals total',
@@ -1302,12 +1400,16 @@ function findMiddles(events, mode = 'global', userRegion = null) {
         window: parseFloat((u.point - o.point).toFixed(2)),
         windowText: 'the total is ' + (ints.length === 1 ? 'exactly ' + ints[0] : 'one of ' + ints.join(', ')),
         implied: parseFloat(implied.toFixed(4)), isArb: implied < 1,
+        windowProb: windowProb == null ? null : parseFloat(windowProb.toFixed(3)),
+        evPct: ev_ == null ? null : parseFloat((ev_ * 100).toFixed(1)),
+        marketMedian: median == null ? null : parseFloat(median.toFixed(1)),
+        staleNote,
       });
     }
-    totCands.sort((a, b) => a.implied - b.implied);
+    totCands.sort(compareMiddles);
     middles.push(...totCands.slice(0, MAX_PER_EVENT_TYPE));
   }
-  return middles.sort((a, b) => { if (a.isArb !== b.isArb) return a.isArb ? -1 : 1; return a.implied - b.implied; });
+  return middles.sort(compareMiddles);
 }
 
 // ── STEAM CHASING ───────────────────────────────────────────────────────────
@@ -3108,8 +3210,8 @@ const analyzeArb = async (arb) => {
                 e('div', { style: { fontSize: 12, color: C.muted, marginTop: 2 } }, m.type + ' · ' + m.team)
               ),
               e('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 } },
-                e('span', { style: { background: m.isArb ? C.greenLight : '#fdf4ff', color: m.isArb ? C.greenDark : '#7c3aed', fontSize: 13, fontWeight: 700, padding: '3px 10px', borderRadius: 16 } }, m.isArb ? '⚡ Arb+Middle' : '↔ ' + m.window + ' pt window'),
-                e('span', { style: { fontSize: 11, color: C.muted } }, m.isArb ? 'Guaranteed profit + middle chance' : (parseFloat(overround) > 0 ? 'Cost: ' + overround + '% overround' : 'Near break-even'))
+                e('span', { style: { background: m.isArb ? C.greenLight : '#fdf4ff', color: m.isArb ? C.greenDark : '#7c3aed', fontSize: 13, fontWeight: 700, padding: '3px 10px', borderRadius: 16 } }, m.isArb ? '⚡ Arb+Middle' : (m.windowProb != null ? '🎯 ~' + Math.round(m.windowProb * 100) + '% lands' : '↔ ' + m.window + ' pt window')),
+                e('span', { style: { fontSize: 11, color: C.muted } }, m.isArb ? 'Guaranteed profit + middle chance' : (m.evPct != null ? 'Est. EV ' + (m.evPct > 0 ? '+' : '') + m.evPct + '%' : (parseFloat(overround) > 0 ? 'Cost: ' + overround + '% overround' : 'Near break-even')))
               )
             ),
             e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 } },
@@ -3125,7 +3227,9 @@ const analyzeArb = async (arb) => {
               })
             ),
             e('div', { style: { background: '#fdf4ff', borderRadius: 8, padding: '8px 10px', marginTop: 8, fontSize: 12, color: '#6b21a8' } },
-              (m.windowText ? '💡 If ' + m.windowText + ', both legs win. Otherwise one wins and the other loses (or pushes on a whole-number line).' : '💡 If the final margin falls between ' + Math.abs(m.legA.line) + ' and ' + Math.abs(m.legB.line) + ', both legs win. Otherwise one leg wins, one loses.')
+              (m.windowText ? '💡 If ' + m.windowText + ', both legs win. Otherwise one wins and the other loses (or pushes on a whole-number line).' : '💡 If the final margin falls between ' + Math.abs(m.legA.line) + ' and ' + Math.abs(m.legB.line) + ', both legs win. Otherwise one leg wins, one loses.'),
+              m.marketMedian != null && e('div', { style: { marginTop: 4, fontSize: 11, color: C.muted } }, 'The books price this match at about ' + m.marketMedian + ' total goals.'),
+              m.staleNote && e('div', { style: { marginTop: 4, fontSize: 11, color: '#92400e' } }, '⚠ ' + m.staleNote)
             )
           );
         });
