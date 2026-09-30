@@ -580,7 +580,7 @@ function sanitizeEvents(events) {
 
       // 1b/2. totals: pair check, then line order
       const tot = {};
-      for (const mkt of bm.markets || []) if (mkt.key === 'totals') for (const o of mkt.outcomes || []) {
+      for (const mkt of bm.markets || []) if (mkt.key === 'totals' || mkt.key === 'alternate_totals') for (const o of mkt.outcomes || []) {
         const n = String(o.name || '').trim().toLowerCase();
         if ((n !== 'over' && n !== 'under') || typeof o.point !== 'number' || !(o.price > 1)) continue;
         (tot[o.point] = tot[o.point] || {})[n] = o;
@@ -1230,7 +1230,7 @@ function buildTotalsModel(ev) {
   const byBook = {};
   for (const bm of (ev.bookmakers || [])) {
     for (const mkt of (bm.markets || [])) {
-      if (mkt.key !== 'totals' || totalsVariant(mkt) !== 'fulltime') continue;
+      if ((mkt.key !== 'totals' && mkt.key !== 'alternate_totals') || totalsVariant(mkt) !== 'fulltime') continue;
       for (const o of (mkt.outcomes || [])) {
         if (!(o.price > 1) || typeof o.point !== 'number') continue;
         const side = String(o.name || '').trim().toLowerCase();
@@ -1321,7 +1321,7 @@ function findMiddles(events, mode = 'global', userRegion = null) {
     const prices = {};
     for (const bm of ev.bookmakers) {
       for (const mkt of (bm.markets || [])) {
-        if (mkt.key !== marketKey) continue;
+        if (mkt.key !== marketKey && !(marketKey === 'totals' && mkt.key === 'alternate_totals')) continue; // extra Over/Under lines feed middles only
         if (marketKey === 'totals' && totalsVariant(mkt) !== 'fulltime') continue; // same market-name rule as arbs
         for (const o of (mkt.outcomes || [])) {
           if (!(o.price > 1) || typeof o.point !== 'number') continue;
@@ -1408,7 +1408,14 @@ function findMiddles(events, mode = 'global', userRegion = null) {
       });
     }
     totCands.sort(compareMiddles);
-    middles.push(...totCands.slice(0, MAX_PER_EVENT_TYPE));
+    const totPicked = totCands.slice(0, MAX_PER_EVENT_TYPE);
+    // Wide-window pairs (e.g. Over 1.5 / Under 4.5) rarely have the top EV, so a top-3-by-EV cut can
+    // crowd them out. Also keep the single likeliest-to-land pair, but only if it clears the same EV floor.
+    const likeliest = totCands
+      .filter(c => c.windowProb != null && (c.isArb || c.evPct >= MIN_MIDDLE_EV_PCT))
+      .sort((a, b) => b.windowProb - a.windowProb)[0];
+    if (likeliest && !totPicked.includes(likeliest)) totPicked.push(likeliest);
+    middles.push(...totPicked);
   }
   return middles.sort(compareMiddles);
 }
@@ -1717,6 +1724,7 @@ useEffect(() => {
   const [middles, setMiddles] = useState([]);
   const [middlesWA, setMiddlesWA] = useState([]); // West Africa middles — both legs accessible
   const [middleSection, setMiddleSection] = useState('global'); // 'global' | 'wa'
+  const [middleSort, setMiddleSort] = useState('ev'); // 'ev' = best estimated EV first, 'likely' = biggest chance of landing first
   const [showAllMiddles, setShowAllMiddles] = useState(false); // false = hide middles whose estimated EV is clearly negative
   const [steam, setSteam] = useState([]);
   const [bestOdds, setBestOdds] = useState([]);
@@ -3192,7 +3200,7 @@ const analyzeArb = async (arb) => {
       // ── MIDDLE BETTING ──
       edgeTab === 'middle' && e('div', null,
         e('div', { style: { background: '#fdf4ff', border: '1px solid #e9d5ff', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#6b21a8', lineHeight: 1.6 } },
-          '↔ A middle is when two books offer different spread/total lines on the same game — creating a window of scores where BOTH your bets win. You always collect at least one bet; the aim is occasionally hitting the middle and winning both. Best on NBA, NFL, NFL totals.'
+          '↔ A middle is when two books offer different spread/total lines on the same game, creating a window of results where BOTH bets win. Outside the window one bet wins and one loses, and unless the prices are unusually good that is a small net loss. "Lands" is an estimate from the market\'s own prices, not a promise. Only bet what you can afford to lose.'
         ),
         // Region section toggle
         e('div', { style: { display: 'flex', gap: 6, marginBottom: 10 } },
@@ -3219,7 +3227,13 @@ const analyzeArb = async (arb) => {
           // model can't score (e.g. spreads) are kept, since hiding them would be a guess.
           const isWeak = m => !m.isArb && m.evPct != null && m.evPct < MIN_MIDDLE_EV_PCT;
           const hiddenWeak = activeMiddles.filter(isWeak).length;
-          const shownMiddles = showAllMiddles ? activeMiddles : activeMiddles.filter(m => !isWeak(m));
+          const filteredMiddles = showAllMiddles ? activeMiddles : activeMiddles.filter(m => !isWeak(m));
+          const shownMiddles = middleSort === 'likely'
+            ? filteredMiddles.slice().sort((a, b) => (b.windowProb ?? -1) - (a.windowProb ?? -1))
+            : filteredMiddles;
+          const sortBar = e('div', { key: '__sort', style: { display: 'flex', gap: 6, marginBottom: 8 } },
+            [['ev', 'Best EV'], ['likely', '🎯 Most likely to land']].map(([k, l]) =>
+              e('button', { key: k, onClick: () => setMiddleSort(k), style: { ...st.btn(middleSort === k ? 'primary' : 'outline'), fontSize: 11, padding: '5px 10px' } }, l)));
           const banner = (hiddenWeak > 0 || showAllMiddles) && e('div', { key: '__weak', style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
             showAllMiddles
               ? e('span', null, 'Showing all middles, including ones with negative estimated EV. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowAllMiddles(false); } }, 'Hide weak ones'))
@@ -3229,7 +3243,7 @@ const analyzeArb = async (arb) => {
             e('div', { style: { fontSize: 32, marginBottom: 8 } }, '↔'),
             e('div', { style: { fontSize: 14 } }, 'No middles worth taking in this scan.')
           );
-          return [banner].concat(shownMiddles.map(m => {
+          return [sortBar, banner].concat(shownMiddles.map(m => {
           const info = getSportInfo(m.sport);
           const overround = ((m.implied - 1) * 100).toFixed(1);
           return e('div', { key: m.id, style: { background: C.white, border: '1px solid ' + (m.isArb ? C.green : '#e9d5ff'), borderRadius: 12, padding: '13px 14px', marginBottom: 10 } },
