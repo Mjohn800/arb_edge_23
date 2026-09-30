@@ -372,6 +372,84 @@ function fuzzyMatch(a, b) {
   return ta.every((w, i) => w === tb[i] || (Math.min(w.length, tb[i].length) >= 3 && (w.startsWith(tb[i]) || tb[i].startsWith(w))));
 }
 
+// ─── ALTERNATE TOTALS (opt-in, quota-capped) ─────────────────────────────────
+// the-odds-api serves `alternate_totals` (extra Over/Under lines: 0.5, 1.5, 3.5 ...) ONLY through the
+// per-event endpoint, one game per call, and every market x region costs credits. So this is OFF unless
+// ALT_TOTALS_SPORTS lists the sport keys to enrich, e.g. ALT_TOTALS_SPORTS=soccer_epl,soccer_spain_la_liga
+// Cost per fetched game = number of regions (2 with 'eu,uk'). Budget knobs (all optional env vars):
+//   ALT_TOTALS_MAX_EVENTS       games enriched per sport per refresh (default 2)
+//   ALT_TOTALS_WINDOW_HOURS     only games kicking off within this many hours (default 36)
+//   ALT_TOTALS_MIN_REMAINING    skip entirely when the key's remaining credits are below this (default 300)
+const ALT_TOTALS_TTL = 15 * 60 * 1000; // per-game cache; prices older than this are refetched
+const altTotalsCache = {};             // eventId -> { ts, bookmakers: [{ key, last_update, outcomes }] }
+let altDisabledUntil = 0;              // set when the API rejects the market, so we stop wasting credits
+
+function altSportEnabled(sport) {
+  const list = (process.env.ALT_TOTALS_SPORTS || '').split(',').map(x => x.trim()).filter(Boolean);
+  return list.includes(sport);
+}
+
+async function fetchAltTotalsForEvent(sport, eventId, key) {
+  const url = `https://api.the-odds-api.com/v4/sports/${sport}/events/${eventId}/odds?apiKey=${key}&regions=${GLOBAL_REGIONS}&markets=alternate_totals&oddsFormat=decimal`;
+  const response = await fetch(url);
+  if (response.status === 422 || response.status === 400) { altDisabledUntil = Date.now() + 60 * 60 * 1000; return null; } // market not offered: back off 1h
+  if (!response.ok) return null;
+  const body = await response.json();
+  const remaining = response.headers.get('x-requests-remaining');
+  const bookmakers = [];
+  for (const bm of (body.bookmakers || [])) {
+    const mkt = (bm.markets || []).find(m => m.key === 'alternate_totals');
+    if (mkt && (mkt.outcomes || []).length) bookmakers.push({ key: bm.key, last_update: mkt.last_update || bm.last_update, outcomes: mkt.outcomes });
+  }
+  return { bookmakers, remaining: remaining == null ? null : Number(remaining) };
+}
+
+// Adds an `alternate_totals` market to the bookmakers of the soonest kickoffs. Quotes that duplicate a line
+// the book already gave in its main `totals` market are skipped, so nothing becomes "same line, two prices".
+async function enrichWithAltTotals(sport, globalData, key, remainingNow) {
+  if (!altSportEnabled(sport) || Date.now() < altDisabledUntil) return;
+  const maxEvents = parseInt(process.env.ALT_TOTALS_MAX_EVENTS || '2', 10);
+  const windowMs = parseFloat(process.env.ALT_TOTALS_WINDOW_HOURS || '36') * 3600 * 1000;
+  const minRemaining = parseInt(process.env.ALT_TOTALS_MIN_REMAINING || '300', 10);
+  const now = Date.now();
+  const candidates = globalData
+    .filter(ev => { const t = Date.parse(ev.commence_time); return t > now && t - now <= windowMs && (ev.bookmakers || []).length >= 2; })
+    .sort((a, b) => Date.parse(a.commence_time) - Date.parse(b.commence_time));
+
+  let budgetOk = remainingNow == null || Number(remainingNow) >= minRemaining;
+  let fetched = 0;
+  const toFetch = [];
+  for (const ev of candidates) {
+    const c = altTotalsCache[ev.id];
+    if (c && now - c.ts < ALT_TOTALS_TTL) continue;
+    if (budgetOk && toFetch.length < maxEvents) toFetch.push(ev);
+  }
+  const results = await Promise.all(toFetch.map(async ev => {
+    try { return [ev, await fetchAltTotalsForEvent(sport, ev.id, key)]; } catch { return [ev, null]; }
+  }));
+  for (const [ev, r] of results) {
+    if (!r) continue;
+    fetched++;
+    altTotalsCache[ev.id] = { ts: Date.now(), bookmakers: r.bookmakers };
+  }
+  let attached = 0;
+  for (const ev of candidates) {
+    const c = altTotalsCache[ev.id];
+    if (!c || Date.now() - c.ts >= ALT_TOTALS_TTL) continue;
+    for (const alt of c.bookmakers) {
+      const bm = (ev.bookmakers || []).find(b => b.key === alt.key);
+      if (!bm) continue;
+      const have = new Set();
+      for (const m of (bm.markets || [])) if (m.key === 'totals') for (const o of (m.outcomes || [])) have.add(String(o.name).toLowerCase() + '|' + o.point);
+      const outcomes = alt.outcomes.filter(o => !have.has(String(o.name).toLowerCase() + '|' + o.point));
+      if (!outcomes.length) continue;
+      bm.markets = (bm.markets || []).concat([{ key: 'alternate_totals', last_update: alt.last_update, outcomes }]);
+      attached += outcomes.length;
+    }
+  }
+  console.log(`[odds][alt_totals] ${sport}: candidates=${candidates.length} fetched=${fetched} outcomesAttached=${attached}${budgetOk ? '' : ' (skipped fetching: credits low)'}`);
+}
+
 // Does the actual work of trying each API key until one succeeds, and writes
 // the result to the shared cache on success. Called at most ONCE per stale
 // sport at a time — concurrent requests for the same sport all await the same
@@ -420,6 +498,9 @@ async function fetchGlobalOddsFresh(sport, markets, keys, cacheKey) {
       remainingRequests = response.headers.get('x-requests-remaining');
       usedRequests      = response.headers.get('x-requests-used');
       keyIndex          = keys.indexOf(key) + 1;
+
+      // Optional extra Over/Under lines for the soonest games (no-op unless ALT_TOTALS_SPORTS lists this sport)
+      try { await enrichWithAltTotals(sport, globalData, key, remainingRequests); } catch (e) { console.log('[odds][alt_totals] skipped:', e.message); }
 
       // Tag non-WA bookmakers
       globalData.forEach(ev => {
