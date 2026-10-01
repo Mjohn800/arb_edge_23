@@ -34,7 +34,7 @@ const BOOKS = {
   betfox:        { name: 'Betfox',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.betfox.com.gh', sportUrls: { soccer: 'https://www.betfox.com.gh' } },
 };
 
-const SUPPORT_EMAIL = 'lexjhn1390@gmail.com';
+const SUPPORT_EMAIL = 'arbedge02@gmail.com';
 const mailto = (subject, body) => 'mailto:' + SUPPORT_EMAIL + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
 
 // Regions a user can pick in the app (or leave on auto-detect).
