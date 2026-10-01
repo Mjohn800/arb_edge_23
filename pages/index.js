@@ -1543,7 +1543,7 @@ const st = {
   app: { fontFamily: 'system-ui,sans-serif', background: C.bg, minHeight: '100vh', paddingBottom: 60 },
   header: { background: C.dark, padding: '16px 16px 14px', marginBottom: 16 },
   logoRow: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 },
-  logoBox: { width: 36, height: 36, borderRadius: 8, background: '#1e3a5f', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 },
+  logoBox: { width: 36, height: 36, borderRadius: 8, flexShrink: 0, overflow: 'hidden' },
   logoTitle: { fontSize: 20, fontWeight: 700, color: '#fff' },
   logoSub: { fontSize: 12, color: C.teal },
   headerRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
@@ -2438,7 +2438,7 @@ const analyzeArb = async (arb) => {
   return e('div', { style: st.app },
     e('div', { style: st.header },
       e('div', { style: st.logoRow },
-        e('div', { style: st.logoBox }, '📈'),
+        e('img', { src: '/icon-512.png', alt: 'ArbEdge', style: st.logoBox }),
         e('div', null, e('div', { style: st.logoTitle }, 'ArbEdge'), e('div', { style: st.logoSub }, '\uD83C\uDF0D Global' + (isWAUserNow ? ' \u00B7 \uD83C\uDDEC\uD83C\uDDED West Africa' : '')))
       ),
       e('div', { style: st.headerRow },
