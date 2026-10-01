@@ -192,6 +192,16 @@ const waHealth = {
 const deadKeys = new Map(); // key -> timestamp it died
 const DEAD_KEY_TTL = 5 * 60 * 1000;
 
+// ── Per-user rate limiting ───────────────────────────────────────────────
+// Simple in-memory limiter: N requests per user per rolling window. Same
+// caveat as the caches below — resets per serverless instance, and doesn't
+// coordinate across multiple warm instances under real traffic — but stops
+// a single runaway client (buggy frontend loop, or a bot hitting the API
+// directly) from burning quota alone while a shared store is pending.
+const rateLimitMap = new Map(); // userId -> array of recent request timestamps
+const RATE_LIMIT_MAX = 20;         // requests
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // per 60 seconds
+
 // ─── GLOBAL ODDS-API CACHE (in-memory, 5 min TTL) ────────────────────────────
 // This is the fix for quota exhaustion: without it, EVERY incoming scan
 // request re-fetches the-odds-api fresh, so usage scales 1:1 with traffic.
@@ -530,6 +540,21 @@ export default async function handler(req, res) {
   }
   if (!plan.isPremium && !FREE_SPORTS.includes(sport)) {
     return res.status(402).json({ error: 'premium_required', sport });
+  }
+
+  // ── Per-user rate limiting ───────────────────────────────────────────────
+  // Owners are exempt — this guards against runaway clients/bots, not you
+  // testing repeatedly during development.
+  if (!plan.isOwner) {
+    const now_ = Date.now();
+    const userKey = plan.user.id;
+    const bucket = rateLimitMap.get(userKey) || [];
+    const recent = bucket.filter(ts => now_ - ts < RATE_LIMIT_WINDOW_MS);
+    if (recent.length >= RATE_LIMIT_MAX) {
+      return res.status(429).json({ error: 'rate_limited', retryAfterMs: RATE_LIMIT_WINDOW_MS - (now_ - recent[0]) });
+    }
+    recent.push(now_);
+    rateLimitMap.set(userKey, recent);
   }
 
   const markets = market || 'h2h,spreads,totals';
