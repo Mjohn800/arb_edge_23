@@ -5,6 +5,8 @@ import { fetch22BetOdds }       from './scrapers/22bet';
 import { fetchParipesaOdds }    from './scrapers/Paripesa';
 import { fetchMelbetOdds }      from './scrapers/melbet';
 import { fetchBetanoOddsPapi, fetch22BetOddsPapi } from '../../lib/oddspapi-wa';
+import { cacheGet, cacheSet, checkRateLimit } from '../../lib/supabaseCache';
+import { sendStructuralAlert } from '../../lib/alerts';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
@@ -40,6 +42,17 @@ const GLOBAL_REGIONS = 'eu,uk';
 // bookmaker listing. Getting real MSport GH odds would need a direct scraper
 // built from a DevTools capture of msport.com.gh, same pattern as betano.js.
 // betfair_ex_uk dropped as redundant with betfair_ex_eu (same exchange, same odds).
+//
+// 1 Oct 2026: globalOddsCache / waCache / rateLimitMap moved to a shared
+// Supabase-backed cache (lib/supabaseCache.js) so they actually coordinate
+// across Vercel's multiple warm instances under real concurrent traffic —
+// in-memory objects were each instance's own private copy, so caching and
+// rate-limiting silently stopped working as intended once traffic grew past
+// what one instance could handle alone. deadKeys stays in-memory: it's
+// checked once per the-odds-api key per request in a tight loop, and making
+// that a network round-trip would add real latency for a low-stakes
+// optimization (worst case without it: one extra wasted attempt at a key
+// that's already dead, which the key-rotation loop already tolerates).
 
 // ─── BETFOX (inline — single JSON endpoint, no scraper module needed) ────────
 // CONFIRMED via DevTools (2026-09-17):
@@ -170,12 +183,14 @@ async function fetchBetfoxOdds(sportKey) {
   }
 }
 
-// ─── WA SCRAPER CACHE (in-memory, 3 min TTL) ─────────────────────────────────
-const waCache = {};
+// ─── WA SCRAPER CACHE (shared via Supabase, 3 min TTL) ───────────────────────
 const WA_CACHE_TTL = 3 * 60 * 1000;
+function waCacheKey(sportKey) { return `waodds:${sportKey}`; }
 
 // Tracks last known health per bookmaker, persists across requests in the
-// same serverless instance (best-effort — resets on cold start).
+// same serverless instance (best-effort — resets on cold start). Not moved
+// to Supabase: it's informational/diagnostic only, never used for a
+// correctness decision, so a per-instance approximation is fine.
 const waHealth = {
   sportybet:  { ok: null, reason: null, fetchedAt: null },
   betano:     { ok: null, reason: null, fetchedAt: null },
@@ -188,38 +203,52 @@ const waHealth = {
 
 // Tracks keys known to be exhausted/invalid on THIS warm serverless instance,
 // so we don't waste a call re-trying a dead key on every single sport request
-// within the same scan cycle. Resets on cold start.
+// within the same scan cycle. Resets on cold start. Stays in-memory on
+// purpose — see the 1 Oct 2026 note near the top of this file.
 const deadKeys = new Map(); // key -> timestamp it died
 const DEAD_KEY_TTL = 5 * 60 * 1000;
 
-// ── Per-user rate limiting ───────────────────────────────────────────────
-// Simple in-memory limiter: N requests per user per rolling window. Same
-// caveat as the caches below — resets per serverless instance, and doesn't
-// coordinate across multiple warm instances under real traffic — but stops
-// a single runaway client (buggy frontend loop, or a bot hitting the API
-// directly) from burning quota alone while a shared store is pending.
-const rateLimitMap = new Map(); // userId -> array of recent request timestamps
-const RATE_LIMIT_MAX = 20;         // requests
-const RATE_LIMIT_WINDOW_MS = 60 * 1000; // per 60 seconds
+// ── Per-user rate limiting (shared via Supabase) ─────────────────────────
+// N requests per user per rolling window, now coordinated across every
+// serverless instance instead of each one keeping its own private counter —
+// a user hitting different instances on consecutive requests (the common
+// case under real traffic) used to get a fresh limit on each one.
+// IMPORTANT: this limits requests that MISS the shared cache (the ones that spend upstream quota), not
+// every request. One scan makes one /api/odds call per selected sport (the default scan is 21, and a user
+// can select well over 100), so counting every call would lock normal users out mid-scan. Cache hits cost
+// almost nothing and are not limited. 60 uncached fetches/minute is far above a real scan's pace
+// (~20-30/min) and still stops a script that hammers the route.
+const RATE_LIMIT_MAX = 60;
+const RATE_LIMIT_WINDOW_SECONDS = 60;
+function rateLimitKey(userId) { return `ratelimit:${userId}`; }
 
-// ─── GLOBAL ODDS-API CACHE (in-memory, 5 min TTL) ────────────────────────────
+// Only these market sets are accepted. The cache key includes the market string, so letting callers pass
+// anything would let a script create unlimited distinct cache entries and burn the-odds-api quota.
+const ALLOWED_MARKETS = new Set(['h2h,spreads,totals', 'outrights', 'h2h', 'spreads', 'totals']);
+
+// If every the-odds-api key reports quota exhausted, remember that for a couple of minutes so the next
+// requests don't each loop through all keys again (the in-memory deadKeys map doesn't cross instances).
+const GLOBAL_FAIL_TTL = 2 * 60 * 1000;
+function globalFailKey(cacheKey) { return `globalfail:${cacheKey}`; }
+
+// ─── GLOBAL ODDS-API CACHE (shared via Supabase, 5 min TTL) ──────────────────
 // This is the fix for quota exhaustion: without it, EVERY incoming scan
 // request re-fetches the-odds-api fresh, so usage scales 1:1 with traffic.
 // With it, N users scanning the same sport within the same 5-minute window
-// all share ONE the-odds-api call instead of N separate ones. Best-effort —
-// resets on cold start, same caveat as waCache — but covers the common case
-// of multiple people using the app around the same time.
-const globalOddsCache = {};
+// all share ONE the-odds-api call instead of N separate ones — and now that
+// share holds across instances too, not just within one.
 const GLOBAL_CACHE_TTL = 5 * 60 * 1000;
-function globalCacheKey(sport, markets) { return `${sport}::${markets}`; }
+function globalCacheKey(sport, markets) { return `globalodds:${sport}::${markets}`; }
 
-// Single-flight: if the cache is stale and 5 requests for the SAME sport land
-// on this serverless instance within the same few hundred ms (a realistic
-// "everyone opens the site right after a community post" scenario), only the
-// FIRST one should actually loop through the-odds-api keys. The other 4 just
-// await that same in-flight promise instead of each starting their own
-// key-rotation loop — otherwise a stale-cache burst costs 5x instead of 1x,
-// even with caching in place.
+// Single-flight: if the cache is stale and several requests for the SAME
+// sport land on THIS instance within the same few hundred ms, only the first
+// actually loops through the-odds-api keys; the rest await that same promise.
+// This remains in-memory/per-instance — a true cross-instance lock would need
+// Postgres advisory locks or similar, which is more complexity than the
+// payoff here: the Supabase cache above already means only the first
+// instance to go stale pays for a fresh fetch, so the worst case under real
+// traffic is "a small number of instances each fetch once", not "every
+// request fetches independently" (the original, much worse problem).
 const inFlightGlobal = {};
 
 // Betano and 22Bet are geo/bot-blocked at ScraperAPI's free tier (see the
@@ -240,8 +269,8 @@ async function get22BetOdds(sportKey) {
 }
 
 async function getWAOdds(sportKey) {
-  const cached = waCache[sportKey];
-  if (cached && Date.now() - cached.ts < WA_CACHE_TTL) {
+  const cached = await cacheGet(waCacheKey(sportKey));
+  if (cached) {
     return { events: cached.data, health: cached.health, fromCache: true };
   }
 
@@ -291,7 +320,7 @@ async function getWAOdds(sportKey) {
     betfox: waHealth.betfox,
     // betway health is reported from the global the-odds-api result instead (see handler).
   };
-  waCache[sportKey] = { data: results, health, ts: Date.now() };
+  await cacheSet(waCacheKey(sportKey), { data: results, health }, WA_CACHE_TTL);
   return { events: results, health, fromCache: false };
 }
 
@@ -517,7 +546,7 @@ async function fetchGlobalOddsFresh(sport, markets, keys, cacheKey) {
         (ev.bookmakers || []).forEach(bm => { bm._wa = WA_BOOKS.includes(bm.key); });
       });
 
-      globalOddsCache[cacheKey] = { data: globalData, remainingRequests, usedRequests, keyIndex, ts: Date.now() };
+      await cacheSet(cacheKey, { data: globalData, remainingRequests, usedRequests, keyIndex }, GLOBAL_CACHE_TTL);
       break; // got data, stop trying keys
     } catch (err) {
       lastError = err.message;
@@ -530,157 +559,181 @@ async function fetchGlobalOddsFresh(sport, markets, keys, cacheKey) {
 
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
-  const { sport, region, market } = req.query;
+  try {
+    const { sport, region, market } = req.query;
 
-  // -- PAYWALL: must be logged in; free users only get FREE_SPORTS ----------
-  const plan = await getUserPlan(req);
-  if (!plan.user) return res.status(401).json({ error: 'login_required' });
-  if (!plan.isOwner && !SCANNED_SPORTS.includes(sport)) {
-    return res.status(403).json({ error: 'sport_not_available', sport });
-  }
-  if (!plan.isPremium && !FREE_SPORTS.includes(sport)) {
-    return res.status(402).json({ error: 'premium_required', sport });
-  }
-
-  // ── Per-user rate limiting ───────────────────────────────────────────────
-  // Owners are exempt — this guards against runaway clients/bots, not you
-  // testing repeatedly during development.
-  if (!plan.isOwner) {
-    const now_ = Date.now();
-    const userKey = plan.user.id;
-    const bucket = rateLimitMap.get(userKey) || [];
-    const recent = bucket.filter(ts => now_ - ts < RATE_LIMIT_WINDOW_MS);
-    if (recent.length >= RATE_LIMIT_MAX) {
-      return res.status(429).json({ error: 'rate_limited', retryAfterMs: RATE_LIMIT_WINDOW_MS - (now_ - recent[0]) });
+    // -- PAYWALL: must be logged in; free users only get FREE_SPORTS ----------
+    const plan = await getUserPlan(req);
+    if (!plan.user) return res.status(401).json({ error: 'login_required' });
+    if (!plan.isOwner && !SCANNED_SPORTS.includes(sport)) {
+      return res.status(403).json({ error: 'sport_not_available', sport });
     }
-    recent.push(now_);
-    rateLimitMap.set(userKey, recent);
-  }
+    if (!plan.isPremium && !FREE_SPORTS.includes(sport)) {
+      return res.status(402).json({ error: 'premium_required', sport });
+    }
 
-  const markets = market || 'h2h,spreads,totals';
+    const markets = ALLOWED_MARKETS.has(market) ? market : 'h2h,spreads,totals';
 
-  // ── Multi-key rotation (your existing logic, unchanged) ───────────────────
-  const keys = [
-    process.env.ODDS_API_KEY,
-    process.env.ODDS_API_KEY_2,
-    process.env.ODDS_API_KEY_3,
-    process.env.ODDS_API_KEY_4,
-    process.env.ODDS_API_KEY_5,
-    process.env.ODDS_API_KEY_6,
-    process.env.ODDS_API_KEY_8,
-  ].filter(Boolean);
+    // ── Multi-key rotation (your existing logic, unchanged) ───────────────────
+    const keys = [
+      process.env.ODDS_API_KEY,
+      process.env.ODDS_API_KEY_2,
+      process.env.ODDS_API_KEY_3,
+      process.env.ODDS_API_KEY_4,
+      process.env.ODDS_API_KEY_5,
+      process.env.ODDS_API_KEY_6,
+      process.env.ODDS_API_KEY_8,
+    ].filter(Boolean);
 
-  console.log('[odds] keys loaded:', keys.map((k, i) => `KEY_${i+1}=${k ? k.slice(0,8)+'...' : 'MISSING'}`));
-  console.log('[odds] requesting sport:', sport, 'regions:', GLOBAL_REGIONS, 'markets:', markets);
+    console.log('[odds] keys loaded:', keys.map((k, i) => `KEY_${i+1}=${k ? k.slice(0,8)+'...' : 'MISSING'}`));
+    console.log('[odds] requesting sport:', sport, 'regions:', GLOBAL_REGIONS, 'markets:', markets);
 
-  let lastError = null;
-  let lastErrorDetail = null;
-  let globalData = null;
-  let remainingRequests = null;
-  let usedRequests = null;
-  let keyIndex = null;
-  let globalFromCache = false;
+    let lastError = null;
+    let lastErrorDetail = null;
+    let globalData = null;
+    let remainingRequests = null;
+    let usedRequests = null;
+    let keyIndex = null;
+    let globalFromCache = false;
 
-  // ── 0. Serve from cache if a recent fetch for this exact sport+markets exists ──
-  const cacheKey = globalCacheKey(sport, markets);
-  const cachedGlobal = globalOddsCache[cacheKey];
-  if (cachedGlobal && Date.now() - cachedGlobal.ts < GLOBAL_CACHE_TTL) {
-    globalData = cachedGlobal.data;
-    remainingRequests = cachedGlobal.remainingRequests;
-    usedRequests = cachedGlobal.usedRequests;
-    keyIndex = cachedGlobal.keyIndex;
-    globalFromCache = true;
-    console.log('[odds] serving', sport, 'from cache, age:', Math.round((Date.now() - cachedGlobal.ts) / 1000) + 's');
-  } else {
-    // ── 1. Cache miss: join an in-flight fetch for this sport if one's already
-    // running (another request beat us here by milliseconds), else start one. ──
-    if (inFlightGlobal[cacheKey]) {
-      console.log('[odds] joining in-flight fetch already running for', sport);
+    // ── 0. Serve from cache if a recent fetch for this exact sport+markets exists ──
+    const cacheKey = globalCacheKey(sport, markets);
+    const cachedGlobal = await cacheGet(cacheKey);
+    if (cachedGlobal) {
+      globalData = cachedGlobal.data;
+      remainingRequests = cachedGlobal.remainingRequests;
+      usedRequests = cachedGlobal.usedRequests;
+      keyIndex = cachedGlobal.keyIndex;
+      globalFromCache = true;
+      console.log('[odds] serving', sport, 'from shared cache');
     } else {
-      inFlightGlobal[cacheKey] = fetchGlobalOddsFresh(sport, markets, keys, cacheKey)
-        .finally(() => { delete inFlightGlobal[cacheKey]; });
+      // ── Per-user rate limit, applied only here: this request is about to spend upstream quota.
+      // Owners are exempt. Atomic (one SQL statement) and fails open if Supabase is unavailable. ──
+      if (!plan.isOwner) {
+        const rl = await checkRateLimit(rateLimitKey(plan.user.id), RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_SECONDS);
+        if (!rl.allowed) {
+          return res.status(429).json({ error: 'rate_limited', retryAfterMs: rl.retryAfterSeconds * 1000 });
+        }
+      }
+
+      // ── 1. Cache miss. If every key was found exhausted moments ago (by any instance), don't loop
+      // through them all again. Otherwise join an in-flight fetch for this sport on THIS instance, or
+      // start one. ──
+      const recentFail = await cacheGet(globalFailKey(cacheKey));
+      if (recentFail) {
+        lastError = recentFail.lastError;
+        lastErrorDetail = recentFail.lastErrorDetail;
+        console.log('[odds] skipping upstream for', sport, '- all keys recently exhausted');
+      } else {
+        if (inFlightGlobal[cacheKey]) {
+          console.log('[odds] joining in-flight fetch already running for', sport);
+        } else {
+          inFlightGlobal[cacheKey] = fetchGlobalOddsFresh(sport, markets, keys, cacheKey)
+            .finally(() => { delete inFlightGlobal[cacheKey]; });
+        }
+        const result = await inFlightGlobal[cacheKey];
+        globalData = result.globalData;
+        remainingRequests = result.remainingRequests;
+        usedRequests = result.usedRequests;
+        keyIndex = result.keyIndex;
+        lastError = result.lastError;
+        lastErrorDetail = result.lastErrorDetail;
+
+        if (!globalData && lastError === 'quota') {
+          await cacheSet(globalFailKey(cacheKey), { lastError, lastErrorDetail }, GLOBAL_FAIL_TTL);
+          // Tell the owner once (alerts.js applies a cooldown): this is the monthly-quota situation.
+          await sendStructuralAlert('the-odds-api: every key is out of quota', `sport=${sport}. Global odds are unavailable until the quota resets or a new key is added.`);
+        }
+      }
     }
-    const result = await inFlightGlobal[cacheKey];
-    globalData = result.globalData;
-    remainingRequests = result.remainingRequests;
-    usedRequests = result.usedRequests;
-    keyIndex = result.keyIndex;
-    lastError = result.lastError;
-    lastErrorDetail = result.lastErrorDetail;
-  }
 
-  // ── 2. WA scrapers run regardless of whether global API succeeded ─────────
-  const waResult = sport ? await getWAOdds(sport) : { events: [], health: waHealth, fromCache: false };
-  const waEvents = waResult.events;
-  const waBookHealth = waResult.health;
+    // ── 2. WA scrapers run regardless of whether global API succeeded ─────────
+    const waResult = sport ? await getWAOdds(sport) : { events: [], health: waHealth, fromCache: false };
+    const waEvents = waResult.events;
+    const waBookHealth = waResult.health;
 
-  // betway health is no longer a separate WA fetch — derive it from whether
-  // the global the-odds-api result actually carried a 'betway' bookmaker.
-  waBookHealth.betway = (globalData || []).some(ev => (ev.bookmakers || []).some(bm => bm.key === 'betway'))
-    ? { ok: true, reason: null, fetchedAt: new Date().toISOString() }
-    : { ok: false, reason: globalData ? 'not_in_global_feed_for_this_sport' : (lastError || 'global_fetch_failed'), fetchedAt: new Date().toISOString() };
+    // betway health is no longer a separate WA fetch — derive it from whether
+    // the global the-odds-api result actually carried a 'betway' bookmaker.
+    waBookHealth.betway = (globalData || []).some(ev => (ev.bookmakers || []).some(bm => bm.key === 'betway'))
+      ? { ok: true, reason: null, fetchedAt: new Date().toISOString() }
+      : { ok: false, reason: globalData ? 'not_in_global_feed_for_this_sport' : (lastError || 'global_fetch_failed'), fetchedAt: new Date().toISOString() };
 
-  // ── 3. If global failed entirely, fall through to WA-only response ────────
-  if (!globalData && waEvents.length === 0) {
-    console.log('[odds] all keys failed, lastError:', lastError, 'detail:', JSON.stringify(lastErrorDetail));
-    return res.status(429).json({
-      error: 'All API keys exhausted. ' + lastError,
-      detail: lastErrorDetail,
-      sport, region, markets,
-      waBookHealth,
+    // ── 3. If global failed entirely, fall through to WA-only response ────────
+    if (!globalData && waEvents.length === 0) {
+      console.log('[odds] all keys failed, lastError:', lastError, 'detail:', JSON.stringify(lastErrorDetail));
+      // Structural alert: every single odds source — global AND every WA book —
+      // came back empty for a live user request. This is categorically
+      // different from one bookmaker being down; it means a real user is
+      // seeing a completely dead scan.
+      await sendStructuralAlert(
+        'All odds sources down for a live request',
+        `sport=${sport} lastError=${lastError} detail=${JSON.stringify(lastErrorDetail)}`
+      );
+      return res.status(429).json({
+        error: 'All API keys exhausted. ' + lastError,
+        detail: lastErrorDetail,
+        sport, region, markets,
+        waBookHealth,
+      });
+    }
+
+    // ── 4. Merge global + WA events ───────────────────────────────────────────
+    const merged = mergeEvents(globalData || [], waEvents);
+
+    // ── 5. Annotate each event with region flags ──────────────────────────────
+    merged.forEach(ev => {
+      const books = ev.bookmakers || [];
+      ev._hasGlobal = books.some(b => !b._wa);
+      ev._hasWA     = books.some(b =>  b._wa);
     });
+
+    console.log('[odds][merge]', sport, '-> globalEvents:', (globalData || []).length, '| waEvents in:', waEvents.length,
+      '| merged total:', merged.length, '| merged events carrying a WA book:', merged.filter(ev => ev._hasWA).length);
+
+    // ── 6. Respond ────────────────────────────────────────────────────────────
+    // ── Detect user region from Vercel's geo header ───────────────────────────
+    // x-vercel-ip-country is a 2-letter ISO code injected by Vercel on every request.
+    // WA countries: Ghana (GH), Nigeria (NG), Senegal (SN), Ivory Coast (CI),
+    // Cameroon (CM), Kenya (KE), Tanzania (TZ), Uganda (UG), Rwanda (RW), Zambia (ZM),
+    // Ethiopia (ET), Mozambique (MZ), Sierra Leone (SL), Liberia (LR), Gambia (GM).
+    const WA_COUNTRIES = new Set(['GH','NG','SN','CI','CM','KE','TZ','UG','RW','ZM','ET','MZ','SL','LR','GM','BJ','BF','ML','NE','GN','TG','MR','MW','ZW','AO','CD','CG','GA','TD','BI','DJ','ER','SO','SD','SS']);
+    const userCountry = req.headers['x-vercel-ip-country'] || 'unknown';
+    const isWAUser = WA_COUNTRIES.has(userCountry);
+
+    // Books accessible to this user based on their detected region.
+    // WA users: sportybet, betano, 1xbet, melbet, betway + new WA books
+    // Global users: all books accessible (Betfair, Pinnacle, Bet365, William Hill etc.)
+    const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','melbet','sportybet','betano','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag'];
+    const WA_ACCESSIBLE     = ['1xbet','melbet','betway','sportybet','betano','22bet','paripesa','betwinner','betking','bet9ja','1win','premierbet','betfox'];
+    const userAccessibleBooks = isWAUser ? WA_ACCESSIBLE : GLOBAL_ACCESSIBLE;
+
+    return res.status(200).json({
+      data: merged,
+      remainingRequests,
+      usedRequests,
+      keyIndex,
+      globalFromCache,
+      waBookHealth,
+      userCountry,
+      isWAUser,
+      userAccessibleBooks,
+      meta: {
+        sport,
+        totalEvents:  merged.length,
+        globalEvents: (globalData || []).length,
+        waEvents:     waEvents.length,
+        sharpBooksGlobal: SHARP_BOOKS_GLOBAL,
+        sharpBooksWA:     SHARP_BOOKS_WESTAFRICA,
+        waBooks:          WA_BOOKS,
+      },
+    });
+  } catch (err) {
+    // Structural alert: an uncaught exception means a real bug, not just a
+    // flaky upstream source — these should never happen silently.
+    console.error('[odds] UNCAUGHT EXCEPTION:', err);
+    await sendStructuralAlert('Uncaught exception in /api/odds', err.stack || err.message);
+    return res.status(500).json({ error: 'internal_error' });
   }
-
-  // ── 4. Merge global + WA events ───────────────────────────────────────────
-  const merged = mergeEvents(globalData || [], waEvents);
-
-  // ── 5. Annotate each event with region flags ──────────────────────────────
-  merged.forEach(ev => {
-    const books = ev.bookmakers || [];
-    ev._hasGlobal = books.some(b => !b._wa);
-    ev._hasWA     = books.some(b =>  b._wa);
-  });
-
-  console.log('[odds][merge]', sport, '-> globalEvents:', (globalData || []).length, '| waEvents in:', waEvents.length,
-    '| merged total:', merged.length, '| merged events carrying a WA book:', merged.filter(ev => ev._hasWA).length);
-
-  // ── 6. Respond ────────────────────────────────────────────────────────────
-  // ── Detect user region from Vercel's geo header ───────────────────────────
-  // x-vercel-ip-country is a 2-letter ISO code injected by Vercel on every request.
-  // WA countries: Ghana (GH), Nigeria (NG), Senegal (SN), Ivory Coast (CI),
-  // Cameroon (CM), Kenya (KE), Tanzania (TZ), Uganda (UG), Rwanda (RW), Zambia (ZM),
-  // Ethiopia (ET), Mozambique (MZ), Sierra Leone (SL), Liberia (LR), Gambia (GM).
-  const WA_COUNTRIES = new Set(['GH','NG','SN','CI','CM','KE','TZ','UG','RW','ZM','ET','MZ','SL','LR','GM','BJ','BF','ML','NE','GN','TG','MR','MW','ZW','AO','CD','CG','GA','TD','BI','DJ','ER','SO','SD','SS']);
-  const userCountry = req.headers['x-vercel-ip-country'] || 'unknown';
-  const isWAUser = WA_COUNTRIES.has(userCountry);
-
-  // Books accessible to this user based on their detected region.
-  // WA users: sportybet, betano, 1xbet, melbet, betway + new WA books
-  // Global users: all books accessible (Betfair, Pinnacle, Bet365, William Hill etc.)
-  const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','melbet','sportybet','betano','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag'];
-  const WA_ACCESSIBLE     = ['1xbet','melbet','betway','sportybet','betano','22bet','paripesa','betwinner','betking','bet9ja','1win','premierbet','betfox'];
-  const userAccessibleBooks = isWAUser ? WA_ACCESSIBLE : GLOBAL_ACCESSIBLE;
-
-  return res.status(200).json({
-    data: merged,
-    remainingRequests,
-    usedRequests,
-    keyIndex,
-    globalFromCache,
-    waBookHealth,
-    userCountry,
-    isWAUser,
-    userAccessibleBooks,
-    meta: {
-      sport,
-      totalEvents:  merged.length,
-      globalEvents: (globalData || []).length,
-      waEvents:     waEvents.length,
-      sharpBooksGlobal: SHARP_BOOKS_GLOBAL,
-      sharpBooksWA:     SHARP_BOOKS_WESTAFRICA,
-      waBooks:          WA_BOOKS,
-    },
-  });
 }
 
 export { getWAOdds, waHealth };
