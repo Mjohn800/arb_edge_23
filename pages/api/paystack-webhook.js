@@ -6,7 +6,9 @@ import {
   findSubscription,
   upsertSubscription,
   recordPayment,
+  deletePayment,
 } from '../../lib/serverAuth';
+import { notifyOwner } from '../../lib/alerts';
 
 // We need the RAW body to verify Paystack's signature, so turn off body parsing.
 export const config = { api: { bodyParser: false } };
@@ -80,21 +82,36 @@ export default async function handler(req, res) {
       });
       if (!isNew) return res.status(200).end(); // duplicate webhook, already handled
 
-      const now = Date.now();
-      const currentEnd = existing ? new Date(existing.current_period_end).getTime() : 0;
-      const base = Math.max(now, currentEnd);
-      const newEnd = new Date(base + PERIOD_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      try {
+        const now = Date.now();
+        const currentEnd = existing ? new Date(existing.current_period_end).getTime() : 0;
+        const base = Math.max(now, currentEnd);
+        const newEnd = new Date(base + PERIOD_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-      await upsertSubscription({
-        user_id: userId,
-        email: email || (existing && existing.email) || null,
-        plan: 'premium',
-        status: 'active',
-        current_period_end: newEnd,
-        paystack_customer_code: customerCode || (existing && existing.paystack_customer_code) || null,
-        last_reference: d.reference,
-        auto_renew: d.plan && d.plan.plan_code ? true : !!(existing && existing.auto_renew),
-      });
+        await upsertSubscription({
+          user_id: userId,
+          email: email || (existing && existing.email) || null,
+          plan: 'premium',
+          status: 'active',
+          current_period_end: newEnd,
+          paystack_customer_code: customerCode || (existing && existing.paystack_customer_code) || null,
+          last_reference: d.reference,
+          auto_renew: d.plan && d.plan.plan_code ? true : !!(existing && existing.auto_renew),
+        });
+      } catch (err) {
+        // Saving failed AFTER the payment was recorded. Release the reference so Paystack's
+        // retry is not treated as a duplicate (which would leave the customer paid but not Premium).
+        try {
+          await deletePayment(d.reference);
+        } catch (e) {
+          console.error('[paystack] could not release reference', d.reference, e.message);
+          await notifyOwner(
+            'webhook_release_failed_' + d.reference,
+            `🚨 Paystack payment ${d.reference} (user ${userId}) was charged but Premium was NOT saved, and the retry lock could not be released. Grant Premium manually.`
+          );
+        }
+        throw err; // outer catch returns 500 so Paystack retries
+      }
     } else if (
       event.event === 'subscription.create' ||
       event.event === 'subscription.disable' ||
