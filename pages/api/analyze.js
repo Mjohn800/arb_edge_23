@@ -1,4 +1,6 @@
 import { LEAGUE_IDS, defaultSeason, normaliseTeamName, fetchLeagueForm } from '../../lib/teamForm';
+import { getUserPlan } from '../../lib/serverAuth';
+import { checkRateLimit } from '../../lib/supabaseCache';
 
 // ─── HOW THIS ANALYZER WORKS (rewritten 28 Sep 2026) ─────────────────────────
 // Everything a bettor should be able to trust is computed IN CODE from real data:
@@ -19,32 +21,35 @@ import { LEAGUE_IDS, defaultSeason, normaliseTeamName, fetchLeagueForm } from '.
 
 const REAL_FORM_DATA_ENABLED = process.env.ENABLE_REAL_FORM_DATA === 'true';
 
-// ─── RATE LIMITING (in-memory, per-IP, 5 requests / 10 min) ─────────────────
-const rateLimitLog = {};
-const RATE_LIMIT_WINDOW = 10 * 60 * 1000;
-const RATE_LIMIT_MAX = 5;
+// ─── ACCESS + RATE LIMITING ──────────────────────────────────────────────────
+// Premium only (the app tells free users AI analysis is a Premium feature). Per-user limit,
+// shared across every serverless instance via Supabase (lib/supabaseCache.js). It is applied
+// only to requests that miss the response cache, since those are the ones that spend Groq /
+// football-data quota. Owners are exempt.
+const ANALYZE_LIMIT_MAX = 20;
+const ANALYZE_LIMIT_WINDOW_SECONDS = 10 * 60;
 
-function getClientIp(req) {
-  const fwd = req.headers['x-forwarded-for'];
-  if (fwd) return fwd.split(',')[0].trim();
-  return req.socket?.remoteAddress || 'unknown';
-}
+// Bounds on what the client may send. Everything below is trusted-by-shape only: the client
+// supplies the prices, so we cap sizes and keep only the fields we use, which also keeps the
+// text that reaches the AI prompt short and the cache key small.
+const MAX_MATCH_LEN = 120, MAX_LABEL_LEN = 80, MAX_BOOK_LEN = 40, MAX_OUTCOMES = 6;
+const cleanStr = (v, max) => String(v == null ? '' : v).replace(/[\r\n\t]+/g, ' ').slice(0, max);
+const cleanNum = v => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 
-function checkRateLimit(ip) {
-  const now = Date.now();
-  const hits = (rateLimitLog[ip] || []).filter(t => now - t < RATE_LIMIT_WINDOW);
-  if (hits.length >= RATE_LIMIT_MAX) {
-    const retryAfterMs = RATE_LIMIT_WINDOW - (now - hits[0]);
-    return { allowed: false, retryAfterSeconds: Math.ceil(retryAfterMs / 1000) };
-  }
-  hits.push(now);
-  rateLimitLog[ip] = hits;
-  return { allowed: true };
+function sanitizeOutcomes(outcomes) {
+  return outcomes.slice(0, MAX_OUTCOMES).map(o => ({
+    label: cleanStr(o && o.label, MAX_LABEL_LEN),
+    odds: cleanNum(o && o.odds),
+    bookName: cleanStr(o && o.bookName, MAX_BOOK_LEN),
+    medianOdds: cleanNum(o && o.medianOdds),
+    bookCount: cleanNum(o && o.bookCount),
+  }));
 }
 
 // ─── RESPONSE CACHE (in-memory, 15 min TTL) ──────────────────────────────────
 const analysisCache = {};
 const ANALYSIS_CACHE_TTL = 15 * 60 * 1000;
+const ANALYSIS_CACHE_MAX = 500; // cap so the cache cannot grow without limit
 
 function analysisCacheKey(match, sportKey, marketType, outcomes) {
   const oddsKey = (outcomes || [])
@@ -482,39 +487,51 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { match, sport, sportKey: sportKeyIn, outcomes, margin, marketType, oddsAvailable } = req.body || {};
+  // -- ACCESS: must be logged in and Premium (owners always pass) ----------
+  const plan = await getUserPlan(req);
+  if (!plan.user) return res.status(401).json({ error: 'login_required' });
+  if (!plan.isPremium) {
+    return res.status(402).json({ error: 'premium_required', message: 'AI analysis is a Premium feature. Upgrade to use it.' });
+  }
 
-  if (!match || typeof match !== 'string') {
+  const body = req.body || {};
+  const { match, sport, sportKey: sportKeyIn, margin, marketType, oddsAvailable } = body;
+
+  if (!match || typeof match !== 'string' || match.length > MAX_MATCH_LEN) {
     return res.status(400).json({ error: 'Missing or invalid "match"' });
   }
-  if (!sport || typeof sport !== 'string') {
+  if (!sport || typeof sport !== 'string' || sport.length > 60) {
     return res.status(400).json({ error: 'Missing or invalid "sport"' });
   }
-  if (!Array.isArray(outcomes) || outcomes.length === 0) {
-    return res.status(400).json({ error: 'Missing or invalid "outcomes": expected a non-empty array' });
+  if (!Array.isArray(body.outcomes) || body.outcomes.length === 0 || body.outcomes.length > MAX_OUTCOMES) {
+    return res.status(400).json({ error: 'Missing or invalid "outcomes": expected 1-' + MAX_OUTCOMES + ' items' });
   }
-
-  const ip = getClientIp(req);
-  const rl = checkRateLimit(ip);
-  if (!rl.allowed) {
-    return res.status(429).json({
-      error: `Too many analysis requests. Please wait ${rl.retryAfterSeconds}s and try again.`,
-      retryAfterSeconds: rl.retryAfterSeconds,
-    });
-  }
+  const outcomes = sanitizeOutcomes(body.outcomes);
+  const marketTypeClean = marketType == null ? undefined : cleanStr(marketType, 40);
 
   // The client sends the real sport key as sportKey. Older callers only sent `sport`
   // (a display label), which never matched a league key, so form data silently failed.
-  const sportKey = typeof sportKeyIn === 'string' && sportKeyIn ? sportKeyIn : sport;
+  const sportKey = typeof sportKeyIn === 'string' && sportKeyIn ? cleanStr(sportKeyIn, 60) : sport;
 
-  const cacheKey = analysisCacheKey(match, sportKey, marketType, outcomes);
+  // Cache hits cost nothing, so serve them before applying the rate limit.
+  const cacheKey = analysisCacheKey(match, sportKey, marketTypeClean, outcomes);
   const cached = analysisCache[cacheKey];
   if (cached && Date.now() - cached.ts < ANALYSIS_CACHE_TTL) {
     console.log('[analyze] serving', match, 'from cache, age:', Math.round((Date.now() - cached.ts) / 1000) + 's');
     return res.status(200).json(cached.data);
   }
 
-  const view = oddsAvailable === false ? null : buildMarketView(outcomes, sportKey, marketType);
+  if (!plan.isOwner) {
+    const rl = await checkRateLimit('analyze:' + plan.user.id, ANALYZE_LIMIT_MAX, ANALYZE_LIMIT_WINDOW_SECONDS);
+    if (!rl.allowed) {
+      return res.status(429).json({
+        error: `Too many analysis requests. Please wait ${rl.retryAfterSeconds}s and try again.`,
+        retryAfterSeconds: rl.retryAfterSeconds,
+      });
+    }
+  }
+
+  const view = oddsAvailable === false ? null : buildMarketView(outcomes, sportKey, marketTypeClean);
   const realData = await buildRealMatchData(sportKey, match);
   const dataQuality = assessDataQuality(realData, view);
 
@@ -544,9 +561,9 @@ export default async function handler(req, res) {
     result.noPriceNote = 'No price data for this match: form and context only.';
   }
 
-  const prompt = `Match: ${match}
-Sport: ${sport}
-Market: ${marketType || 'Match Winner'}
+  const prompt = `Match: ${cleanStr(match, MAX_MATCH_LEN)}
+Sport: ${cleanStr(sport, 60)}
+Market: ${marketTypeClean || 'Match Winner'}
 
 PRICE FACTS (computed, exact):
 ${describeMarketView(view)}
@@ -587,7 +604,14 @@ Reply with exactly this JSON and nothing else:
   }
 
   // Only cache full AI results, so a Groq outage doesn't pin the plain fallback for 15 minutes.
-  if (llmOk) analysisCache[cacheKey] = { data: result, ts: Date.now() };
+  if (llmOk) {
+    const keys = Object.keys(analysisCache);
+    if (keys.length >= ANALYSIS_CACHE_MAX) {
+      const oldest = keys.reduce((a, b) => (analysisCache[a].ts <= analysisCache[b].ts ? a : b));
+      delete analysisCache[oldest];
+    }
+    analysisCache[cacheKey] = { data: result, ts: Date.now() };
+  }
 
   return res.status(200).json(result);
 }
