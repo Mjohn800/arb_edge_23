@@ -69,11 +69,16 @@ const HEADERS = {
   'Origin': 'https://22bet.com.gh',
   'Referer': 'https://22bet.com.gh/',
   'X-Requested-With': 'XMLHttpRequest',
-  // Session cookies — ubc-code is a persistent device ID, sid is a session token.
-  // If odds stop appearing, refresh these by visiting 22bet.com.gh in a browser
-  // and copying the Cookie header from a network request (DevTools → Network → Headers).
-  'Cookie': 'ubc-code=f37e211c-d4a8-490a-825c-64a9042763db; sid=80ad0e3d8021f22e77cb534252ffcbd',
 };
+
+// Guest session cookie, supplied through the TWENTYTWOBET_COOKIE env var (Vercel) so no session
+// value lives in the source code or git history. It is the Cookie request header copied from a
+// LOGGED-OUT browser visit to 22bet.com.gh (looks like "ubc-code=...; sid=..."). If odds stop
+// appearing, refresh it: DevTools -> Network -> any request to platform.22bet.com.gh -> copy the
+// Cookie header, update the env var, redeploy. If the variable is not set, no cookie is sent.
+if (process.env.TWENTYTWOBET_COOKIE) {
+  HEADERS['Cookie'] = process.env.TWENTYTWOBET_COOKIE.trim();
+}
 
 // Outcome type IDs for 1X2 market
 const TYPE_HOME = 1;
