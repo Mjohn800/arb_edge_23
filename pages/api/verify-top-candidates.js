@@ -29,6 +29,7 @@
 // legs are marked "uncheckable" rather than silently trusted or silently
 // dropped.
 import { getUserPlan } from '../../lib/serverAuth';
+import { checkRateLimit } from '../../lib/supabaseCache';
 import { fetch22BetEventDetail, normalise22BetEvent } from './scrapers/22bet';
 
 const LIVE_VERIFIABLE_BOOKS = new Set(['22bet']);
@@ -49,6 +50,49 @@ const MAX_LEGS_PER_REQUEST = 10;
 // best few candidates checked.
 const HIGH_MARGIN_REVIEW = 5;
 const TOP_N = 3;
+
+// ─── ACCESS / INPUT LIMITS ───────────────────────────────────────────────────
+// Premium only, per-user rate limit shared across instances (Supabase). Every candidate leg the
+// route fetches live is a real request to 22bet (sometimes via a paid ScraperAPI proxy).
+const VERIFY_LIMIT_MAX = 30;
+const VERIFY_LIMIT_WINDOW_SECONDS = 10 * 60;
+// The client sends every arb a scan found. Keep only the highest-margin ones so a huge request
+// body cannot turn into a huge amount of work (only ~10 legs are fetched live anyway).
+const MAX_CANDIDATES = 300;
+const MAX_LEGS_PER_CANDIDATE = 4;
+
+const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : null);
+
+// 22bet event ids are plain numbers. fixtureRef goes straight into the request URL, so anything
+// that is not digits is rejected: it could otherwise inject extra query parameters.
+const isNumericFixtureRef = ref => /^\d{1,15}$/.test(String(ref == null ? '' : ref));
+
+// Keeps only the fields this route uses, and only well-formed candidates.
+function sanitizeCandidates(raw) {
+  const out = [];
+  for (const c of raw) {
+    if (!c || typeof c !== 'object') continue;
+    const id = str(c.id, 120), sport = str(c.sport, 60);
+    if (!id || !sport || typeof c.margin !== 'number' || !Number.isFinite(c.margin)) continue;
+    if (!Array.isArray(c.outcomes) || c.outcomes.length < 2 || c.outcomes.length > MAX_LEGS_PER_CANDIDATE) continue;
+    const outcomes = [];
+    for (const o of c.outcomes) {
+      const book = o && str(o.book, 40);
+      if (!book || typeof o.odds !== 'number' || !Number.isFinite(o.odds) || o.odds <= 1) break;
+      outcomes.push({
+        book,
+        bookName: str(o.bookName, 40) || book,
+        fixtureRef: o.fixtureRef == null ? null : String(o.fixtureRef).slice(0, 40),
+        marketKey: str(o.marketKey, 20) || '',
+        side: str(o.side, 60) || '',
+        odds: o.odds,
+      });
+    }
+    if (outcomes.length !== c.outcomes.length) continue;
+    out.push({ id, sport, margin: c.margin, outcomes });
+  }
+  return out.sort((a, b) => b.margin - a.margin).slice(0, MAX_CANDIDATES);
+}
 
 function pickCandidatesToVerify(candidates) {
   const sorted = [...candidates].sort((a, b) => b.margin - a.margin);
@@ -81,6 +125,9 @@ async function verifyLeg(leg) {
   if (!leg.fixtureRef) {
     return { checked: false, reason: 'no fixture id captured for this leg (scanned before the fixtureRef fix, or this book path doesn\'t attach one)' };
   }
+  if (!isNumericFixtureRef(leg.fixtureRef)) {
+    return { checked: false, reason: 'fixture id is not a valid 22bet event id' };
+  }
   const raw = await fetch22BetEventDetail(leg.fixtureRef);
   if (!raw) return { checked: true, vanished: true, reason: '22bet event not found on re-fetch — likely suspended, settled, or removed' };
 
@@ -99,11 +146,22 @@ export default async function handler(req, res) {
 
   const plan = await getUserPlan(req);
   if (!plan.user) return res.status(401).json({ error: 'login_required' });
+  if (!plan.isPremium) return res.status(402).json({ error: 'premium_required' });
 
-  const { candidates } = req.body || {};
-  if (!Array.isArray(candidates) || candidates.length === 0) {
+  const rawCandidates = (req.body || {}).candidates;
+  if (!Array.isArray(rawCandidates) || rawCandidates.length === 0) {
     return res.status(400).json({ error: 'candidates array required' });
   }
+
+  if (!plan.isOwner) {
+    const rl = await checkRateLimit('verifytop:' + plan.user.id, VERIFY_LIMIT_MAX, VERIFY_LIMIT_WINDOW_SECONDS);
+    if (!rl.allowed) {
+      return res.status(429).json({ error: 'rate_limited', retryAfterSeconds: rl.retryAfterSeconds });
+    }
+  }
+
+  const candidates = sanitizeCandidates(rawCandidates);
+  if (candidates.length === 0) return res.status(400).json({ error: 'no valid candidates' });
 
   const toCheck = pickCandidatesToVerify(candidates);
 
@@ -129,16 +187,16 @@ export default async function handler(req, res) {
   const resolvedEntries = await Promise.all([...legJobs.entries()].map(async ([k, p]) => [k, await p]));
   const legResults = new Map(resolvedEntries);
 
-  const results = toCheck.map(arb => {
+  const results = [];
+  for (const arb of toCheck) {
     let impliedFromFresh = 0;
     let vanished = false;
     const legReports = (arb.outcomes || []).map(leg => {
-      const key = dedupeKeyOf(leg);
-      const v = legResults.get(key);
+      const v = legResults.get(dedupeKeyOf(leg));
       if (!v) {
-        // not in our budget/dedupe set at all — either unverifiable book, or budget-capped
+        // unverifiable book, or over the per-request budget
         impliedFromFresh += 1 / leg.odds;
-        return { ...leg, checked: false, reason: (v && v.reason) || 'not checked (unverifiable book or over per-request budget)' };
+        return { ...leg, checked: false, reason: 'not checked (unverifiable book or over per-request budget)' };
       }
       if (!v.checked) { impliedFromFresh += 1 / leg.odds; return { ...leg, checked: false, reason: v.reason }; }
       if (v.vanished) { vanished = true; return { ...leg, checked: true, vanished: true, reason: v.reason }; }
@@ -146,14 +204,26 @@ export default async function handler(req, res) {
       return { ...leg, checked: true, freshPrice: v.freshPrice, moved: v.moved };
     });
 
+    const legsChecked = legReports.filter(l => l.checked).length;
+    const legsTotal = legReports.length;
+
+    // Nothing was actually verified (e.g. no 22bet leg): say nothing rather than "confirmed".
+    // The client then shows the normal "not verified live" state for this arb.
+    if (legsChecked === 0) continue;
+
     if (vanished) {
-      return { id: arb.id, status: 'dropped', freshMargin: null, legs: legReports };
+      results.push({ id: arb.id, status: 'dropped', freshMargin: null, legsChecked, legsTotal, legs: legReports });
+      continue;
     }
     const freshMargin = parseFloat((((1 - impliedFromFresh) / impliedFromFresh) * 100).toFixed(2));
     const anyMoved = legReports.some(l => l.checked && l.moved);
-    const status = freshMargin < 0 ? 'dropped' : anyMoved ? 'adjusted' : 'confirmed';
-    return { id: arb.id, status, freshMargin, legs: legReports };
-  });
+    // "confirmed" only when EVERY leg was checked live; otherwise it is only partly verified.
+    const status = freshMargin < 0 ? 'dropped'
+      : anyMoved ? 'adjusted'
+      : legsChecked === legsTotal ? 'confirmed'
+      : 'partial';
+    results.push({ id: arb.id, status, freshMargin, legsChecked, legsTotal, legs: legReports });
+  }
 
   res.setHeader('Cache-Control', 'no-store');
   return res.status(200).json({ results, checkedCount: toCheck.length, totalCandidates: candidates.length });
