@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { allPlanCodes } from '../../lib/pricing';
+import { allPlanCodes, TIERS, WA_COUNTRIES } from '../../lib/pricing';
 import {
   PERIOD_DAYS,
   getSubscription,
@@ -74,6 +74,33 @@ export default async function handler(req, res) {
         return res.status(200).end();
       }
 
+      // Pricing guard: the cheap GHS tier is picked from the visitor's detected country, which a
+      // VPN can fake. The card itself cannot: Paystack reports the card's issuing country. A card
+      // from outside our African tier paying the cheap price is flagged to you on Telegram. It is
+      // still granted by default (it may be a local with a foreign card). Set
+      // PRICING_ENFORCE_CARD_COUNTRY=1 in Vercel to withhold Premium instead; you then refund
+      // the payment by hand from the Paystack dashboard.
+      {
+        const auth = d.authorization || {};
+        const cardCountry = String(auth.country_code || '').toUpperCase();
+        const paidCheapTier = isOurPlan
+          ? !!process.env.PAYSTACK_PLAN_CODE && d.plan.plan_code === process.env.PAYSTACK_PLAN_CODE
+          : d.currency === 'GHS' && Number(meta.expected_amount) === TIERS.wa.display.amount * 100;
+        const foreignCard = d.channel === 'card' && cardCountry && !WA_COUNTRIES.has(cardCountry);
+        if (paidCheapTier && foreignCard) {
+          try {
+            await notifyOwner(
+              'tier_mismatch_' + d.reference,
+              `⚠️ Cheap-tier payment with a foreign card (${cardCountry}). Ref ${d.reference}, ${email || 'no email'}. ` +
+                (process.env.PRICING_ENFORCE_CARD_COUNTRY === '1'
+                  ? 'Premium was NOT granted: refund it in Paystack.'
+                  : 'Premium was granted. Refund it if you do not want it.')
+            );
+          } catch (e) { console.error('[paystack] tier alert failed', e.message); }
+          if (process.env.PRICING_ENFORCE_CARD_COUNTRY === '1') return res.status(200).end();
+        }
+      }
+
       const isNew = await recordPayment({
         reference: d.reference,
         userId,
@@ -127,11 +154,26 @@ export default async function handler(req, res) {
           email: existing.email,
           current_period_end: existing.current_period_end, // access continues to the end
           plan: existing.plan,
-          status: stopping ? 'cancelled' : existing.status,
+          status: stopping ? 'cancelled' : 'active', // a new/renewed subscription is active again
           auto_renew: !stopping,
           paystack_subscription_code: d.subscription_code || existing.paystack_subscription_code || null,
         });
       }
+    } else if (event.event === 'refund.processed' || event.event === 'charge.dispute.create') {
+      // Not revoked automatically: a partial refund or a duplicate-charge refund should not
+      // cancel Premium. You decide; the alert has what you need to find the user in Supabase.
+      const tx = d.transaction || {};
+      const ref = d.transaction_reference || tx.reference || d.reference || 'unknown';
+      const cust = d.customer || tx.customer || {};
+      const who = (cust && cust.email) || (typeof d.customer === 'string' ? d.customer : 'unknown email');
+      const kind = event.event === 'refund.processed' ? 'Refund processed' : 'DISPUTE opened';
+      await notifyOwner(
+        'paystack_' + event.event + '_' + ref,
+        `💸 ${kind} on payment ${ref} (${who}). Review it. To remove access, set the user's current_period_end to now in the subscriptions table.`
+      );
+    } else if (event.event === 'invoice.payment_failed') {
+      // The customer keeps access until current_period_end, then simply lapses. Paystack emails them.
+      console.warn('[paystack] renewal payment failed for', d.customer && d.customer.email);
     }
   } catch (err) {
     console.error('[paystack-webhook] handler error', err);

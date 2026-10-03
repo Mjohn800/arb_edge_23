@@ -2,16 +2,19 @@ import { getUserPlan, FREE_SPORTS, SCANNED_SPORTS } from '../../lib/serverAuth';
 import { fetchSportybetOdds } from './scrapers/sportybet';
 import { fetchBetanoOdds }    from './scrapers/betano';
 import { fetch22BetOdds }       from './scrapers/22bet';
-import { fetchParipesaOdds }    from './scrapers/Paripesa';
 import { fetchMelbetOdds }      from './scrapers/melbet';
 import { fetchBetanoOddsPapi, fetch22BetOddsPapi } from '../../lib/oddspapi-wa';
 import { cacheGet, cacheSet, checkRateLimit } from '../../lib/supabaseCache';
 import { sendStructuralAlert } from '../../lib/alerts';
 
+// Let a cold scan finish: OddsPapi calls are queued ~1.2s apart and several books run per sport.
+// Max allowed depends on your Vercel plan; lower this number if the deploy complains.
+export const config = { maxDuration: 60 };
+
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
 export const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet', '1xbet']; // same Pinnacle reference as global, output filtered to WA-accessible books client-side
-export const WA_BOOKS               = ['sportybet', 'betano', '22bet', 'paripesa', 'melbet', 'betway', '1xbet', 'betfox'];
+export const WA_BOOKS               = ['sportybet', 'betano', '22bet', 'melbet', 'betway', '1xbet'];
 
 // Real Odds-API bookmaker keys we actually compare for the GLOBAL feed.
 // NOTE: We use regions= instead of bookmakers= because the bookmakers= param
@@ -54,134 +57,7 @@ const GLOBAL_REGIONS = 'eu,uk';
 // optimization (worst case without it: one extra wasted attempt at a key
 // that's already dead, which the key-rotation loop already tolerates).
 
-// ─── BETFOX (inline — single JSON endpoint, no scraper module needed) ────────
-// CONFIRMED via DevTools (2026-09-17):
-//   GET https://www.betfox.com.gh/api/client/v4/offer/competitions
-//       ?ids=sr:tournament:{id}&enriched=2&sport=Football
-//   → returns { enriched: [{ id, name, category, fixtures: [...] }], minimal: [...] }
-//   Each fixture already carries its markets + odds inline — no per-match request needed.
-//   Confirmed market types: FOOTBALL_WINNER (1X2), FOOTBALL_OVER_UNDER_GOALS (totals),
-//   FOOTBALL_BOTH_TEAMS_TO_SCORE (BTTS). Tournament IDs are the same Sportradar IDs
-//   used by the SportyBet scraper (shared feed provider).
-const BETFOX_TOURNAMENT_MAP = {
-  soccer_epl:                    'sr:tournament:17',
-  soccer_uefa_champs_league:     'sr:tournament:7',
-  soccer_spain_la_liga:          'sr:tournament:8',
-  soccer_germany_bundesliga:     'sr:tournament:35',
-  soccer_italy_serie_a:          'sr:tournament:23',
-  soccer_france_ligue_one:       'sr:tournament:34',
-  soccer_netherlands_eredivisie: 'sr:tournament:37',
-  soccer_portugal_primeira_liga: 'sr:tournament:238',
-  soccer_efl_champ:              'sr:tournament:18', // fixed key (was soccer_england_efl_champ, not a real Odds API key)
-  soccer_norway_eliteserien:     'sr:tournament:20',
-  soccer_sweden_allsvenskan:     'sr:tournament:40',
-  soccer_belgium_first_div:      'sr:tournament:38',
-  soccer_spl:                    'sr:tournament:36',
-  soccer_fifa_world_cup:         'sr:tournament:16',
-  soccer_brazil_campeonato:      'sr:tournament:325', // Brasileirao Serie A. VERIFY this ID in Betfox's network tab
-};
-
-const BETFOX_BASE = 'https://www.betfox.com.gh/api/client/v4/offer';
-// Matches the real browser capture exactly: desktop Chrome/Windows UA, and a
-// Referer that's the actual sportsbook page (not just the bare domain) —
-// Cloudflare's bot check on this site appears to care about both.
-const BETFOX_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
-function betfoxHeaders(tournamentId) {
-  return {
-    'User-Agent': BETFOX_USER_AGENT,
-    'Accept': 'application/json, text/plain, */*',
-    // Real capture: https://www.betfox.com.gh/sportsbook/football?tournament=sr:tournament:8,sr:tournament:35,...
-    'Referer': `https://www.betfox.com.gh/sportsbook/football?tournament=${encodeURIComponent(tournamentId)}`,
-    'Sec-Ch-Ua': '"Chromium";v="152", "Not?A_Brand";v="24", "Google Chrome";v="152"',
-    'Sec-Ch-Ua-Mobile': '?0',
-    'Sec-Ch-Ua-Platform': '"Windows"',
-  };
-}
-
-function normaliseBetfoxOutcome(market) {
-  const out = { h2h: [], totals: [], btts: [] };
-  for (const o of (market.outcomes || [])) {
-    const price = parseFloat(o.odds);
-    if (!price || price <= 1.0 || o.status !== 'Active') continue;
-
-    if (market.type === 'FOOTBALL_WINNER') {
-      out.h2h.push({ name: o.name, price, _value: o.value });
-    } else if (market.type === 'FOOTBALL_OVER_UNDER_GOALS') {
-      const point = parseFloat(market.properties?.boundary);
-      const side = o.value === 'OVER' ? 'Over' : o.value === 'UNDER' ? 'Under' : null;
-      if (side && !isNaN(point)) out.totals.push({ name: side, price, point });
-    } else if (market.type === 'FOOTBALL_BOTH_TEAMS_TO_SCORE') {
-      out.btts.push({ name: o.value === 'YES' ? 'Yes' : 'No', price });
-    }
-  }
-  return out;
-}
-
-function normaliseBetfoxFixture(fixture, sportKey) {
-  try {
-    const winnerMarket = (fixture.markets || []).find(m => m.type === 'FOOTBALL_WINNER');
-    if (!winnerMarket) return null;
-    const homeOutcome = winnerMarket.outcomes.find(o => o.value === 'HOME');
-    const awayOutcome = winnerMarket.outcomes.find(o => o.value === 'AWAY');
-    if (!homeOutcome || !awayOutcome) return null;
-    const homeTeam = homeOutcome.name, awayTeam = awayOutcome.name;
-
-    const markets = [];
-    let h2hAll = [], totalsAll = [], bttsAll = [];
-    for (const market of (fixture.markets || [])) {
-      const { h2h, totals, btts } = normaliseBetfoxOutcome(market);
-      h2hAll = h2hAll.concat(h2h.map(o => ({
-        name: o._value === 'HOME' ? homeTeam : o._value === 'AWAY' ? awayTeam : 'Draw',
-        price: o.price,
-      })));
-      totalsAll = totalsAll.concat(totals);
-      bttsAll = bttsAll.concat(btts);
-    }
-    if (h2hAll.length >= 2) markets.push({ key: 'h2h', outcomes: h2hAll });
-    if (totalsAll.length >= 2) markets.push({ key: 'totals', outcomes: totalsAll });
-    if (bttsAll.length >= 2) markets.push({ key: 'btts', outcomes: bttsAll });
-    if (markets.length === 0) return null;
-
-    return {
-      id: 'betfox_' + fixture.id,
-      sport_key: sportKey,
-      home_team: homeTeam,
-      away_team: awayTeam,
-      commence_time: fixture.startTime,
-      bookmakers: [{ key: 'betfox', title: 'Betfox', markets, _wa: true }],
-    };
-  } catch { return null; }
-}
-
-async function fetchBetfoxOdds(sportKey) {
-  const tournamentId = BETFOX_TOURNAMENT_MAP[sportKey];
-  if (!tournamentId) return { events: [], status: { ok: true, reason: 'unsupported_sport', fetchedAt: new Date().toISOString() } };
-
-  try {
-    const url = `${BETFOX_BASE}/competitions?ids=${encodeURIComponent(tournamentId)}&enriched=2&sport=Football`;
-    const res = await fetch(url, { headers: betfoxHeaders(tournamentId), signal: AbortSignal.timeout(8000) });
-    if (!res.ok) {
-      console.warn('[Betfox] competitions', res.status, 'for', sportKey);
-      return { events: [], status: { ok: false, reason: 'http_' + res.status, fetchedAt: new Date().toISOString() } };
-    }
-    const json = await res.json();
-    const tournaments = json?.enriched || [];
-    const fixtures = tournaments.flatMap(t => t.fixtures || []);
-
-    const now = Date.now();
-    const upcoming = fixtures.filter(f => {
-      const ms = new Date(f.startTime).getTime();
-      return !isNaN(ms) && ms > now - 3 * 60 * 60 * 1000 && f.status === 'Active';
-    });
-
-    const normalised = upcoming.map(f => normaliseBetfoxFixture(f, sportKey)).filter(Boolean);
-    console.log('[Betfox]', sportKey, '→ raw:', fixtures.length, '| upcoming:', upcoming.length, '| normalised:', normalised.length);
-    return { events: normalised, status: { ok: true, reason: null, fetchedAt: new Date().toISOString() } };
-  } catch (err) {
-    console.warn('[Betfox] error for', sportKey, err.message);
-    return { events: [], status: { ok: false, reason: err.name === 'TimeoutError' ? 'timeout' : err.message, fetchedAt: new Date().toISOString() } };
-  }
-}
+// Paripesa and Betfox were removed (2 Oct 2026): both returned HTTP 403 from Vercel and are no longer used.
 
 // ─── WA SCRAPER CACHE (shared via Supabase, 3 min TTL) ───────────────────────
 const WA_CACHE_TTL = 3 * 60 * 1000;
@@ -195,9 +71,7 @@ const waHealth = {
   sportybet:  { ok: null, reason: null, fetchedAt: null },
   betano:     { ok: null, reason: null, fetchedAt: null },
   '22bet':    { ok: null, reason: null, fetchedAt: null },
-  paripesa:   { ok: null, reason: null, fetchedAt: null },
   melbet:     { ok: null, reason: null, fetchedAt: null },
-  betfox:     { ok: null, reason: null, fetchedAt: null },
   // betway intentionally absent: no longer WA-scraped, see comment above getWAOdds.
 };
 
@@ -256,15 +130,24 @@ const inFlightGlobal = {};
 // with no proxy needed — and only fall back to the direct scraper if
 // OddsPapi has no tournament mapped for this sport yet (ODDSPAPI_TOURNAMENT_MAP
 // in lib/oddspapi-wa.js still has TODOs for most leagues).
+// The paid ScraperAPI fallback is only worth its credits when OddsPapi FAILED or has no tournament
+// mapped for this sport. If OddsPapi answered fine with zero events (no upcoming matches), asking
+// the scraper too would just burn credits for the same empty answer.
+function oddsPapiAnswered(papi) {
+  if (!papi || !papi.status || !papi.status.ok) return false;
+  const reason = papi.status.reason;
+  return reason !== 'tournament_id_unknown' && reason !== 'unsupported_sport';
+}
+
 async function getBetanoOdds(sportKey) {
   const papi = await fetchBetanoOddsPapi(sportKey);
-  if (papi.status.ok && papi.events.length > 0) return papi;
+  if (oddsPapiAnswered(papi)) return papi;
   return fetchBetanoOdds(sportKey);
 }
 
 async function get22BetOdds(sportKey) {
   const papi = await fetch22BetOddsPapi(sportKey);
-  if (papi.status.ok && papi.events.length > 0) return papi;
+  if (oddsPapiAnswered(papi)) return papi;
   return fetch22BetOdds(sportKey);
 }
 
@@ -274,13 +157,11 @@ async function getWAOdds(sportKey) {
     return { events: cached.data, health: cached.health, fromCache: true };
   }
 
-  const [sportybet, betano, twobet, paripesa, melbet, betfox] = await Promise.allSettled([
+  const [sportybet, betano, twobet, melbet] = await Promise.allSettled([
     fetchSportybetOdds(sportKey),
     getBetanoOdds(sportKey),
     get22BetOdds(sportKey),
-    fetchParipesaOdds(sportKey),
     fetchMelbetOdds(sportKey),
-    fetchBetfoxOdds(sportKey),
   ]);
 
   const extractStatus = (settled, fallbackReason) =>
@@ -291,33 +172,26 @@ async function getWAOdds(sportKey) {
   waHealth.sportybet   = extractStatus(sportybet,   'promise_rejected: ' + (sportybet.reason?.message   || 'unknown'));
   waHealth.betano      = extractStatus(betano,      'promise_rejected: ' + (betano.reason?.message      || 'unknown'));
   waHealth['22bet']    = extractStatus(twobet,      'promise_rejected: ' + (twobet.reason?.message      || 'unknown'));
-  waHealth.paripesa    = extractStatus(paripesa,    'promise_rejected: ' + (paripesa.reason?.message    || 'unknown'));
   waHealth.melbet      = extractStatus(melbet,      'promise_rejected: ' + (melbet.reason?.message      || 'unknown'));
-  waHealth.betfox      = extractStatus(betfox,      'promise_rejected: ' + (betfox.reason?.message      || 'unknown'));
 
   const results = [
     ...(sportybet.status   === 'fulfilled' ? sportybet.value?.events   || [] : []),
     ...(betano.status      === 'fulfilled' ? betano.value?.events      || [] : []),
     ...(twobet.status      === 'fulfilled' ? twobet.value?.events      || [] : []),
-    ...(paripesa.status    === 'fulfilled' ? paripesa.value?.events    || [] : []),
     ...(melbet.status      === 'fulfilled' ? melbet.value?.events      || [] : []),
-    ...(betfox.status      === 'fulfilled' ? betfox.value?.events      || [] : []),
   ];
 
   console.log('[odds][WA]', sportKey,
     '-> sportybet:',  sportybet.status   === 'fulfilled' ? (sportybet.value?.events?.length   ?? 0) : 'failed: ' + sportybet.reason?.message,
     '| betano:',      betano.status      === 'fulfilled' ? (betano.value?.events?.length      ?? 0) : 'failed: ' + betano.reason?.message,
     '| 22bet:',       twobet.status      === 'fulfilled' ? (twobet.value?.events?.length      ?? 0) : 'failed: ' + twobet.reason?.message,
-    '| paripesa:',    paripesa.status    === 'fulfilled' ? (paripesa.value?.events?.length    ?? 0) : 'failed: ' + paripesa.reason?.message,
     '| melbet:',      melbet.status      === 'fulfilled' ? (melbet.value?.events?.length      ?? 0) : 'failed: ' + melbet.reason?.message,
-    '| betfox:',      betfox.status      === 'fulfilled' ? (betfox.value?.events?.length      ?? 0) : 'failed: ' + betfox.reason?.message,
     '| total:', results.length);
 
   const health = {
     sportybet: waHealth.sportybet, betano: waHealth.betano,
-    '22bet': waHealth['22bet'], paripesa: waHealth.paripesa,
+    '22bet': waHealth['22bet'],
     melbet: waHealth.melbet,
-    betfox: waHealth.betfox,
     // betway health is reported from the global the-odds-api result instead (see handler).
   };
   await cacheSet(waCacheKey(sportKey), { data: results, health }, WA_CACHE_TTL);
@@ -704,7 +578,7 @@ export default async function handler(req, res) {
     // WA users: sportybet, betano, 1xbet, melbet, betway + new WA books
     // Global users: all books accessible (Betfair, Pinnacle, Bet365, William Hill etc.)
     const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','melbet','sportybet','betano','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag'];
-    const WA_ACCESSIBLE     = ['1xbet','melbet','betway','sportybet','betano','22bet','paripesa','betwinner','betking','bet9ja','1win','premierbet','betfox'];
+    const WA_ACCESSIBLE     = ['1xbet','melbet','betway','sportybet','betano','22bet','betwinner','betking','bet9ja','1win','premierbet'];
     const userAccessibleBooks = isWAUser ? WA_ACCESSIBLE : GLOBAL_ACCESSIBLE;
 
     return res.status(200).json({
