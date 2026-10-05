@@ -2,7 +2,6 @@ import { getUserPlan, FREE_SPORTS, SCANNED_SPORTS } from '../../lib/serverAuth';
 import { fetchSportybetOdds } from './scrapers/sportybet';
 import { fetchBetanoOdds }    from './scrapers/betano';
 import { fetch22BetOdds }       from './scrapers/22bet';
-import { fetchMelbetOdds }      from './scrapers/melbet';
 import { fetchBetanoOddsPapi, fetch22BetOddsPapi } from '../../lib/oddspapi-wa';
 import { cacheGet, cacheSet, checkRateLimit } from '../../lib/supabaseCache';
 import { sendStructuralAlert } from '../../lib/alerts';
@@ -14,7 +13,7 @@ export const config = { maxDuration: 60 };
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
 export const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet', '1xbet']; // same Pinnacle reference as global, output filtered to WA-accessible books client-side
-export const WA_BOOKS               = ['sportybet', 'betano', '22bet', 'melbet', 'betway', '1xbet'];
+export const WA_BOOKS               = ['sportybet', 'betano', '22bet', 'betway', '1xbet'];
 
 // Real Odds-API bookmaker keys we actually compare for the GLOBAL feed.
 // NOTE: We use regions= instead of bookmakers= because the bookmakers= param
@@ -27,8 +26,7 @@ export const WA_BOOKS               = ['sportybet', 'betano', '22bet', 'melbet',
 //   uk  → Betfair UK, William Hill UK
 //   us  → DraftKings, FanDuel (not needed)
 const GLOBAL_REGIONS = 'eu,uk';
-// melbet is sourced via OddsPapi (lib/oddspapi.js) rather than direct
-// scraping — see pages/api/scrapers/melbet.js.
+// Melbet was removed (scraper ended). pages/api/scrapers/melbet.js can be deleted.
 // betway (25 Sep 2026): dropped the scrapers/betway.js call entirely — the
 // global the-odds-api fetch below (regions=eu,uk) already returns a 'betway'
 // bookmaker on covered events, and since 'betway' is in WA_BOOKS, that global
@@ -59,8 +57,9 @@ const GLOBAL_REGIONS = 'eu,uk';
 
 // Paripesa and Betfox were removed (2 Oct 2026): both returned HTTP 403 from Vercel and are no longer used.
 
-// ─── WA SCRAPER CACHE (shared via Supabase, 3 min TTL) ───────────────────────
-const WA_CACHE_TTL = 3 * 60 * 1000;
+// ─── WA SCRAPER CACHE (shared via Supabase, 5 min TTL) ───────────────────────
+const WA_CACHE_TTL = 5 * 60 * 1000;
+const WA_MAX_DATA_AGE_MS = 5 * 60 * 1000; // same 5-min window as OddsPapi and the Odds API; WA data is never served older than this
 function waCacheKey(sportKey) { return `waodds:${sportKey}`; }
 
 // Tracks last known health per bookmaker, persists across requests in the
@@ -71,7 +70,6 @@ const waHealth = {
   sportybet:  { ok: null, reason: null, fetchedAt: null },
   betano:     { ok: null, reason: null, fetchedAt: null },
   '22bet':    { ok: null, reason: null, fetchedAt: null },
-  melbet:     { ok: null, reason: null, fetchedAt: null },
   // betway intentionally absent: no longer WA-scraped, see comment above getWAOdds.
 };
 
@@ -157,11 +155,10 @@ async function getWAOdds(sportKey) {
     return { events: cached.data, health: cached.health, fromCache: true };
   }
 
-  const [sportybet, betano, twobet, melbet] = await Promise.allSettled([
+  const [sportybet, betano, twobet] = await Promise.allSettled([
     fetchSportybetOdds(sportKey),
     getBetanoOdds(sportKey),
     get22BetOdds(sportKey),
-    fetchMelbetOdds(sportKey),
   ]);
 
   const extractStatus = (settled, fallbackReason) =>
@@ -172,29 +169,40 @@ async function getWAOdds(sportKey) {
   waHealth.sportybet   = extractStatus(sportybet,   'promise_rejected: ' + (sportybet.reason?.message   || 'unknown'));
   waHealth.betano      = extractStatus(betano,      'promise_rejected: ' + (betano.reason?.message      || 'unknown'));
   waHealth['22bet']    = extractStatus(twobet,      'promise_rejected: ' + (twobet.reason?.message      || 'unknown'));
-  waHealth.melbet      = extractStatus(melbet,      'promise_rejected: ' + (melbet.reason?.message      || 'unknown'));
 
   const results = [
     ...(sportybet.status   === 'fulfilled' ? sportybet.value?.events   || [] : []),
     ...(betano.status      === 'fulfilled' ? betano.value?.events      || [] : []),
     ...(twobet.status      === 'fulfilled' ? twobet.value?.events      || [] : []),
-    ...(melbet.status      === 'fulfilled' ? melbet.value?.events      || [] : []),
   ];
 
   console.log('[odds][WA]', sportKey,
     '-> sportybet:',  sportybet.status   === 'fulfilled' ? (sportybet.value?.events?.length   ?? 0) : 'failed: ' + sportybet.reason?.message,
     '| betano:',      betano.status      === 'fulfilled' ? (betano.value?.events?.length      ?? 0) : 'failed: ' + betano.reason?.message,
     '| 22bet:',       twobet.status      === 'fulfilled' ? (twobet.value?.events?.length      ?? 0) : 'failed: ' + twobet.reason?.message,
-    '| melbet:',      melbet.status      === 'fulfilled' ? (melbet.value?.events?.length      ?? 0) : 'failed: ' + melbet.reason?.message,
     '| total:', results.length);
 
   const health = {
     sportybet: waHealth.sportybet, betano: waHealth.betano,
     '22bet': waHealth['22bet'],
-    melbet: waHealth.melbet,
     // betway health is reported from the global the-odds-api result instead (see handler).
   };
-  await cacheSet(waCacheKey(sportKey), { data: results, health }, WA_CACHE_TTL);
+  // Every WA bookmaker record carries the time its prices were pulled, and is marked 'pull' (the
+  // book may have changed the price since). Records already stamped with a raw pull time (OddsPapi,
+  // SportyBet) keep it; any scraper that did not stamp gets this fetch's time.
+  const stampNow = new Date().toISOString();
+  let oldestPull = Date.now();
+  for (const ev of results) for (const bm of (ev.bookmakers || [])) {
+    if (!bm.last_update) bm.last_update = stampNow;
+    bm.last_update_kind = 'pull';
+    const t = Date.parse(bm.last_update);
+    if (Number.isFinite(t) && t < oldestPull) oldestPull = t;
+  }
+  // The cache must not outlive the oldest raw pull inside it: otherwise a 3-min WA cache wrapped
+  // around a 4-min OddsPapi cache serves prices up to 7 min old. Same OddsPapi calls as before
+  // (its own cache still decides those); this only stops WA re-serving data past WA_MAX_DATA_AGE_MS.
+  const ttl = Math.max(30 * 1000, Math.min(WA_CACHE_TTL, oldestPull + WA_MAX_DATA_AGE_MS - Date.now()));
+  await cacheSet(waCacheKey(sportKey), { data: results, health }, ttl);
   return { events: results, health, fromCache: false };
 }
 
@@ -293,7 +301,9 @@ function fuzzyMatch(a, b) {
 //   ALT_TOTALS_MAX_EVENTS       games enriched per sport per refresh (default 2)
 //   ALT_TOTALS_WINDOW_HOURS     only games kicking off within this many hours (default 36)
 //   ALT_TOTALS_MIN_REMAINING    skip entirely when the key's remaining credits are below this (default 300)
-const ALT_TOTALS_TTL = 15 * 60 * 1000; // per-game cache; prices older than this are refetched
+// Per-game cache; prices older than this are refetched. Default 5 min, the same window as every other source.
+// Each refetch costs Odds API credits (see above), so raise ALT_TOTALS_TTL_MIN if credits run low.
+const ALT_TOTALS_TTL = (parseFloat(process.env.ALT_TOTALS_TTL_MIN || '5') || 5) * 60 * 1000;
 const altTotalsCache = {};             // eventId -> { ts, bookmakers: [{ key, last_update, outcomes }] }
 let altDisabledUntil = 0;              // set when the API rejects the market, so we stop wasting credits
 
@@ -575,10 +585,10 @@ export default async function handler(req, res) {
     const isWAUser = WA_COUNTRIES.has(userCountry);
 
     // Books accessible to this user based on their detected region.
-    // WA users: sportybet, betano, 1xbet, melbet, betway + new WA books
+    // WA users: sportybet, betano, 1xbet, betway + new WA books
     // Global users: all books accessible (Betfair, Pinnacle, Bet365, William Hill etc.)
-    const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','melbet','sportybet','betano','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag'];
-    const WA_ACCESSIBLE     = ['1xbet','melbet','betway','sportybet','betano','22bet','betwinner','betking','bet9ja','1win','premierbet'];
+    const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','sportybet','betano','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag'];
+    const WA_ACCESSIBLE     = ['1xbet','betway','sportybet','betano','22bet','betwinner','betking','bet9ja','1win','premierbet'];
     const userAccessibleBooks = isWAUser ? WA_ACCESSIBLE : GLOBAL_ACCESSIBLE;
 
     return res.status(200).json({
