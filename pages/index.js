@@ -19,7 +19,6 @@ const BOOKS = {
   // ── West Africa + Global (accessible in WA, also in global feed) ───────────
   '1xbet':       { name: '1xBet',        momo: true,  licensed: true,  manual: false, accessible: true,  sharp: true,  wa: true,  url: 'https://1xbet.com/en/line', sportUrls: { soccer: 'https://1xbet.com/en/line/football', basketball: 'https://1xbet.com/en/line/basketball', tennis: 'https://1xbet.com/en/line/tennis', cricket: 'https://1xbet.com/en/line/cricket', mma: 'https://1xbet.com/en/line/mma' } },
   onexbet:       { name: '1xBet',        momo: true,  licensed: true,  manual: false, accessible: true,  sharp: true,  wa: true,  url: 'https://1xbet.com/en/line', sportUrls: { soccer: 'https://1xbet.com/en/line/football', basketball: 'https://1xbet.com/en/line/basketball', tennis: 'https://1xbet.com/en/line/tennis', cricket: 'https://1xbet.com/en/line/cricket', mma: 'https://1xbet.com/en/line/mma' } },
-  melbet:        { name: 'MelBet',       momo: true,  licensed: false, manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://melbet.com/en/sport/football', sportUrls: { soccer: 'https://melbet.com/en/sport/football', basketball: 'https://melbet.com/en/sport/basketball', tennis: 'https://melbet.com/en/sport/tennis', cricket: 'https://melbet.com/en/sport/cricket', mma: 'https://melbet.com/en/sport/mma' } },
   betway:        { name: 'Betway',       momo: true,  licensed: true,  manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.betway.com.gh/sports/all-sports', sportUrls: { soccer: 'https://www.betway.com.gh/sports/soccer', basketball: 'https://www.betway.com.gh/sports/basketball', tennis: 'https://www.betway.com.gh/sports/tennis', cricket: 'https://www.betway.com.gh/sports/cricket', mma: 'https://www.betway.com.gh/sports/mma' } },
 
   // ── West Africa only (scraped, not in global API feed) ────────────────────
@@ -523,13 +522,8 @@ const MOCK = [
 // Removed quotes are counted and reported, never silently lost. Mutates the
 // freshly built scan data in place.
 // Feeds held back from every finder until they are verified against the bookmaker's own site.
-// melbet: OddsPapi's melbet feed is price-for-price identical to its 22bet feed (feed audit,
-// EPL, 24 Sep 2026: identical statistics on every measure), and its fixture link points at
-// 22bet.com — so these may be 22bet's prices, not melbet's. Delete the entry once melbet's
-// own site has been compared with the feed.
-const QUARANTINED_FEEDS = {
-  melbet: "OddsPapi's melbet feed is identical to its 22bet feed and not yet verified against melbet's own site",
-};
+// (Empty: Melbet was removed — its scraper has ended. Add { bookkey: 'reason' } to quarantine a feed.)
+const QUARANTINED_FEEDS = {};
 const EXCHANGE_RE = /betfair|matchbook|smarkets/i;
 const OVERROUND_MAX = { 2: 1.25, 3: 1.30 };
 const LADDER_TOL = 0.01;
@@ -707,14 +701,90 @@ const MULTI_OUTLIER_RATIO = 1.5;   // stricter bound used only for the multi-leg
 const MULTI_OUTLIER_MIN_LEGS = 2;  // this many simultaneous outliers from one book -> exclude
 
 
+// ── FAIR-VALUE ANCHOR ───────────────────────────────────────────────────────
+// A soft book can beat the sharp market by a few percent (a lagging line). Much more than that is
+// almost always bad data. 5% is a starting point: tune it from the [findArbs] logs.
+const ANCHOR_MAX_DEV = 0.05;
+const ANCHOR_SHARPS = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
+// Two standard ways to remove a bookmaker's margin. Both turn one book's prices for ALL sides of a
+// market into probabilities that sum to 1.
+//   proportional: p_i = (1/o_i) / sum(1/o_j)
+//   Shin:         assumes a share z of the money is insider money; solve for z so the p_i sum to 1.
+//                 Shades long shots lower than proportional does (favourite-long-shot bias).
+function proportionalProbs(odds) {
+  const pi = odds.map(o => 1 / o); const S = pi.reduce((a, b) => a + b, 0);
+  return pi.map(p => p / S);
+}
+function shinProbs(odds) {
+  const pi = odds.map(o => 1 / o); const S = pi.reduce((a, b) => a + b, 0);
+  if (!(S > 1.0001)) return pi.map(p => p / S); // no margin to remove (e.g. an exchange)
+  const pAt = (z, q) => (Math.sqrt(z * z + 4 * (1 - z) * q * q / S) - z) / (2 * (1 - z));
+  const sumAt = z => pi.reduce((s, q) => s + pAt(z, q), 0);
+  let lo = 0, hi = 0.5;
+  if (sumAt(hi) > 1) return pi.map(p => p / S); // no root in range: fall back to proportional
+  for (let i = 0; i < 60; i++) { const mid = (lo + hi) / 2; if (sumAt(mid) > 1) lo = mid; else hi = mid; }
+  const z = (lo + hi) / 2;
+  const p = pi.map(q => pAt(z, q)); const t = p.reduce((a, b) => a + b, 0);
+  return p.map(v => v / t);
+}
+// Fair probabilities for every side of one market slot, from sharp books that quote ALL its sides.
+// This is ONLY a plausibility filter: it decides which quotes may compete to be the best price. It never
+// replaces the arb test (sum of 1/price over the chosen legs < 1), which still uses the actual quotes.
+// A quote is judged against the MORE LENIENT of the two methods, so only prices absurd under both are dropped.
+function sharpAnchor(slot) {
+  const sideKeys = Object.keys(slot.all);
+  if (sideKeys.length < 2) return null;
+  const perBook = [];
+  for (const sb of ANCHOR_SHARPS) {
+    const odds = [];
+    for (const sk of sideKeys) {
+      const qs = (slot.all[sk] || []).filter(r => r.book === sb);
+      if (!qs.length) break;
+      odds.push(Math.max(...qs.map(r => r.price)));
+    }
+    if (odds.length !== sideKeys.length) continue;
+    const S = odds.reduce((s, o) => s + 1 / o, 0);
+    if (!(S > 0.97 && S < 1.12)) continue; // a sharp book's own overround must look sane
+    perBook.push({ book: sb, prop: proportionalProbs(odds), shin: shinProbs(odds) });
+  }
+  if (!perBook.length) return null;
+  const avg = key => sideKeys.map((_, i) => perBook.reduce((s, b) => s + b[key][i], 0) / perBook.length);
+  const prop = avg('prop'), shin = avg('shin');
+  const fair = {}, propBy = {}, shinBy = {};
+  sideKeys.forEach((k, i) => { propBy[k] = prop[i]; shinBy[k] = shin[i]; fair[k] = Math.min(prop[i], shin[i]); });
+  return { books: perBook.map(b => b.book), fair, prop: propBy, shin: shinBy };
+}
+
 // ── QUOTE FRESHNESS ─────────────────────────────────────────────────────────
 // Every leg of an arb has its OWN "last updated" time (the-odds-api sends
 // last_update per bookmaker and per market; OddsPapi quotes are mapped to the
 // same field in lib/oddspapi.js when it exposes one). Fake arbs are very often
 // just one stale leg next to a fresh one: the other book already moved, this
 // one hasn't refreshed. A leg with no timestamp is "unknown", never "fresh".
-const PRE_STALE_MS  = 15 * 60 * 1000; // pre-match: a leg this old gets flagged for review
-const PRE_SPREAD_MS = 10 * 60 * 1000; // pre-match: legs updated this far apart get flagged
+const PRE_STALE_MS  = 15 * 60 * 1000; // pre-match: a leg whose BOOK last changed it this long ago gets flagged for review
+// How long a price may sit unchanged before that is suspicious. For a game days away, hours without a change is
+// normal; the same silence a few hours before kickoff is not. So the tolerance is 5% of the time left to kickoff,
+// never under PRE_STALE_MS and never over 6 h.
+const BOOK_TOL_FRACTION = 0.05;
+const BOOK_TOL_MAX_MS   = 6 * 60 * 60 * 1000;
+function bookToleranceMs(msToKickoff) { return Math.min(BOOK_TOL_MAX_MS, Math.max(PRE_STALE_MS, BOOK_TOL_FRACTION * Math.max(0, msToKickoff || 0))); }
+// Two kinds of timestamp (quote.updatedKind):
+//   'book' = the bookmaker's own last-change time (Odds API last_update): the price really was set then.
+//   'pull' = when WE fetched it (OddsPapi / SportyBet / 22bet / Betano): the book may have changed it since.
+// Pull-time legs are the ones that can silently go stale, so they get tighter limits and the user is
+// shown the pull time and the minimum odds at which the arb still works. No extra API calls needed.
+const PULL_MAX_AGE_MS    = 6 * 60 * 1000;  // every source is cached for 5 min, so a pulled leg older than 6 min -> review
+const PULL_SPREAD_MS     = 5 * 60 * 1000;  // pulled legs fetched more than one 5-min window apart -> review (one may have moved)
+const ARB_EXPIRE_MS      = 12 * 60 * 1000; // 5-min cache + the 5-min auto-rescan + slack; older (tab left open) -> expired, hidden until rescan
+const CONFIRMED_FRESH_MS = 5 * 60 * 1000;  // a manual live re-check counts as verification for this long
+const isArbExpired = a => !!a.pulledAtMs && Date.now() - a.pulledAtMs > ARB_EXPIRE_MS;
+// Lowest odds each leg can drop to before the set stops being an arb (other legs unchanged).
+function minOddsFor(outs) {
+  return outs.map((o, i) => {
+    const others = outs.reduce((s, p, j) => (j === i ? s : s + 1 / p.price), 0);
+    return others < 1 ? Math.ceil((1 / (1 - others)) * 100) / 100 : null;
+  });
+}
 // ── PROFIT CAP, ARB AGE, USER REPORTS ───────────────────────────────────────
 // Real arbs between books are usually small; a very large one is far more often a
 // bad price than a gift. So arbs above DEFAULT_MAX_PROFIT are hidden by default
@@ -794,13 +864,28 @@ function assessArb(slot, outs, margin, ev) {
       };
     }
     if (aged.length < outs.length) reasons.push('in-play arb — ' + (outs.length - aged.length) + ' leg(s) carry no quote timestamp, so their freshness is unknown');
-  } else if (aged.length > 0) {
-    const stale = aged.filter(a => a.age > PRE_STALE_MS);
-    stale.forEach(a => reasons.push(a.o.displayLabel + ' @ ' + a.o.price + ' (' + a.o.bookName + ') was last updated ' + fmtAge(a.age) + ' ago — it may have moved since'));
-    if (aged.length >= 2) {
-      const ages = aged.map(a => a.age);
+  } else {
+    // Pre-match. Every leg needs a timestamp: "unknown" is never "fresh".
+    const noStamp = outs.length - aged.length;
+    if (noStamp > 0) reasons.push(noStamp + ' leg(s) carry no timestamp, so their age is unknown');
+    const bookTol = bookToleranceMs(isNaN(startMs) ? 0 : startMs - nowMs);
+    // (1) The BOOK's own last-change time (Odds API last_update, SportyBet lastOddsChangeTime). If the source was
+    // fetched recently, an old change time just means the price has been stable, so the tolerance scales with
+    // time to kickoff (see bookToleranceMs).
+    const bookAged = aged.filter(a => a.o.updatedKind === 'book');
+    const stale = bookAged.filter(a => a.age > bookTol);
+    stale.forEach(a => reasons.push(a.o.displayLabel + ' @ ' + a.o.price + ' (' + a.o.bookName + ') last changed ' + fmtAge(a.age) + ' ago — longer than expected this close to kickoff (' + fmtAge(bookTol) + '); it may be stale'));
+    if (bookAged.length >= 2 && stale.length === 0) {
+      const ages = bookAged.map(a => a.age);
       const spread = Math.max(...ages) - Math.min(...ages);
-      if (spread > PRE_SPREAD_MS && stale.length === 0) reasons.push('legs were last updated ' + fmtAge(spread) + ' apart — the older price may already have moved');
+      if (spread > bookTol) reasons.push('legs last changed ' + fmtAge(spread) + ' apart — the older price may already have moved');
+    }
+    // (2) When WE fetched each leg (every cache is 5 min). Applies to every cached WA source, SportyBet included.
+    const pulled = outs.filter(o => typeof o.pulledMs === 'number').map(o => ({ o, age: Math.max(0, nowMs - o.pulledMs) }));
+    pulled.filter(p => p.age > PULL_MAX_AGE_MS).forEach(p => reasons.push(p.o.displayLabel + ' @ ' + p.o.price + ' (' + p.o.bookName + ') was fetched ' + fmtAge(p.age) + ' ago — the book may have changed it since'));
+    if (pulled.length >= 2) {
+      const ps = pulled.map(p => p.age);
+      if (Math.max(...ps) - Math.min(...ps) > PULL_SPREAD_MS) reasons.push('legs were fetched ' + fmtAge(Math.max(...ps) - Math.min(...ps)) + ' apart — the older price may already have moved');
     }
   }
 
@@ -853,8 +938,11 @@ function assessArb(slot, outs, margin, ev) {
 
   // No margin gate here either — a mislabelled market or a thin-book arb is
   // just as real a concern at 2% margin as at 8%.
-  if (uncheckable > 0) reasons.push(uncheckable + ' leg(s) have fewer than 2 other books to cross-check against');
-  if (outliers === 0 && uncheckable === 0) reasons.push('every leg matches other books yet the set arbs — market or line is probably mislabelled');
+  if (!slot.anchor) reasons.push('no sharp-book price (Pinnacle/Betfair/etc.) for this market, so there is no independent reference for these prices');
+  // With an anchor every leg is already within ANCHOR_MAX_DEV of the sharp fair price, which covers both
+  // "too few books to compare" and "mislabelled market" (a wrong market would sit far from fair).
+  if (!slot.anchor && uncheckable > 0) reasons.push(uncheckable + ' leg(s) have fewer than 2 other books to cross-check against');
+  if (!slot.anchor && outliers === 0 && uncheckable === 0) reasons.push('every leg matches other books yet the set arbs — market or line is probably mislabelled');
   return { level: reasons.length ? 'review' : 'standard', reasons };
 }
 
@@ -917,7 +1005,10 @@ function findArbs(events, mode = 'global', userRegion = null) {
     // Skipping is safe; guessing (or taking the max) is how fake arbs appear.
     const quotes = [];
     for (const bm of ev.bookmakers) {
-      if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
+      // Every book is a COMPARATOR (feeds slot.all, so Pinnacle/Betfair can expose a bad price);
+      // only accessible books may be an arb LEG (slot.best). Previously WA mode dropped non-accessible
+      // books entirely, so WA arbs had too few comparators and showed as "uncheckable".
+      const bookable = mode !== 'wa' || isBookAccessible(bm.key, userRegion);
       for (const mkt of (bm.markets || [])) {
         if (!['h2h', 'spreads', 'totals', 'outrights'].includes(mkt.key)) continue;
         for (const o of mkt.outcomes) {
@@ -953,7 +1044,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
             slotKey = 'outrights'; sideKey = o.name;
             marketLabel = 'Outright';
           }
-          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, displayLabel, marketLabel, point: o.point ?? null, fixtureRef: bm.bookmakerFixtureId || bm.eventId || null, updatedMs: parseQuoteTime(mkt.last_update || bm.last_update), srcEvent: bm.srcEvent || null });
+          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, bookable, displayLabel, marketLabel, point: o.point ?? null, fixtureRef: bm.bookmakerFixtureId || bm.eventId || null, updatedMs: parseQuoteTime(o.last_update || mkt.last_update || bm.last_update), updatedKind: (o.last_update || mkt.last_update || bm.last_update_kind !== 'pull') ? 'book' : 'pull', pulledMs: bm.last_update_kind === 'pull' ? parseQuoteTime(bm.last_update) : null, srcEvent: bm.srcEvent || null });
         }
       }
     }
@@ -969,8 +1060,23 @@ function findArbs(events, mode = 'global', userRegion = null) {
       if (!marketSlots[q.slotKey]) marketSlots[q.slotKey] = { mktKey: q.mktKey, line: q.line, best: {}, all: {} };
       const slot = marketSlots[q.slotKey];
       (slot.all[q.sideKey] = slot.all[q.sideKey] || []).push({ book: q.book, price: q.price });
-      if (!slot.best[q.sideKey] || q.price > slot.best[q.sideKey].price) {
-        slot.best[q.sideKey] = { sideKey: q.sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, updatedMs: q.updatedMs, srcEvent: q.srcEvent };
+      if (q.bookable) (slot.cands = slot.cands || []).push(q); // comparator-only books never become legs
+    }
+
+    // BEST-PRICE SELECTION WITH A FAIR-VALUE ANCHOR.
+    // Taking the highest price per side across many books picks the most wrong one (stale price, parse
+    // error): drop that book and the next-most-wrong takes over. So a candidate leg must first be
+    // CREDIBLE: no more than ANCHOR_MAX_DEV above the no-vig price implied by the sharp books
+    // (Pinnacle/Betfair/...) for the same market. Implausible prices never become legs, whichever
+    // books are in the scan. No sharp price for the market -> no anchor -> assessArb marks it review.
+    for (const slot of Object.values(marketSlots)) {
+      slot.anchor = sharpAnchor(slot);
+      for (const q of (slot.cands || [])) {
+        const fp = slot.anchor ? slot.anchor.fair[q.sideKey] : null;
+        if (fp && q.price * fp > 1 + ANCHOR_MAX_DEV) { slot.rejected = (slot.rejected || 0) + 1; continue; }
+        if (!slot.best[q.sideKey] || q.price > slot.best[q.sideKey].price) {
+          slot.best[q.sideKey] = { sideKey: q.sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, updatedMs: q.updatedMs, srcEvent: q.srcEvent , updatedKind: q.updatedKind, pulledMs: q.pulledMs };
+        }
       }
     }
 
@@ -1004,16 +1110,29 @@ function findArbs(events, mode = 'global', userRegion = null) {
         const verify = assessArb(slot, outs, margin, ev);
         if (verify.level === 'excluded') { console.warn('[findArbs] excluded (multi-outlier)', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons); continue; }
         if (verify.level === 'review') console.warn('[findArbs] review flag', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons);
+        const minOdds = minOddsFor(outs);
+        const pullTimes = outs.filter(o => typeof o.pulledMs === 'number').map(o => o.pulledMs);
+        const foundAtMs = Date.now();
         arbs.push({
           id: ev.id + '_' + slot.mktKey + (slot.line != null ? '_' + slot.line : ''),
+          foundAtMs,
+          anchorBooks: slot.anchor ? slot.anchor.books : null,
+          // Oldest fetch time among legs we pulled ourselves; otherwise the scan time. Drives expiry and the on-card age.
+          pulledAtMs: pullTimes.length ? Math.min(...pullTimes) : foundAtMs,
           sport: ev.sport_key,
           match: ev.home_team + ' vs ' + ev.away_team,
           commenceTime: ev.commence_time,
           margin,
           verify,
+          // 'clean' = every leg cross-checked against >=2 other books, fresh, no flags; otherwise 'review'
+          // (hidden in the UI unless opened). A live re-check that returns 'confirmed' promotes it.
+          tier: verify.level === 'standard' ? 'clean' : 'review',
           home: ev.home_team,
           away: ev.away_team,
-          outcomes: outs.map(o => ({
+          outcomes: outs.map((o, oi) => ({
+            minOdds: minOdds[oi],
+            fairDev: slot.anchor && slot.anchor.fair[o.sideKey] ? o.price * slot.anchor.fair[o.sideKey] - 1 : null,
+            updatedKind: o.updatedKind,
             side: o.sideKey,
             label: o.displayLabel,
             marketLabel: o.marketLabel,
@@ -1605,6 +1724,7 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [showSportPicker, setShowSportPicker] = useState(false);
   const [minMargin, setMinMargin] = useState(0);
   const [showHighProfit, setShowHighProfit] = useState(false);
+  const [showReview, setShowReview] = useState(false); // review-tier arbs stay hidden unless opened
   // user's active reports = their personal denylist (table arb_reports, see arb_reports.sql)
   const [reports, setReports] = useState([]);
   const [reportOpenId, setReportOpenId] = useState(null);
@@ -2086,24 +2206,9 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     // here, everything else is stamped with its liveVerify result so cards
     // can show "live-verified" / "margin adjusted" without another round trip.
     const verifyMap = await verifyTopCandidates(found.concat(foundArbsWA));
-    // Arbs with a 22Bet leg are only shown once that leg is confirmed against 22Bet's own API.
-    // dropped / unverified / verify-call-failed => hidden. Arbs with no 22Bet leg pass through unchanged.
     const applyVerification = (list) => list
-      .filter(a => {
-        if (!a.outcomes.some(o => o.book === '22bet')) return true;
-        const v = verifyMap && verifyMap[a.id];
-        return !!v && ['confirmed', 'adjusted', 'partial'].includes(v.status);
-      })
-      .map(a => {
-        const v = verifyMap && verifyMap[a.id];
-        if (!v) return a;
-        if (v.status === 'adjusted' && v.freshMargin != null) {
-          // show the fresh 22Bet prices and margin, not the stale scan ones
-          const outcomes = a.outcomes.map((o, i) => (v.legs[i] && v.legs[i].freshPrice ? { ...o, odds: v.legs[i].freshPrice } : o));
-          return { ...a, outcomes, margin: v.freshMargin, liveVerify: v };
-        }
-        return { ...a, liveVerify: v };
-      });
+      .filter(a => !verifyMap[a.id] || verifyMap[a.id].status !== 'dropped')
+      .map(a => verifyMap[a.id] ? { ...a, liveVerify: verifyMap[a.id] } : a);
     // arb age: stamp each arb with when this exact arb (same legs + prices) was first seen
     const stampAge = list => {
       const seen = firstSeenRef.current, now = Date.now();
@@ -2357,10 +2462,10 @@ const verifyTopCandidates = async (candidates) => {
       body: JSON.stringify({ candidates }),
     });
     const data = await res.json();
-    if (!res.ok) return null;
+    if (!res.ok) return {};
     return Object.fromEntries(data.results.map(r => [r.id, r]));
   } catch {
-    return null; // verification call failed: caller hides 22Bet-leg arbs rather than showing them unchecked
+    return {}; // verification failing should never block showing the scan results
   }
 };
 
@@ -2421,12 +2526,18 @@ const analyzeArb = async (arb) => {
   // (which almost never coincidentally land on WA books for every single leg).
   const arbsBase = arbSection === 'wa' ? arbsWAReal : arbs;
 
+  // Default view: clean arbs, plus any arb whose legs were just re-fetched live and confirmed.
+  const recheckFresh = a => recheck[a.id] && recheck[a.id].verdict === 'confirmed' && Date.now() - new Date(recheck[a.id].checkedAt).getTime() < CONFIRMED_FRESH_MS;
+  const isShownByDefault = a => recheckFresh(a) || (a.tier !== 'review' && !isArbExpired(a));
+  const hiddenReview = arbsBase.filter(a => !isDenied(a) && !isShownByDefault(a)).length;
+
   const filteredArbs = arbsBase.filter(a => {
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
     if (isDenied(a)) return false;
     if (!showHighProfit && a.margin > DEFAULT_MAX_PROFIT) return false;
+    if (!showReview && !isShownByDefault(a)) return false;
     if (accessOnly && !isFullyAccessible(a.outcomes, userRegion)) return false;
     if (arbSection === 'global' && isFullyAccessible(a.outcomes, userRegion)) return false;
     return a.margin >= minMargin;
@@ -2437,6 +2548,7 @@ const analyzeArb = async (arb) => {
   const sameFilters = a => {
     if (isDenied(a)) return false;
     if (!showHighProfit && a.margin > DEFAULT_MAX_PROFIT) return false;
+    if (!showReview && !isShownByDefault(a)) return false;
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
@@ -2743,6 +2855,10 @@ const analyzeArb = async (arb) => {
         e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No arbitrage opportunities in this scan'),
         e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, 'The scan completed and no cross-book arbs passed the checks. That is a normal result — real arbs are rare and short-lived.')
       ),
+ (hiddenReview > 0 || showReview) && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
+   !showReview ? e('div', null, '🔍 ' + hiddenReview + ' arb' + (hiddenReview === 1 ? '' : 's') + ' hidden: not enough cross-checks or a flagged price. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(true); } }, 'Show review arbs'))
+     : e('div', null, 'Showing review arbs: verify every leg on the book before staking. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(false); } }, 'Hide again'))
+ ),
  (hiddenHighProfit > 0 || showHighProfit || hiddenByReports > 0) && e('div', { style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
    hiddenHighProfit > 0 && !showHighProfit && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden — that size is far more often a bad price than a real edge. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(true); } }, 'Show them')),
    showHighProfit && e('div', null, 'Showing arbs above +' + DEFAULT_MAX_PROFIT + '% — treat each as unverified until checked on the book. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(false); } }, 'Hide again')),
@@ -2772,7 +2888,11 @@ const analyzeArb = async (arb) => {
             recheck[arb.id] && recheck[arb.id].verdict === 'confirmed' ? '✅ Verified live · ' + fmtAgeShort(Date.now() - new Date(recheck[arb.id].checkedAt).getTime()) + ' ago'
             : recheck[arb.id] && recheck[arb.id].verdict ? '⚠️ Re-checked: see result below'
             : arb.liveVerify ? '🔎 Live-checked at scan: ' + String(arb.liveVerify.status || 'checked').replace(/_/g, ' ')
-            : '⏳ Detected in feed data — not live-verified. Tap the card and press Re-check before staking.'),
+            : '⏳ Feed data, not live-verified. Confirm each leg on the bookmaker and bet only at or above the minimum odds shown.'),
+          arb.pulledAtMs && e('div', { style: { fontSize: 10, marginTop: 3, color: isArbExpired(arb) ? '#b91c1c' : C.muted, fontWeight: isArbExpired(arb) ? 700 : 400 } },
+            isArbExpired(arb)
+              ? '⌛ Expired: prices pulled ' + new Date(arb.pulledAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + fmtAgeShort(Date.now() - arb.pulledAtMs) + ' ago). Rescan before using.'
+              : '🕒 Prices pulled ' + new Date(arb.pulledAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + fmtAgeShort(Date.now() - arb.pulledAtMs) + ' ago). A bookmaker can change a price after that.'),
           arb.verify && arb.verify.level === 'review' && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '⚠ Verify on the book before staking: ' + arb.verify.reasons.join(' · ')),
           Object.entries(marketGroups).map(([mktLabel, outs]) =>
             e('div', { key: mktLabel },
@@ -2786,6 +2906,9 @@ const analyzeArb = async (arb) => {
                     '📄 ' + o.srcLabel + ((o.srcStart && Math.abs(new Date(o.srcStart) - new Date(arb.commenceTime)) > KICKOFF_DIFF_MS) ? ' · kickoff ' + new Date(o.srcStart).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' ≠ other books' : '')),
                   !isBookAccessible(o.book, userRegion) && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b91c1c', marginBottom: 1 } }, '🚫 Not accessible'),
                   e('div', { style: { fontSize: 16, fontWeight: 700, color: C.green } }, o.odds.toFixed(2)),
+                  o.minOdds && e('div', { style: { fontSize: 9, color: '#92400e', marginTop: 1 } }, 'bet only at ≥ ' + o.minOdds.toFixed(2)),
+                  typeof o.fairDev === 'number' && e('div', { style: { fontSize: 9, color: C.muted } }, (o.fairDev >= 0 ? '+' : '') + (o.fairDev * 100).toFixed(1) + '% vs sharp fair price'),
+                  typeof o.updatedAt === 'number' && e('div', { style: { fontSize: 9, color: C.muted } }, (o.updatedKind === 'pull' ? 'fetched ' : 'price last changed ') + new Date(o.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
                   e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportUrls[arb.sport.split('_')[0]]) || (BOOKS[o.book] && BOOKS[o.book].url) || '#', target: '_blank', style: { display: 'block', marginTop: 4, fontSize: 10, fontWeight: 700, color: '#fff', background: C.green, borderRadius: 6, padding: '3px 6px', textDecoration: 'none', textAlign: 'center' } }, 'Bet Now →')
                 ))
               )
@@ -2795,7 +2918,7 @@ const analyzeArb = async (arb) => {
             e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →'),
             e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); setReportOpenId(reportOpenId === arb.id ? null : arb.id); setReportStatus('idle'); } }, '🚩 Report'),
             e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis'),
-            arb.home && e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); recheckArb(arb); } }, recheckingId === arb.id ? 'Checking...' : '🔄 Re-check prices')
+            arb.home && e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); recheckArb(arb); } }, recheckingId === arb.id ? 'Checking...' : '🔄 Re-check (uses API quota)')
           ),
           recheck[arb.id] && e('div', { style: { marginTop: 10, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', fontSize: 12, lineHeight: 1.6 } },
             recheck[arb.id].error
@@ -2994,7 +3117,7 @@ const analyzeArb = async (arb) => {
       // Reference book info banner
       e('div', { style: { background: evSection === 'wa' ? '#dcfce7' : '#eff6ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: evSection === 'wa' ? C.greenDark : '#1e3a8a' } },
         (evSection === 'wa'
-          ? (isWAUserNow ? '🇬🇭 Using Pinnacle / Betfair as sharp reference — showing only WA-accessible books (Betway, SportyBet, Betano, MSport, 1xBet, MelBet)' : 'Using Pinnacle / Betfair as sharp reference \u2014 showing only books available in your region.')
+          ? (isWAUserNow ? '🇬🇭 Using Pinnacle / Betfair as sharp reference — showing only WA-accessible books (Betway, SportyBet, Betano, MSport, 1xBet)' : 'Using Pinnacle / Betfair as sharp reference \u2014 showing only books available in your region.')
           : '🌍 Using Pinnacle / Betfair as sharp reference — showing all books globally') + evDiagLine(evSection === 'wa' ? evDiagWA : evDiag)
       ),
       e('div', { style: st.metricsGrid },
@@ -3144,7 +3267,7 @@ const analyzeArb = async (arb) => {
           )
         ),
         scanHealth.eventsWithWACoverage === 0 && e('div', { style: { marginTop: 10, fontSize: 12, color: '#f59e0b', background: '#451a03', borderRadius: 8, padding: '8px 10px' } },
-          '⚠ No events had 2+ WA books priced. This means Betway/1xBet/MelBet aren\'t appearing in the Odds API feed for your selected sports right now — likely off-season or those books aren\'t covered for the current leagues.'
+          '⚠ No events had 2+ WA books priced. This means Betway/1xBet aren\'t appearing in the Odds API feed for your selected sports right now — likely off-season or those books aren\'t covered for the current leagues.'
         )
       ),
       // Sub-tab nav
@@ -3167,7 +3290,7 @@ const analyzeArb = async (arb) => {
         ),
         e('div', { style: { background: lineshopSection === 'wa' ? '#dcfce7' : '#eff6ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: lineshopSection === 'wa' ? C.greenDark : '#1e3a8a' } },
           lineshopSection === 'wa'
-            ? (isWAUserNow ? '🇬🇭 Comparing only books accessible in West Africa (Betway, SportyBet, Betano, MSport, MelBet, 1xBet) — gaps shown are bets you can actually place.' : regionFallbackText)
+            ? (isWAUserNow ? '🇬🇭 Comparing only books accessible in West Africa (Betway, SportyBet, Betano, MSport, 1xBet) — gaps shown are bets you can actually place.' : regionFallbackText)
             : '🌍 Comparing all scanned books worldwide, including books not accessible from West Africa.'
         ),
         (() => {
@@ -3227,7 +3350,7 @@ const analyzeArb = async (arb) => {
         ),
         e('div', { style: { background: middleSection === 'wa' ? '#dcfce7' : '#fdf4ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: middleSection === 'wa' ? C.greenDark : '#6b21a8' } },
           middleSection === 'wa'
-            ? (isWAUserNow ? '🇬🇭 Both legs must be on books accessible in West Africa (Betway, SportyBet, Betano, MSport, MelBet, 1xBet) — every middle shown here is placeable.' : 'Both legs must be on books available in your region, so every middle shown here is placeable.')
+            ? (isWAUserNow ? '🇬🇭 Both legs must be on books accessible in West Africa (Betway, SportyBet, Betano, MSport, 1xBet) — every middle shown here is placeable.' : 'Both legs must be on books available in your region, so every middle shown here is placeable.')
             : '🌍 Showing middles across all scanned books worldwide, including books not accessible from West Africa.'
         ),
         (() => {
