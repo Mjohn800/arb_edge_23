@@ -71,7 +71,13 @@ const HEADERS = {
 
 const MARKET_MAP = { '1_1': 'h2h', '1': 'h2h', '18_1': 'totals', '18': 'totals', '10_1': 'handicap_3way', '10': 'handicap_3way', '29_1': 'btts', '29': 'btts' };
 
+// SportyBet market ids 1 / 18 are the 90-minute (regulation) markets: right for soccer, but NOT confirmed to
+// match the Odds API's overtime-inclusive h2h/totals for basketball etc. Fail closed: soccer only until each
+// other sport is verified in SportyBet DevTools.
 async function fetchSportybetOdds(sportKey) {
+  if (!String(sportKey).startsWith('soccer_')) {
+    return { events: [], status: { ok: true, reason: 'sport_not_verified_for_sportybet', fetchedAt: new Date().toISOString() } };
+  }
   const mapping = SPORTYBET_SPORT_MAP[sportKey];
   if (!mapping) return { events: [], status: { ok: true, reason: 'unsupported_sport', fetchedAt: new Date().toISOString() } };
 
@@ -151,7 +157,8 @@ async function fetchSportybetOdds(sportKey) {
     }
 
     // Try normalising with inline odds first
-    let normalised = upcoming.map(ev => normaliseEvent(ev, sportKey)).filter(Boolean);
+    const pulledAtIso = new Date().toISOString(); // time of the raw pull, stamped on every bookmaker
+    let normalised = upcoming.map(ev => normaliseEvent(ev, sportKey, pulledAtIso)).filter(Boolean);
 
     // If no inline odds, fetch via stale-odds
     if (normalised.length === 0 && upcoming.length > 0) {
@@ -170,7 +177,7 @@ async function fetchSportybetOdds(sportKey) {
             });
             normalised = upcoming.map(ev => {
               const id = ev.eventId || ev.id || ev.matchId;
-              return normaliseEvent({ ...ev, ...(oddsMap[id] || {}) }, sportKey);
+              return normaliseEvent({ ...ev, ...(oddsMap[id] || {}) }, sportKey, pulledAtIso);
             }).filter(Boolean);
           } else {
             console.warn('[SportyBet] stale-odds', oddsRes.status, 'for', sportKey);
@@ -190,7 +197,7 @@ async function fetchSportybetOdds(sportKey) {
   }
 }
 
-function normaliseEvent(ev, sportKey) {
+function normaliseEvent(ev, sportKey, pulledAtIso) {
   try {
     const homeTeam = ev.homeTeamName || ev.home?.name || ev.homeName || ev.homeTeam || 'Home';
     const awayTeam = ev.awayTeamName || ev.away?.name  || ev.awayName || ev.awayTeam || 'Away';
@@ -256,7 +263,7 @@ function normaliseEvent(ev, sportKey) {
       home_team: homeTeam,
       away_team: awayTeam,
       commence_time: new Date(startMs).toISOString(),
-      bookmakers: [{ key: 'sportybet', title: 'SportyBet', markets, _wa: true }],
+      bookmakers: [{ key: 'sportybet', title: 'SportyBet', markets, _wa: true, last_update: pulledAtIso || null }],
     };
   } catch { return null; }
 }
