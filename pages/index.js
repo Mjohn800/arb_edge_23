@@ -917,10 +917,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
     // Skipping is safe; guessing (or taking the max) is how fake arbs appear.
     const quotes = [];
     for (const bm of ev.bookmakers) {
-      // Every book is a COMPARATOR (feeds slot.all, so Pinnacle/Betfair can expose a bad price);
-      // only accessible books may be an arb LEG (slot.best). Previously WA mode dropped non-accessible
-      // books entirely, so WA arbs had too few comparators and showed as "uncheckable".
-      const bookable = mode !== 'wa' || isBookAccessible(bm.key, userRegion);
+      if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
       for (const mkt of (bm.markets || [])) {
         if (!['h2h', 'spreads', 'totals', 'outrights'].includes(mkt.key)) continue;
         for (const o of mkt.outcomes) {
@@ -956,7 +953,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
             slotKey = 'outrights'; sideKey = o.name;
             marketLabel = 'Outright';
           }
-          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, bookable, displayLabel, marketLabel, point: o.point ?? null, fixtureRef: bm.bookmakerFixtureId || bm.eventId || null, updatedMs: parseQuoteTime(mkt.last_update || bm.last_update), srcEvent: bm.srcEvent || null });
+          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, displayLabel, marketLabel, point: o.point ?? null, fixtureRef: bm.bookmakerFixtureId || bm.eventId || null, updatedMs: parseQuoteTime(mkt.last_update || bm.last_update), srcEvent: bm.srcEvent || null });
         }
       }
     }
@@ -972,7 +969,6 @@ function findArbs(events, mode = 'global', userRegion = null) {
       if (!marketSlots[q.slotKey]) marketSlots[q.slotKey] = { mktKey: q.mktKey, line: q.line, best: {}, all: {} };
       const slot = marketSlots[q.slotKey];
       (slot.all[q.sideKey] = slot.all[q.sideKey] || []).push({ book: q.book, price: q.price });
-      if (!q.bookable) continue; // comparator only, never an arb leg
       if (!slot.best[q.sideKey] || q.price > slot.best[q.sideKey].price) {
         slot.best[q.sideKey] = { sideKey: q.sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, updatedMs: q.updatedMs, srcEvent: q.srcEvent };
       }
@@ -1015,9 +1011,6 @@ function findArbs(events, mode = 'global', userRegion = null) {
           commenceTime: ev.commence_time,
           margin,
           verify,
-          // 'clean' = every leg cross-checked against >=2 other books, fresh, no flags; otherwise 'review'
-          // (hidden in the UI unless opened). A live re-check that returns 'confirmed' promotes it.
-          tier: verify.level === 'standard' ? 'clean' : 'review',
           home: ev.home_team,
           away: ev.away_team,
           outcomes: outs.map(o => ({
@@ -1612,7 +1605,6 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [showSportPicker, setShowSportPicker] = useState(false);
   const [minMargin, setMinMargin] = useState(0);
   const [showHighProfit, setShowHighProfit] = useState(false);
-  const [showReview, setShowReview] = useState(false); // review-tier arbs stay hidden unless opened
   // user's active reports = their personal denylist (table arb_reports, see arb_reports.sql)
   const [reports, setReports] = useState([]);
   const [reportOpenId, setReportOpenId] = useState(null);
@@ -2094,9 +2086,24 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     // here, everything else is stamped with its liveVerify result so cards
     // can show "live-verified" / "margin adjusted" without another round trip.
     const verifyMap = await verifyTopCandidates(found.concat(foundArbsWA));
+    // Arbs with a 22Bet leg are only shown once that leg is confirmed against 22Bet's own API.
+    // dropped / unverified / verify-call-failed => hidden. Arbs with no 22Bet leg pass through unchanged.
     const applyVerification = (list) => list
-      .filter(a => !verifyMap[a.id] || verifyMap[a.id].status !== 'dropped')
-      .map(a => verifyMap[a.id] ? { ...a, liveVerify: verifyMap[a.id] } : a);
+      .filter(a => {
+        if (!a.outcomes.some(o => o.book === '22bet')) return true;
+        const v = verifyMap && verifyMap[a.id];
+        return !!v && ['confirmed', 'adjusted', 'partial'].includes(v.status);
+      })
+      .map(a => {
+        const v = verifyMap && verifyMap[a.id];
+        if (!v) return a;
+        if (v.status === 'adjusted' && v.freshMargin != null) {
+          // show the fresh 22Bet prices and margin, not the stale scan ones
+          const outcomes = a.outcomes.map((o, i) => (v.legs[i] && v.legs[i].freshPrice ? { ...o, odds: v.legs[i].freshPrice } : o));
+          return { ...a, outcomes, margin: v.freshMargin, liveVerify: v };
+        }
+        return { ...a, liveVerify: v };
+      });
     // arb age: stamp each arb with when this exact arb (same legs + prices) was first seen
     const stampAge = list => {
       const seen = firstSeenRef.current, now = Date.now();
@@ -2350,10 +2357,10 @@ const verifyTopCandidates = async (candidates) => {
       body: JSON.stringify({ candidates }),
     });
     const data = await res.json();
-    if (!res.ok) return {};
+    if (!res.ok) return null;
     return Object.fromEntries(data.results.map(r => [r.id, r]));
   } catch {
-    return {}; // verification failing should never block showing the scan results
+    return null; // verification call failed: caller hides 22Bet-leg arbs rather than showing them unchecked
   }
 };
 
@@ -2414,17 +2421,12 @@ const analyzeArb = async (arb) => {
   // (which almost never coincidentally land on WA books for every single leg).
   const arbsBase = arbSection === 'wa' ? arbsWAReal : arbs;
 
-  // Default view: clean arbs, plus any arb whose legs were just re-fetched live and confirmed.
-  const isShownByDefault = a => a.tier !== 'review' || (recheck[a.id] && recheck[a.id].verdict === 'confirmed');
-  const hiddenReview = arbsBase.filter(a => !isDenied(a) && !isShownByDefault(a)).length;
-
   const filteredArbs = arbsBase.filter(a => {
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
     if (isDenied(a)) return false;
     if (!showHighProfit && a.margin > DEFAULT_MAX_PROFIT) return false;
-    if (!showReview && !isShownByDefault(a)) return false;
     if (accessOnly && !isFullyAccessible(a.outcomes, userRegion)) return false;
     if (arbSection === 'global' && isFullyAccessible(a.outcomes, userRegion)) return false;
     return a.margin >= minMargin;
@@ -2435,7 +2437,6 @@ const analyzeArb = async (arb) => {
   const sameFilters = a => {
     if (isDenied(a)) return false;
     if (!showHighProfit && a.margin > DEFAULT_MAX_PROFIT) return false;
-    if (!showReview && !isShownByDefault(a)) return false;
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
@@ -2742,10 +2743,6 @@ const analyzeArb = async (arb) => {
         e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No arbitrage opportunities in this scan'),
         e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, 'The scan completed and no cross-book arbs passed the checks. That is a normal result — real arbs are rare and short-lived.')
       ),
- (hiddenReview > 0 || showReview) && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
-   !showReview ? e('div', null, '🔍 ' + hiddenReview + ' arb' + (hiddenReview === 1 ? '' : 's') + ' hidden: not enough cross-checks or a flagged price. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(true); } }, 'Show review arbs'))
-     : e('div', null, 'Showing review arbs: verify every leg on the book before staking. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(false); } }, 'Hide again'))
- ),
  (hiddenHighProfit > 0 || showHighProfit || hiddenByReports > 0) && e('div', { style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
    hiddenHighProfit > 0 && !showHighProfit && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden — that size is far more often a bad price than a real edge. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(true); } }, 'Show them')),
    showHighProfit && e('div', null, 'Showing arbs above +' + DEFAULT_MAX_PROFIT + '% — treat each as unverified until checked on the book. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(false); } }, 'Hide again')),
