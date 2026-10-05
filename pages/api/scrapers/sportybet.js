@@ -69,6 +69,27 @@ const HEADERS = {
   'Referer': 'https://www.sportybet.com/gh/m/sport/football',
 };
 
+// Asian Handicap is recognised by STRUCTURE, not by market id: exactly two active outcomes described as
+// "Home (-0.5)" / "Away (+0.5)" (a signed number, no colon), on the quarter-line grid, with mirrored lines.
+// Anything else (3-way handicap "Home (1:0)", draw-no-bet, odd/even...) fails the test and is skipped.
+function parseAsianHandicap(market, homeTeam, awayTeam) {
+  const outs = (market.outcomes || market.selections || []).filter(o => o.isActive !== false && o.active !== false);
+  if (outs.length !== 2) return null;
+  const res = [];
+  for (const o of outs) {
+    const price = parseFloat(o.odds || o.price || o.oddsValue);
+    const desc = String(o.desc || o.name || '').trim();
+    const m = desc.match(/^(Home|Away)\s*\(\s*([+-]?\d+(?:\.\d+)?)\s*\)$/i);
+    if (!m || !(price > 1)) return null;
+    const point = parseFloat(m[2]);
+    if (!Number.isFinite(point) || Math.abs(point * 4 - Math.round(point * 4)) > 1e-9) return null;
+    res.push({ side: m[1].toLowerCase(), point, price, desc });
+  }
+  const h = res.find(r => r.side === 'home'), a = res.find(r => r.side === 'away');
+  if (!h || !a || Math.abs(h.point + a.point) > 1e-9) return null; // the two sides must be mirror lines
+  return [{ name: homeTeam, price: h.price, point: h.point, desc: h.desc }, { name: awayTeam, price: a.price, point: a.point, desc: a.desc }];
+}
+
 const MARKET_MAP = { '1_1': 'h2h', '1': 'h2h', '18_1': 'totals', '18': 'totals', '10_1': 'handicap_3way', '10': 'handicap_3way', '29_1': 'btts', '29': 'btts' };
 
 // SportyBet market ids 1 / 18 are the 90-minute (regulation) markets: right for soccer, but NOT confirmed to
@@ -90,7 +111,7 @@ async function fetchSportybetOdds(sportKey) {
       // Body: [{"sportId":"sr:sport:1","marketId":"1,18,10,29,11,26,36,14","tournamentId":[["sr:tournament:16"]]}]
       const body = [{
         sportId: mapping.sportId,
-        marketId: '1,18,10,29,11,26,36,14',
+        marketId: '1,18,10,29,11,26,36,14,16', // 16 added for Asian Handicap; confirm the id with /api/sportybet-debug
         tournamentId: [[mapping.tournamentId]],
       }];
 
@@ -209,11 +230,17 @@ function normaliseEvent(ev, sportKey, pulledAtIso) {
       return null;
     }
 
-    const h2hOutcomes = [], totalsOutcomes = [], ahOutcomes = [], bttsOutcomes = [];
+    const h2hOutcomes = [], totalsOutcomes = [], ahOutcomes = [], bttsOutcomes = [], spreadsOutcomes = [];
     for (const market of (ev.markets || ev.odds || ev.marketList || ev.quickMarkets || [])) {
       const mKey = MARKET_MAP[market.id] || MARKET_MAP[market.marketId] || MARKET_MAP[String(market.marketType)];
-      if (!mKey) continue;
+      if (!mKey) {
+        const ah = parseAsianHandicap(market, homeTeam, awayTeam);
+        if (ah) spreadsOutcomes.push(...ah);
+        continue;
+      }
       for (const o of (market.outcomes || market.selections || market.odds || [])) {
+        // A suspended outcome can still carry its last price: never use it.
+        if (o.isActive === false || o.active === false) continue;
         const price = parseFloat(o.odds || o.price || o.oddsValue);
         if (!price || price <= 1.0) continue;
         // SportyBet encodes the line in desc e.g. "Over 2.5", "Under 0.5", "Home (2:0)"
@@ -253,6 +280,7 @@ function normaliseEvent(ev, sportKey, pulledAtIso) {
     const markets = [];
     if (h2hOutcomes.length >= 2)   markets.push({ key: 'h2h',     outcomes: h2hOutcomes });
     if (totalsOutcomes.length >= 2) markets.push({ key: 'totals',  outcomes: totalsOutcomes });
+    if (spreadsOutcomes.length >= 2) markets.push({ key: 'spreads', outcomes: spreadsOutcomes });
     if (ahOutcomes.length >= 2)     markets.push({ key: 'handicap_3way', outcomes: ahOutcomes });
     if (bttsOutcomes.length >= 2)   markets.push({ key: 'btts',    outcomes: bttsOutcomes });
     if (markets.length === 0) return null;
@@ -263,9 +291,12 @@ function normaliseEvent(ev, sportKey, pulledAtIso) {
       home_team: homeTeam,
       away_team: awayTeam,
       commence_time: new Date(startMs).toISOString(),
-      bookmakers: [{ key: 'sportybet', title: 'SportyBet', markets, _wa: true, last_update: pulledAtIso || null }],
+      bookmakers: [{ key: 'sportybet', title: 'SportyBet', markets, _wa: true, last_update: pulledAtIso || null,
+        // SportyBet's own event id, kept on the bookmaker record so it survives the merge into a global event
+        // (same reason as 22bet's eventId) and a per-event refresh can find this exact fixture later.
+        eventId: String(ev.eventId || ev.id || ev.matchId || '') || null }],
     };
   } catch { return null; }
 }
 
-module.exports = { fetchSportybetOdds };
+module.exports = { fetchSportybetOdds, parseAsianHandicap, SPORTYBET_SPORT_MAP, SPORTYBET_BASE: BASE, SPORTYBET_HEADERS: HEADERS };
