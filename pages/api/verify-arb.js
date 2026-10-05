@@ -1,19 +1,18 @@
 // pages/api/verify-arb.js
 // Re-checks the legs of ONE arb against a fresh pull from each leg's source.
-// Only SportyBet (free scraper) and OddsPapi books (betano, 22bet, melbet — one API
+// Only SportyBet (free scraper) and OddsPapi books (betano, 22bet — one API
 // call each, cache bypassed) are re-checkable; anything else is reported as
 // "not_rechecked". Deliberately never touches the-odds-api, so it can't burn
 // credits. Called on demand from the UI, not during scans.
 import { getUserPlan, FREE_SPORTS, SCANNED_SPORTS } from '../../lib/serverAuth';
 import { fetchSportybetOdds } from './scrapers/sportybet';
-import { fetchBetanoOddsPapi, fetch22BetOddsPapi, fetchMelbetOddsPapi } from '../../lib/oddspapi-wa';
+import { fetchBetanoOddsPapi, fetch22BetOddsPapi } from '../../lib/oddspapi-wa';
 import { verifyArbLegs } from '../../lib/verifyArb';
 
 const FETCHERS = {
   sportybet: sportKey => fetchSportybetOdds(sportKey),
   betano:    sportKey => fetchBetanoOddsPapi(sportKey, { bypassCache: true }),
   '22bet':   sportKey => fetch22BetOddsPapi(sportKey, { bypassCache: true }),
-  melbet:    sportKey => fetchMelbetOddsPapi(sportKey, { bypassCache: true }),
 };
 
 export default async function handler(req, res) {

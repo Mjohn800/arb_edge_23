@@ -1,6 +1,6 @@
 // pages/api/feed-audit.js
 // Admin-only data-quality audit across every bookmaker feed we use (betano,
-// 22bet, melbet via OddsPapi; sportybet via its scraper). It does not assume any
+// 22bet via OddsPapi; sportybet via its scraper). It does not assume any
 // feed is right — it measures internal consistency and how each book's prices
 // compare with the other books, and prints concrete examples to check by hand
 // against the bookmaker's own page.
@@ -16,7 +16,7 @@
 //     /api/feed-audit?token=TOKEN&sports=soccer&skip=4
 //   List the sport keys:  /api/feed-audit?token=TOKEN&sport=list
 export const config = { maxDuration: 60 };   // let one call cover several leagues (ignored where the plan doesn't allow it)
-import { ODDSPAPI_TOURNAMENT_MAP, fetchBetanoOddsPapi, fetch22BetOddsPapi, fetchMelbetOddsPapi } from '../../lib/oddspapi-wa';
+import { ODDSPAPI_TOURNAMENT_MAP, fetchBetanoOddsPapi, fetch22BetOddsPapi } from '../../lib/oddspapi-wa';
 import { catalogueSummary } from '../../lib/oddspapi';
 import { fetchSportybetOdds } from './scrapers/sportybet';
 import { auditEvents } from '../../lib/auditFeed';
@@ -26,7 +26,6 @@ async function runLeague(sport, compact) {
   const fetchers = {
     betano: () => fetchBetanoOddsPapi(sport),
     '22bet': () => fetch22BetOddsPapi(sport),
-    melbet: () => fetchMelbetOddsPapi(sport),
     sportybet: () => fetchSportybetOdds(sport),
   };
   const fetched = {}; const eventsByBook = {};
