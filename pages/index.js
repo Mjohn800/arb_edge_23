@@ -1003,6 +1003,26 @@ function findScannedOddsForGame(game, events, userRegion) {
 
 function findArbs(events, mode = 'global', userRegion = null) {
   const arbs = [];
+  // Coverage diagnostic, per book: quotes used, quotes dropped because the team name could not be resolved to home/away,
+  // and quotes rescued by the book's own event names. Logged once per global scan as '[findArbs] coverage'.
+  const cov = {};
+  const covOf = k => (cov[k] = cov[k] || { quotes: 0, unresolved: 0, rescued: 0, unresolvedNames: [] });
+  // A book's outcome names come from the same feed as its srcEvent (that feed's own home/away names, matched to this
+  // event by the server). So when the global-name lookup fails, resolve against the book's OWN names instead of
+  // silently dropping the quote.
+  const sideFor = (o, bm, ev) => {
+    const direct = resolveSide(o.name, ev);
+    if (direct) return direct;
+    const c = covOf(bm.key);
+    const se = bm.srcEvent;
+    if (se && se.home && se.away) {
+      const r = normaliseOutcome(o.name, se.home, se.away);
+      if (r === '__home__' || r === '__away__' || r === '__draw__') { c.rescued++; return r; }
+    }
+    c.unresolved++;
+    if (c.unresolvedNames.length < 4) c.unresolvedNames.push(String(o.name) + ' @ ' + ev.home_team + ' v ' + ev.away_team);
+    return null;
+  };
   const SIDE_ORDER = { __home__: 0, over: 0, __draw__: 1, under: 1, __away__: 2 };
   for (const ev of events) {
     if (!ev.bookmakers || ev.bookmakers.length < 2) continue;
@@ -1038,13 +1058,14 @@ function findArbs(events, mode = 'global', userRegion = null) {
           let displayLabel = o.name;
           let marketLabel = 'Match Winner';
 
+          covOf(bm.key).quotes++;
           if (mkt.key === 'h2h') {
-            const side = resolveSide(o.name, ev);
+            const side = sideFor(o, bm, ev);
             if (!side) continue;
             slotKey = 'h2h'; sideKey = side;
             displayLabel = side === '__home__' ? ev.home_team : side === '__away__' ? ev.away_team : 'Draw';
           } else if (mkt.key === 'spreads') {
-            const side = resolveSide(o.name, ev);
+            const side = sideFor(o, bm, ev);
             if (side !== '__home__' && side !== '__away__') continue;
             if (typeof o.point !== 'number') continue;
             line = side === '__home__' ? o.point : -o.point;
@@ -1239,6 +1260,13 @@ function findArbs(events, mode = 'global', userRegion = null) {
         });
       }
     }
+  }
+  if (mode === 'global') {
+    try {
+      const bad = Object.entries(cov).filter(([, c]) => c.unresolved > 0 || c.rescued > 0);
+      console.log('[findArbs] coverage (quotes per book):', Object.entries(cov).map(([k, c]) => k + '=' + c.quotes).join(' '));
+      if (bad.length) console.warn('[findArbs] team-name resolution:', JSON.stringify(Object.fromEntries(bad.map(([k, c]) => [k, { unresolved: c.unresolved, rescuedByOwnNames: c.rescued, examples: c.unresolvedNames }]))));
+    } catch {}
   }
   return arbs.sort((a, b) => b.margin - a.margin);
 }
@@ -1778,13 +1806,47 @@ const st = {
 
 const EMPTY_MANUAL = { match: '', sport: 'soccer_epl', commenceTime: new Date(Date.now() + 3600000).toISOString() };
 
+// ── LAST-SCAN SNAPSHOT ─────────────────────────────────────────────────────────────────────────────
+// The finished scan is saved on this device (per user), so reopening the site shows the last real results straight
+// away instead of the demo data, and no rescan is made until the 5-minute window is over. The scan itself still
+// refreshes everything; this only fills the screen (and saves quota) while the data is still current.
+const SNAP_VERSION = 1;
+const SNAP_MAX_AGE_MS = 2 * 60 * 60 * 1000;   // older than this is not shown at all (the 12-min arb expiry hides old arbs anyway)
+const SCAN_WINDOW_MS = 5 * 60 * 1000;
+const snapKey = uid => 'arb_snapshot_v' + SNAP_VERSION + ':' + uid;
+const sportsSig = list => JSON.stringify([...(list || [])].sort());
+function loadSnapshot(uid) {
+  if (!uid) return null;
+  try {
+    const raw = localStorage.getItem(snapKey(uid));
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (!s || s.v !== SNAP_VERSION || !s.savedAt || !Array.isArray(s.arbs)) return null;
+    if (Date.now() - s.savedAt > SNAP_MAX_AGE_MS) return null;
+    return s;
+  } catch { return null; }
+}
+function saveSnapshot(uid, snap) {
+  if (!uid) return;
+  const put = s => { try { localStorage.setItem(snapKey(uid), JSON.stringify(s)); return true; } catch { return false; } };
+  if (put(snap)) return;
+  // Too big for the device's storage: keep the arbs and EV (what matters), drop the bulky lists.
+  put({ ...snap, middles: [], middlesWA: [], bestOdds: [], bestOddsWA: [], steam: [] });
+}
+
 function ArbEdgeApp({ session, onLogout }) {
   const [tab, setTab] = useState('scanner');
 const [apiKey, setApiKey] = useState('server');
   const [apiInput, setApiInput] = useState('');
   const [showSetup, setShowSetup] = useState(false);
-  const [arbs, setArbs] = useState(MOCK);
-  const [arbsWAReal, setArbsWAReal] = useState([]); // properly computed WA-only arbs (not a post-filter of global picks)
+  const uidRef = React.useRef(session && session.user ? session.user.id : null);
+  const [snap0] = useState(() => loadSnapshot(session && session.user ? session.user.id : null)); // last finished scan on this device, or null
+  // When the last SUCCESSFUL scan finished (ms) and which leagues it covered. Unlike lastFetch (stamped when a scan STARTS,
+  // so a scan abandoned mid-way still looked fresh), these only move when real data was actually saved.
+  const lastGoodScanRef = React.useRef(snap0 ? snap0.savedAt : 0);
+  const lastGoodSigRef = React.useRef(snap0 ? (snap0.sports || '') : '');
+  const [arbs, setArbs] = useState(snap0 ? snap0.arbs : MOCK);
+  const [arbsWAReal, setArbsWAReal] = useState(snap0 ? (snap0.arbsWA || []) : []); // properly computed WA-only arbs (not a post-filter of global picks)
   const [loading, setLoading] = useState(false);
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0, sport: '' });
   const [lastFetch, setLastFetch] = useState(() => {
@@ -1794,10 +1856,10 @@ const [apiKey, setApiKey] = useState('server');
   } catch { return null; }
 });
   const [error, setError] = useState('');
-  const [isDemo, setIsDemo] = useState(true);
-  const [isDemoEV, setIsDemoEV] = useState(true);
-  const [waHealth, setWaHealth] = useState(null);
-  const [scanHealth, setScanHealth] = useState(null); // WA book coverage from last scan
+  const [isDemo, setIsDemo] = useState(!snap0);
+  const [isDemoEV, setIsDemoEV] = useState(!snap0);
+  const [waHealth, setWaHealth] = useState(snap0 ? (snap0.waHealth || null) : null);
+  const [scanHealth, setScanHealth] = useState(snap0 ? (snap0.scanHealth || null) : null); // WA book coverage from last scan
   const [showScanHealth, setShowScanHealth] = useState(false); // expand/collapse detail panel
   const [sel, setSel] = useState(null);
   const [stake, setStake] = useState(500);
@@ -1901,11 +1963,11 @@ useEffect(() => {
   const [manualMeta, setManualMeta] = useState(EMPTY_MANUAL);
   const [manualStake, setManualStake] = useState(500);
   const [manualResult, setManualResult] = useState(null);
-  const [evBets, setEvBets] = useState(MOCK_EV);
-  const [integrity, setIntegrity] = useState(null);
+  const [evBets, setEvBets] = useState(snap0 ? (snap0.ev || []) : MOCK_EV);
+  const [integrity, setIntegrity] = useState(snap0 ? (snap0.integrity || null) : null);
   const [evDiag, setEvDiag] = useState(null);
   const [evDiagWA, setEvDiagWA] = useState(null);
-  const [evWA, setEvWA] = useState([]); // West Africa EV bets — Pinnacle reference, WA-accessible books only
+  const [evWA, setEvWA] = useState(snap0 ? (snap0.evWA || []) : []); // West Africa EV bets — Pinnacle reference, WA-accessible books only
   const [evSection, setEvSection] = useState('global'); // 'global' | 'wa'
   const [minEV, setMinEV] = useState(2);
   const [evStake, setEvStake] = useState(500);
@@ -1918,8 +1980,8 @@ useEffect(() => {
   const [gameAnalyses, setGameAnalyses] = useState({});
   const [analyzingGameId, setAnalyzingGameId] = useState(null);
   const [analyzerLoaded, setAnalyzerLoaded] = useState(false);
-  const [quota, setQuota] = useState({ remaining: null, used: null, keyIndex: 1 });
-  const [userRegion, setUserRegion] = useState({ country: null, isWA: true, accessibleBooks: null }); // default WA until detected
+  const [quota, setQuota] = useState(snap0 && snap0.quota ? snap0.quota : { remaining: null, used: null, keyIndex: 1 });
+  const [userRegion, setUserRegion] = useState(snap0 && snap0.userRegion ? snap0.userRegion : { country: null, isWA: true, accessibleBooks: null }); // default WA until detected
   const [nextScanAt, setNextScanAt] = useState(() => {
   try { const saved = localStorage.getItem('arb_nextScanAt'); return saved ? Number(saved) : null; } catch { return null; }
 });
@@ -1928,14 +1990,14 @@ useEffect(() => {
   const [analyzingId, setAnalyzingId] = useState(null);
   const [recheck, setRecheck] = useState({});
   const [recheckingId, setRecheckingId] = useState(null);
-  const [middles, setMiddles] = useState([]);
-  const [middlesWA, setMiddlesWA] = useState([]); // West Africa middles — both legs accessible
+  const [middles, setMiddles] = useState(snap0 ? (snap0.middles || []) : []);
+  const [middlesWA, setMiddlesWA] = useState(snap0 ? (snap0.middlesWA || []) : []); // West Africa middles — both legs accessible
   const [middleSection, setMiddleSection] = useState('global'); // 'global' | 'wa'
   const [middleSort, setMiddleSort] = useState('ev'); // 'ev' = best estimated EV first, 'likely' = biggest chance of landing first
   const [showAllMiddles, setShowAllMiddles] = useState(false); // false = hide middles whose estimated EV is clearly negative
-  const [steam, setSteam] = useState([]);
-  const [bestOdds, setBestOdds] = useState([]);
-  const [bestOddsWA, setBestOddsWA] = useState([]); // West Africa line shopping — accessible books only
+  const [steam, setSteam] = useState(snap0 ? (snap0.steam || []) : []);
+  const [bestOdds, setBestOdds] = useState(snap0 ? (snap0.bestOdds || []) : []);
+  const [bestOddsWA, setBestOddsWA] = useState(snap0 ? (snap0.bestOddsWA || []) : []); // West Africa line shopping — accessible books only
   const [lineshopSection, setLineshopSection] = useState('global'); // 'global' | 'wa'
   const [edgeTab, setEdgeTab] = useState('lineshop'); // 'lineshop' | 'middle' | 'steam'
   const prevEventsRef = React.useRef([]);
@@ -2224,6 +2286,8 @@ useEffect(() => {
     // would get silently overwritten by sport #20's "ok" status, making the "WA 3/3" badge
     // lie about scrapers that actually failed partway through.
     const waHealthAgg = {};
+    let quotaNow = null;
+    const booksSeenAgg = new Set(); // every bookmaker key the server returned during this scan (diagnostics)
     for (let i = 0; i < sportsToScan.length; i++) {
       const sp = sportsToScan[i];
       setScanProgress({ current: i + 1, total: sportsToScan.length, sport: sp.label });
@@ -2254,7 +2318,7 @@ useEffect(() => {
         okCount++;
         const json = await res.json();
 const data = json.data || json;
-if (json.remainingRequests) setQuota({ remaining: json.remainingRequests, used: json.usedRequests, keyIndex: json.keyIndex || 1 });
+if (json.remainingRequests) { quotaNow = { remaining: json.remainingRequests, used: json.usedRequests, keyIndex: json.keyIndex || 1 }; setQuota(quotaNow); }
 if (json.userAccessibleBooks) {
   regionNow = { country: json.userCountry, region: json.userRegion, detectedRegion: json.detectedRegion, isWA: json.isWAUser, accessibleBooks: json.userAccessibleBooks };
   setUserRegion(regionNow);
@@ -2269,7 +2333,7 @@ if (json.waBookHealth) {
     waHealthAgg[book].fetchedAt = h?.fetchedAt || waHealthAgg[book].fetchedAt;
   });
 }
-data.forEach(e => { e.sport_key = sp.key; });
+data.forEach(e => { e.sport_key = sp.key; (e.bookmakers || []).forEach(b => booksSeenAgg.add(b.key)); });
 all.push(...data);
 if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map(b=>b.key)).filter((v,i,a)=>a.indexOf(v)===i).join(', '));
       } catch (err) { console.warn('Sport fetch threw for', sp.key, err); }
@@ -2283,8 +2347,16 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     });
     if (Object.keys(waHealthAgg).length > 0) setWaHealth(waHealthAgg);
     setUpgradeNotice(premiumBlocked > 0 ? premiumBlocked + ' of your selected sports need Premium. Free plan covers a limited set of leagues.' : '');
+    const keepPrevious = sportsToScan.length > 0 && okCount === 0 && lastGoodScanRef.current > 0;
     if (sportsToScan.length > 0 && okCount === 0 && premiumBlocked === 0) {
-      setError('Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. Showing demo data below.');
+      const failMsg = 'Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. ';
+      setError(prev => prev || (failMsg + (keepPrevious ? 'Showing your last successful scan from ' + new Date(lastGoodScanRef.current).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' instead.' : 'Showing demo data below.')));
+    }
+    if (keepPrevious) {
+      // The scan itself failed (quota, outage, offline). Keep showing the last real results instead of replacing them with demo data.
+      setLoading(false);
+      setNextScanAt(Date.now() + SCAN_WINDOW_MS);
+      return;
     }
     const integrityReport = sanitizeEvents(all);
     setIntegrity(integrityReport);
@@ -2331,10 +2403,13 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     setEvDiagWA(foundEVWA.diag || null);
     const middlesWAResult = findMiddles(all, 'wa', regionNow);
     const bestOddsWAResult = findBestOdds(all, 'wa', regionNow);
-    setMiddles(findMiddles(all, 'global', regionNow));
+    const middlesGlobalResult = findMiddles(all, 'global', regionNow);
+    const bestOddsGlobalResult = findBestOdds(all, 'global', regionNow);
+    const steamResult = findSteam(prevEventsRef.current, all);
+    setMiddles(middlesGlobalResult);
     setMiddlesWA(middlesWAResult);
-    setSteam(findSteam(prevEventsRef.current, all));
-    setBestOdds(findBestOdds(all, 'global', regionNow));
+    setSteam(steamResult);
+    setBestOdds(bestOddsGlobalResult);
     setBestOddsWA(bestOddsWAResult);
 
     // ── SCAN HEALTH ─────────────────────────────────────────────────────────────
@@ -2350,12 +2425,25 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     const eventsWithWACoverage = all.filter(ev =>
       (ev.bookmakers || []).filter(bm => isBookAccessible(bm.key, regionNow)).length >= 2
     ).length;
-    setScanHealth({
+    const scanHealthResult = {
       waBooks: waBookStatus,
       eventsScanned: all.length,
       eventsWithWACoverage,
       scannedAt: new Date().toISOString(),
-    });
+    };
+    setScanHealth(scanHealthResult);
+
+    // ── BOOK-KEY DIAGNOSTIC ─────────────────────────────────────────────────────
+    // Lists every bookmaker key the server sent in this scan, and flags keys that are not in BOOKS
+    // (a key mismatch, e.g. 'sporty_bet' vs 'sportybet', makes a book silently invisible to the finders).
+    try {
+      const seenList = [...booksSeenAgg].sort();
+      const unknownKeys = seenList.filter(k => !BOOKS[k]);
+      console.log('[scan] books returned by server (' + seenList.length + '):', seenList.join(', '));
+      if (unknownKeys.length) console.warn('[scan] book keys NOT in BOOKS (ignored by name lookups):', unknownKeys.join(', '));
+      const waMissing = WA_BOOKS.filter(k => !booksSeenAgg.has(k));
+      if (waMissing.length) console.warn('[scan] WA books with ZERO events in this scan:', waMissing.join(', '));
+    } catch {}
 
     // ── AUTO-CLV CAPTURE ────────────────────────────────────────────────────────
     // For pending EV bets: while the match hasn't kicked off, keep refreshing
@@ -2400,7 +2488,34 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
 
     prevEventsRef.current = all;
     setLoading(false);
-    setNextScanAt(Date.now() + 5 * 60 * 1000);
+    setNextScanAt(Date.now() + SCAN_WINDOW_MS);
+
+    // ── SAVE THIS SCAN ──────────────────────────────────────────────────────────
+    // Only a scan that actually loaded data is saved, so a failed scan can never overwrite good results.
+    if (okCount > 0) {
+      const savedAt = Date.now();
+      lastGoodScanRef.current = savedAt;
+      lastGoodSigRef.current = sportsSig(selectedSports);
+      saveSnapshot(uidRef.current, {
+        v: SNAP_VERSION,
+        savedAt,
+        sports: lastGoodSigRef.current,
+        arbs: foundVerified,
+        arbsWA: foundArbsWAVerified,
+        ev: foundEV,
+        evWA: foundEVWA,
+        middles: middlesGlobalResult,
+        middlesWA: middlesWAResult,
+        steam: steamResult,
+        bestOdds: bestOddsGlobalResult,
+        bestOddsWA: bestOddsWAResult,
+        waHealth: Object.keys(waHealthAgg).length > 0 ? waHealthAgg : null,
+        scanHealth: scanHealthResult,
+        integrity: integrityReport,
+        quota: quotaNow,
+        userRegion: regionNow,
+      });
+    }
   }, [selectedSports, minEV]);
 
   const saveKey = () => {
@@ -2420,25 +2535,33 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
   const lastFetchRef = React.useRef(lastFetch);
   lastFetchRef.current = lastFetch;
   useEffect(() => {
-  const now = new Date();
-  if (!lastFetch || (now - new Date(lastFetch)) > 5 * 60 * 1000) {
-    fetchOddsRef.current(apiKey || 'server');
-  }
-  const id = setInterval(() => { if (apiKey) fetchOddsRef.current(apiKey); }, 5 * 60 * 1000);
+  const scanNow = () => fetchOddsRef.current(apiKey || 'server');
+  const ATTEMPT_GAP_MS = 2 * 60 * 1000; // never start two scans closer together than this (guards refresh-spamming and failed scans)
+  const lastTry = () => (lastFetchRef.current ? new Date(lastFetchRef.current).getTime() : 0);
+  // Reopening the site: if the saved scan is under 5 min old (and covers the same leagues), it is already on screen,
+  // so wait out the rest of its 5-min window instead of scanning again. Otherwise scan right away.
+  const sameSports = lastGoodSigRef.current === sportsSig(selectedSports);
+  const goodAge = lastGoodScanRef.current ? Date.now() - lastGoodScanRef.current : Infinity;
+  let delay = 0;
+  if (sameSports && goodAge < SCAN_WINDOW_MS) delay = SCAN_WINDOW_MS - goodAge;
+  else if (Date.now() - lastTry() < ATTEMPT_GAP_MS) delay = ATTEMPT_GAP_MS - (Date.now() - lastTry());
+  let id = null;
+  const first = setTimeout(() => { scanNow(); id = setInterval(scanNow, SCAN_WINDOW_MS); }, delay);
   // Phones pause timers while the screen is off or the tab is in the background, so a page left open can show
-  // prices 20+ minutes old. Rescan as soon as the page is visible again IF the last scan is over 5 min old
-  // (the same gate as above, so this never scans more often than every 5 min and the shared cache absorbs it).
+  // prices 20+ minutes old. Rescan as soon as the page is visible again IF the last good scan is over 5 min old
+  // (so this never scans more often than every 5 min and the shared cache absorbs it).
   const onVisible = () => {
     if (document.visibilityState !== 'visible' || !apiKey) return;
-    const last = lastFetchRef.current ? new Date(lastFetchRef.current).getTime() : 0;
-    if (Date.now() - last <= 5 * 60 * 1000) return;
-    lastFetchRef.current = new Date(); // claim it now: visibilitychange and pageshow often fire together
-    fetchOddsRef.current(apiKey);
+    if (lastGoodScanRef.current && lastGoodSigRef.current === sportsSig(selectedSports) && Date.now() - lastGoodScanRef.current < SCAN_WINDOW_MS) return; // still current
+    if (Date.now() - lastTry() < ATTEMPT_GAP_MS) return; // a scan was just started (visibilitychange and pageshow often fire together)
+    lastFetchRef.current = new Date(); // claim it now
+    scanNow();
   };
   document.addEventListener('visibilitychange', onVisible);
   window.addEventListener('pageshow', onVisible);
   return () => {
-    clearInterval(id);
+    clearTimeout(first);
+    if (id) clearInterval(id);
     document.removeEventListener('visibilitychange', onVisible);
     window.removeEventListener('pageshow', onVisible);
   };
