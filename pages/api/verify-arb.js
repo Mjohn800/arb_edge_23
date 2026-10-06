@@ -8,6 +8,12 @@ import { getUserPlan, FREE_SPORTS, SCANNED_SPORTS } from '../../lib/serverAuth';
 import { fetchSportybetOdds } from './scrapers/sportybet';
 import { fetchBetanoOddsPapi, fetch22BetOddsPapi } from '../../lib/oddspapi-wa';
 import { verifyArbLegs } from '../../lib/verifyArb';
+import { checkRateLimit } from '../../lib/supabaseCache';
+
+// Each recheck can force up to 2 PAID OddsPapi pulls (betano + 22bet, cache bypassed), so cap it per user.
+// Shared across instances via Supabase; owners are exempt. Fails CLOSED: if the limiter is down, deny.
+const VERIFY_ARB_LIMIT_MAX = 12;
+const VERIFY_ARB_LIMIT_WINDOW_SECONDS = 10 * 60;
 
 const FETCHERS = {
   sportybet: sportKey => fetchSportybetOdds(sportKey),
@@ -16,6 +22,7 @@ const FETCHERS = {
 };
 
 export default async function handler(req, res) {
+  res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') return res.status(405).json({ error: 'method_not_allowed' });
 
   const plan = await getUserPlan(req);
@@ -33,6 +40,11 @@ export default async function handler(req, res) {
       typeof o.marketKey === 'string' && typeof o.odds === 'number');
   if (!legsOk || !arb.home || !arb.away || !arb.commenceTime) {
     return res.status(400).json({ error: 'bad_request' });
+  }
+
+  if (!plan.isOwner) {
+    const rl = await checkRateLimit('verifyarb:' + plan.user.id, VERIFY_ARB_LIMIT_MAX, VERIFY_ARB_LIMIT_WINDOW_SECONDS, { failClosed: true });
+    if (!rl.allowed) return res.status(429).json({ error: 'rate_limited', retryAfterSeconds: rl.retryAfterSeconds });
   }
 
   try {
