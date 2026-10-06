@@ -2,7 +2,7 @@ import { getUserPlan, FREE_SPORTS, SCANNED_SPORTS } from '../../lib/serverAuth';
 import { fetchSportybetOdds } from './scrapers/sportybet';
 import { fetchBetanoOdds }    from './scrapers/betano';
 import { fetch22BetOdds }       from './scrapers/22bet';
-import { fetchBetanoOddsPapi, fetch22BetOddsPapi } from '../../lib/oddspapi-wa';
+import { fetchBetanoOddsPapi, fetch22BetOddsPapi, fetchExtraBookOddsPapi, ODDSPAPI_EXTRA_BOOKS } from '../../lib/oddspapi-wa';
 import { cacheGet, cacheSet, checkRateLimit } from '../../lib/supabaseCache';
 import { sendStructuralAlert } from '../../lib/alerts';
 
@@ -155,11 +155,14 @@ async function getWAOdds(sportKey) {
     return { events: cached.data, health: cached.health, fromCache: true };
   }
 
+  // Second-source feeds from OddsPapi for books that already have a primary source (see oddspapi-wa.js).
+  const extraP = Promise.allSettled(ODDSPAPI_EXTRA_BOOKS.map(b => fetchExtraBookOddsPapi(b, sportKey)));
   const [sportybet, betano, twobet] = await Promise.allSettled([
     fetchSportybetOdds(sportKey),
     getBetanoOdds(sportKey),
     get22BetOdds(sportKey),
   ]);
+  const extraSettled = await extraP;
 
   const extractStatus = (settled, fallbackReason) =>
     settled.status === 'fulfilled' && settled.value?.status
@@ -170,21 +173,36 @@ async function getWAOdds(sportKey) {
   waHealth.betano      = extractStatus(betano,      'promise_rejected: ' + (betano.reason?.message      || 'unknown'));
   waHealth['22bet']    = extractStatus(twobet,      'promise_rejected: ' + (twobet.reason?.message      || 'unknown'));
 
+  const extraHealth = {};
+  const extraEvents = [];
+  ODDSPAPI_EXTRA_BOOKS.forEach((b, i) => {
+    const s = extraSettled[i];
+    extraHealth[b + '_oddspapi'] = extractStatus(s, 'promise_rejected: ' + (s.reason?.message || 'unknown'));
+    for (const ev of (s.status === 'fulfilled' ? s.value?.events || [] : [])) {
+      for (const bm of (ev.bookmakers || [])) bm.source = 'oddspapi';
+      extraEvents.push(ev);
+    }
+  });
+  Object.assign(waHealth, extraHealth);
+  // Primary sources first: mergeEvents keeps the first record per book and cross-checks the later ones against it.
   const results = [
     ...(sportybet.status   === 'fulfilled' ? sportybet.value?.events   || [] : []),
     ...(betano.status      === 'fulfilled' ? betano.value?.events      || [] : []),
     ...(twobet.status      === 'fulfilled' ? twobet.value?.events      || [] : []),
+    ...extraEvents,
   ];
 
   console.log('[odds][WA]', sportKey,
     '-> sportybet:',  sportybet.status   === 'fulfilled' ? (sportybet.value?.events?.length   ?? 0) : 'failed: ' + sportybet.reason?.message,
     '| betano:',      betano.status      === 'fulfilled' ? (betano.value?.events?.length      ?? 0) : 'failed: ' + betano.reason?.message,
     '| 22bet:',       twobet.status      === 'fulfilled' ? (twobet.value?.events?.length      ?? 0) : 'failed: ' + twobet.reason?.message,
+    '| second-source:', Object.entries(extraHealth).map(([k, v]) => k + '=' + (v.ok ? 'ok' : v.reason)).join(' ') || 'off',
     '| total:', results.length);
 
   const health = {
     sportybet: waHealth.sportybet, betano: waHealth.betano,
     '22bet': waHealth['22bet'],
+    ...extraHealth,
     // betway health is reported from the global the-odds-api result instead (see handler).
   };
   // Every WA bookmaker record carries the time its prices were pulled, and is marked 'pull' (the
@@ -214,7 +232,46 @@ async function getWAOdds(sportKey) {
 // listing (often two different fixtures, or a rescheduled one) merge into one event.
 const MERGE_KICKOFF_MS = 10 * 60 * 1000;
 
+// ── Cross-source check ──────────────────────────────────────────────────────────────────────────────
+// A book with two independent sources (betway: Odds API + OddsPapi, sportybet: scraper + OddsPapi) gets each
+// selection compared. If the two prices differ by more than CROSS_SOURCE_MAX_DIFF, at least one is wrong and we
+// cannot tell which, so that selection is dropped from the kept record and cannot become an arb leg.
+const CROSS_SOURCE_MAX_DIFF = 0.05;
+const crossStats = {};
+function sideTag(name, home, away) {
+  const n = String(name || '').trim().toLowerCase();
+  if (n === 'draw' || n === 'x') return 'draw';
+  if (n === 'over' || n === 'under' || n === 'yes' || n === 'no') return n;
+  if (fuzzyMatch(name, home)) return 'home';
+  if (fuzzyMatch(name, away)) return 'away';
+  return null;
+}
+const selKey = (mktKey, side, point) => mktKey + '|' + side + '|' + (point == null ? '' : Number(point).toFixed(2));
+function crossCheckBook(kept, other, keptNames, otherNames) {
+  const theirs = new Map();
+  for (const mkt of (other.markets || [])) for (const o of (mkt.outcomes || [])) {
+    const s = sideTag(o.name, otherNames.home, otherNames.away);
+    if (s) theirs.set(selKey(mkt.key, s, o.point), o.price);
+  }
+  const st = crossStats[kept.key] = crossStats[kept.key] || { compared: 0, agreed: 0, disputed: 0 };
+  let compared = 0, agreed = 0, disputed = 0;
+  const markets = (kept.markets || []).map(mkt => ({
+    ...mkt,
+    outcomes: (mkt.outcomes || []).filter(o => {
+      const s = sideTag(o.name, keptNames.home, keptNames.away);
+      const p2 = s ? theirs.get(selKey(mkt.key, s, o.point)) : undefined;
+      if (!(p2 > 1) || !(o.price > 1)) return true;       // the other source does not list it: nothing to compare
+      compared++;
+      if (Math.abs(o.price - p2) / Math.min(o.price, p2) > CROSS_SOURCE_MAX_DIFF) { disputed++; return false; }
+      agreed++; return true;
+    }),
+  })).filter(m => m.outcomes.length > 0);
+  st.compared += compared; st.agreed += agreed; st.disputed += disputed;
+  return { ...kept, markets, crossCheck: { with: other.source || 'second source', compared, agreed, disputed } };
+}
+
 function mergeEvents(globalEvents, waEvents) {
+  for (const k of Object.keys(crossStats)) delete crossStats[k];
   const merged = globalEvents.map(ev => ({ ...ev, bookmakers: [...(ev.bookmakers || [])] }));
 
   for (const waEv of waEvents) {
@@ -227,7 +284,14 @@ function mergeEvents(globalEvents, waEvents) {
 
     if (match) {
       for (const bm of waEv.bookmakers) {
-        if (!match.bookmakers.find(b => b.key === bm.key)) {
+        const keptIdx = match.bookmakers.findIndex(b => b.key === bm.key);
+        if (keptIdx >= 0) {
+          // Same book from a second source. Only an OddsPapi second source is compared; anything else is ignored as before.
+          if (bm.source === 'oddspapi' && match.bookmakers[keptIdx].source !== 'oddspapi') {
+            const keptNames = match.bookmakers[keptIdx].srcEvent || { home: match.home_team, away: match.away_team };
+            match.bookmakers[keptIdx] = crossCheckBook(match.bookmakers[keptIdx], bm, keptNames, { home: waEv.home_team, away: waEv.away_team });
+          }
+        } else {
           // Keep the WA source's OWN event label (teams + kickoff as that feed lists
           // them). After the merge the event only carries the global feed's names, so
           // without this a mis-matched fixture is invisible on the card.
@@ -235,10 +299,12 @@ function mergeEvents(globalEvents, waEvents) {
         }
       }
     } else {
-      merged.push(waEv);
+      merged.push({ ...waEv, bookmakers: [...(waEv.bookmakers || [])] }); // copy: a later cross-check replaces records in this array
     }
   }
 
+  const cs = Object.entries(crossStats);
+  if (cs.length) console.log('[odds][crosscheck]', cs.map(([b, s]) => b + ': ' + s.compared + ' compared, ' + s.agreed + ' agreed, ' + s.disputed + ' disputed (dropped)').join(' | '));
   return merged;
 }
 
