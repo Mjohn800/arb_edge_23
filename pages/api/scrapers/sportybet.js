@@ -73,7 +73,7 @@ const HEADERS = {
 // "Home (-0.5)" / "Away (+0.5)" (a signed number, no colon), on the quarter-line grid, with mirrored lines.
 // Anything else (3-way handicap "Home (1:0)", draw-no-bet, odd/even...) fails the test and is skipped.
 function parseAsianHandicap(market, homeTeam, awayTeam) {
-  const outs = (market.outcomes || market.selections || []).filter(o => o.isActive !== false && o.active !== false);
+  const outs = (market.outcomes || market.selections || []).filter(o => isOn(o.isActive) && isOn(o.active));
   if (outs.length !== 2) return null;
   const res = [];
   for (const o of outs) {
@@ -87,10 +87,19 @@ function parseAsianHandicap(market, homeTeam, awayTeam) {
   }
   const h = res.find(r => r.side === 'home'), a = res.find(r => r.side === 'away');
   if (!h || !a || Math.abs(h.point + a.point) > 1e-9) return null; // the two sides must be mirror lines
+  // SportyBet also sends the line as specifier "hcp=-0.5" (home perspective). If it disagrees with the text, skip.
+  const sp = String(market.specifier == null ? '' : market.specifier).match(/^hcp=([+-]?\d+(?:\.\d+)?)$/);
+  if (sp && Math.abs(parseFloat(sp[1]) - h.point) > 1e-9) return null;
   return [{ name: homeTeam, price: h.price, point: h.point, desc: h.desc }, { name: awayTeam, price: a.price, point: a.point, desc: a.desc }];
 }
 
-const MARKET_MAP = { '1_1': 'h2h', '1': 'h2h', '18_1': 'totals', '18': 'totals', '10_1': 'handicap_3way', '10': 'handicap_3way', '29_1': 'btts', '29': 'btts' };
+// (Market 10 used to be mapped to the 3-way handicap here: it is actually Double Chance. 14 is the 3-way handicap.)
+const MARKET_MAP = { '1_1': 'h2h', '1': 'h2h', '18_1': 'totals', '18': 'totals', '14': 'handicap_3way', '29_1': 'btts', '29': 'btts' };
+
+// SportyBet flags are numbers (isActive: 1 / 0), not booleans. Anything explicitly off is off.
+const isOn = v => !(v === 0 || v === false || v === '0');
+// lastOddsChangeTime is a per-market epoch-ms timestamp: the book's OWN last change time for that price.
+const toIso = ms => { const n = Number(ms); return Number.isFinite(n) && n > 1e12 ? new Date(n).toISOString() : null; };
 
 // SportyBet market ids 1 / 18 are the 90-minute (regulation) markets: right for soccer, but NOT confirmed to
 // match the Odds API's overtime-inclusive h2h/totals for basketball etc. Fail closed: soccer only until each
@@ -111,7 +120,8 @@ async function fetchSportybetOdds(sportKey) {
       // Body: [{"sportId":"sr:sport:1","marketId":"1,18,10,29,11,26,36,14","tournamentId":[["sr:tournament:16"]]}]
       const body = [{
         sportId: mapping.sportId,
-        marketId: '1,18,10,29,11,26,36,14,16', // 16 added for Asian Handicap; confirm the id with /api/sportybet-debug
+        marketId: '1,16,18,29', // confirmed via /api/sportybet-debug, 5 Oct 2026: 1=1X2, 16=Asian Handicap, 18=Over/Under (every line), 29=GG/NG.
+        // 10 is Double Chance and 14 the 3-way handicap; neither feeds the arb finder, so they are no longer requested.
         tournamentId: [[mapping.tournamentId]],
       }];
 
@@ -220,6 +230,7 @@ async function fetchSportybetOdds(sportKey) {
 
 function normaliseEvent(ev, sportKey, pulledAtIso) {
   try {
+    if (ev.banned === true) return null;
     const homeTeam = ev.homeTeamName || ev.home?.name || ev.homeName || ev.homeTeam || 'Home';
     const awayTeam = ev.awayTeamName || ev.away?.name  || ev.awayName || ev.awayTeam || 'Away';
     let startMs = ev.estimateStartTime || ev.startTime || ev.beginTime || ev.matchTime || ev.kickOff || ev.date || ev.startDate || null;
@@ -232,15 +243,18 @@ function normaliseEvent(ev, sportKey, pulledAtIso) {
 
     const h2hOutcomes = [], totalsOutcomes = [], ahOutcomes = [], bttsOutcomes = [], spreadsOutcomes = [];
     for (const market of (ev.markets || ev.odds || ev.marketList || ev.quickMarkets || [])) {
+      // A banned market, or one whose status is not 0 (the only value seen on open markets), is never used.
+      if (market.banned === true || (market.status != null && Number(market.status) !== 0)) continue;
+      const mUpd = toIso(market.lastOddsChangeTime); // the book's own last-change time for this market
       const mKey = MARKET_MAP[market.id] || MARKET_MAP[market.marketId] || MARKET_MAP[String(market.marketType)];
       if (!mKey) {
         const ah = parseAsianHandicap(market, homeTeam, awayTeam);
-        if (ah) spreadsOutcomes.push(...ah);
+        if (ah) spreadsOutcomes.push(...ah.map(r => ({ ...r, last_update: mUpd })));
         continue;
       }
       for (const o of (market.outcomes || market.selections || market.odds || [])) {
         // A suspended outcome can still carry its last price: never use it.
-        if (o.isActive === false || o.active === false) continue;
+        if (!isOn(o.isActive) || !isOn(o.active)) continue;
         const price = parseFloat(o.odds || o.price || o.oddsValue);
         if (!price || price <= 1.0) continue;
         // SportyBet encodes the line in desc e.g. "Over 2.5", "Under 0.5", "Home (2:0)"
@@ -249,14 +263,17 @@ function normaliseEvent(ev, sportKey, pulledAtIso) {
         if (mKey === 'h2h') {
           const name = desc === 'Home' ? homeTeam : desc === 'Away' ? awayTeam : desc === 'Draw' ? 'Draw' :
                        o.name === '1' ? homeTeam : o.name === 'X' ? 'Draw' : o.name === '2' ? awayTeam : desc;
-          if (name) h2hOutcomes.push({ name, price });
+          if (name) h2hOutcomes.push({ name, price, last_update: mUpd });
         } else if (mKey === 'totals') {
           // desc is "Over 2.5", "Under 0.5" etc — parse point from it
           const match = desc.match(/^(Over|Under)\s+([\d.]+)$/i);
           if (!match) continue;
           const side = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
           const point = parseFloat(match[2]);
-          totalsOutcomes.push({ name: side, price, point, desc });
+          // Cross-check the line against specifier "total=2.5"; a mismatch means the text and the line disagree.
+          const spT = String(market.specifier == null ? '' : market.specifier).match(/^total=(\d+(?:\.\d+)?)$/);
+          if (spT && Math.abs(parseFloat(spT[1]) - point) > 1e-9) continue;
+          totalsOutcomes.push({ name: side, price, point, desc, last_update: mUpd });
         } else if (mKey === 'handicap_3way') {
           // NOT Asian Handicap: this market has a Draw outcome, so it's the 3-way
           // (European) handicap — "Home (1:0)" / "Draw (1:0)" / "Away (1:0)" is one
@@ -271,9 +288,9 @@ function normaliseEvent(ev, sportKey, pulledAtIso) {
           const side = match[1];
           const point = parseInt(match[2]) - parseInt(match[3]);
           const name = side === 'Home' ? homeTeam : side === 'Away' ? awayTeam : 'Draw';
-          ahOutcomes.push({ name, price, point, desc });
+          ahOutcomes.push({ name, price, point, desc, last_update: mUpd });
         } else if (mKey === 'btts') {
-          bttsOutcomes.push({ name: desc === 'Yes' ? 'Yes' : 'No', price });
+          bttsOutcomes.push({ name: desc === 'Yes' ? 'Yes' : 'No', price, last_update: mUpd });
         }
       }
     }
