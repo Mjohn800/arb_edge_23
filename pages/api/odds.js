@@ -235,7 +235,8 @@ const MERGE_KICKOFF_MS = 10 * 60 * 1000;
 // ── Cross-source check ──────────────────────────────────────────────────────────────────────────────
 // A book with two independent sources (betway: Odds API + OddsPapi, sportybet: scraper + OddsPapi) gets each
 // selection compared. If the two prices differ by more than CROSS_SOURCE_MAX_DIFF, at least one is wrong and we
-// cannot tell which, so that selection is dropped from the kept record and cannot become an arb leg.
+// cannot tell which, so that selection is removed from the kept record's markets and both prices are kept in
+// bm.disputed instead; findArbs reads them as duplicate odds (2nd best above the low-margin gate, best at or under it).
 const CROSS_SOURCE_MAX_DIFF = 0.05;
 const crossStats = {};
 function sideTag(name, home, away) {
@@ -255,6 +256,11 @@ function crossCheckBook(kept, other, keptNames, otherNames) {
   }
   const st = crossStats[kept.key] = crossStats[kept.key] || { compared: 0, agreed: 0, disputed: 0 };
   let compared = 0, agreed = 0, disputed = 0;
+  // A disputed selection is still removed from bm.markets (so line shopping, EV, middles etc. can never use either
+  // price), but BOTH prices are now kept on bm.disputed. findArbs treats them as duplicate odds of this book: above
+  // its low-margin gate it uses the 2nd best of the two (and needs another book to agree); at or under the gate it
+  // uses the plain best. Before, the selection was simply dropped, so a real arb on it was lost.
+  const disputedKept = [...(kept.disputed || [])];
   const markets = (kept.markets || []).map(mkt => ({
     ...mkt,
     outcomes: (mkt.outcomes || []).filter(o => {
@@ -262,12 +268,16 @@ function crossCheckBook(kept, other, keptNames, otherNames) {
       const p2 = s ? theirs.get(selKey(mkt.key, s, o.point)) : undefined;
       if (!(p2 > 1) || !(o.price > 1)) return true;       // the other source does not list it: nothing to compare
       compared++;
-      if (Math.abs(o.price - p2) / Math.min(o.price, p2) > CROSS_SOURCE_MAX_DIFF) { disputed++; return false; }
+      if (Math.abs(o.price - p2) / Math.min(o.price, p2) > CROSS_SOURCE_MAX_DIFF) {
+        disputed++;
+        disputedKept.push({ mktKey: mkt.key, marketName: mkt.marketName, name: o.name, point: o.point, prices: [o.price, p2] });
+        return false;
+      }
       agreed++; return true;
     }),
   })).filter(m => m.outcomes.length > 0);
   st.compared += compared; st.agreed += agreed; st.disputed += disputed;
-  return { ...kept, markets, crossCheck: { with: other.source || 'second source', compared, agreed, disputed } };
+  return { ...kept, markets, disputed: disputedKept, crossCheck: { with: other.source || 'second source', compared, agreed, disputed } };
 }
 
 function mergeEvents(globalEvents, waEvents) {
