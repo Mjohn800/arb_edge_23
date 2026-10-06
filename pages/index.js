@@ -2387,16 +2387,36 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     return () => clearInterval(id);
   }, [fetchTeamForm]);
 
+  const betSyncChainRef = React.useRef(Promise.resolve());
+  const betSyncQueuedRef = React.useRef(false);
+  const latestBetsRef = React.useRef(bets);
   useEffect(() => {
   if (!session?.user?.id || !betsLoadedRef.current) return;
   const userId = session.user.id;
-  (async () => {
-    await supabase.from('tracked_bets').delete().eq('user_id', userId);
-    if (bets.length === 0) return;
-    const rows = bets.map(b => ({ user_id: userId, data: b }));
-    const { error } = await supabase.from('tracked_bets').insert(rows);
-    if (error) console.error('Failed to sync bets:', error);
-  })();
+  latestBetsRef.current = bets;
+  // Syncs run one at a time, and a burst of changes collapses into one run that uses the newest list.
+  // INSERT BEFORE DELETE: the old rows are removed only after the new ones are stored, so a failed insert
+  // (offline, RLS, timeout) can no longer wipe the user's whole bet history the way delete-then-insert did.
+  if (betSyncQueuedRef.current) return;
+  betSyncQueuedRef.current = true;
+  betSyncChainRef.current = betSyncChainRef.current.then(async () => {
+    betSyncQueuedRef.current = false;
+    const snapshot = latestBetsRef.current;
+    try {
+      const { data: oldRows, error: readErr } = await supabase.from('tracked_bets').select('id').eq('user_id', userId);
+      if (readErr) { console.error('Failed to sync bets (read):', readErr); return; }
+      if (snapshot.length > 0) {
+        const rows = snapshot.map(b => ({ user_id: userId, data: b }));
+        const { error } = await supabase.from('tracked_bets').insert(rows);
+        if (error) { console.error('Failed to sync bets:', error); return; } // keep the old rows
+      }
+      const oldIds = (oldRows || []).map(r => r.id);
+      if (oldIds.length > 0) {
+        const { error: delErr } = await supabase.from('tracked_bets').delete().in('id', oldIds);
+        if (delErr) console.error('Superseded bet rows not removed (duplicates until next sync):', delErr);
+      }
+    } catch (err) { console.error('Failed to sync bets:', err); }
+  });
 }, [bets, session]);
   useEffect(() => { try { localStorage.setItem('arb_bankroll', bankroll.toString()); } catch {} }, [bankroll]);
   useEffect(() => { try { if (lastFetch) localStorage.setItem('arb_lastFetch', lastFetch.toISOString()); } catch {} }, [lastFetch]);
@@ -2567,7 +2587,7 @@ const analyzeArb = async (arb) => {
   return e('div', { style: st.app },
     e('div', { style: st.header },
       e('div', { style: st.logoRow },
-        e('div', { style: st.logoBox }, '📈'),
+        e('img', { src: '/favicon.svg', alt: 'ArbEdge', width: 36, height: 36, style: { width: 36, height: 36, borderRadius: 8, display: 'block', flexShrink: 0 } }),
         e('div', null, e('div', { style: st.logoTitle }, 'ArbEdge'), e('div', { style: st.logoSub }, '\uD83C\uDF0D Global' + (isWAUserNow ? ' \u00B7 \uD83C\uDDEC\uD83C\uDDED West Africa' : '')))
       ),
       e('div', { style: st.headerRow },
@@ -4003,7 +4023,8 @@ function AuthScreen({ onAuth }) {
   }
 };
   return e('div', { style: { maxWidth: 360, margin: '80px auto', padding: 24, fontFamily: 'system-ui' } },
-    e('h2', { style: { marginBottom: 16 } }, mode === 'login' ? 'Log in to ArbEdge' : 'Create your ArbEdge account'),
+    e('img', { src: '/favicon.svg', alt: 'ArbEdge', width: 64, height: 64, style: { display: 'block', margin: '0 auto 16px', width: 64, height: 64, borderRadius: 14 } }),
+    e('h2', { style: { marginBottom: 16, textAlign: 'center' } }, mode === 'login' ? 'Log in to ArbEdge' : 'Create your ArbEdge account'),
     e('input', { type: 'email', placeholder: 'Email', value: email, onChange: ev => setEmail(ev.target.value), style: { width: '100%', padding: 10, marginBottom: 10, border: '1px solid #ddd', borderRadius: 8 } }),
     e('input', { type: 'password', placeholder: 'Password', value: password, onChange: ev => setPassword(ev.target.value), style: { width: '100%', padding: 10, marginBottom: 10, border: '1px solid #ddd', borderRadius: 8 } }),
     mode === 'signup' && e('label', { style: { display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10, fontSize: 12, color: '#4b5563', cursor: 'pointer' } },
