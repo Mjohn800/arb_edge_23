@@ -247,14 +247,17 @@ function sideTag(name, home, away) {
   if (fuzzyMatch(name, away)) return 'away';
   return null;
 }
-const selKey = (mktKey, side, point) => mktKey + '|' + side + '|' + (point == null ? '' : Number(point).toFixed(2));
+// The line only belongs in the key for totals / handicaps. A match-result (h2h) selection has no line, but OddsPapi can
+// attach 0 to it while the Odds API sends none, which made every h2h pair look different ('0.00' vs '') and compare as 0.
+const selKey = (mktKey, side, point) => mktKey + '|' + side + '|' + ((mktKey === 'totals' || mktKey === 'spreads') && point != null ? Number(point).toFixed(2) : '');
 function crossCheckBook(kept, other, keptNames, otherNames) {
   const theirs = new Map();
   for (const mkt of (other.markets || [])) for (const o of (mkt.outcomes || [])) {
     const s = sideTag(o.name, otherNames.home, otherNames.away);
     if (s) theirs.set(selKey(mkt.key, s, o.point), o.price);
   }
-  const st = crossStats[kept.key] = crossStats[kept.key] || { compared: 0, agreed: 0, disputed: 0 };
+  const st = crossStats[kept.key] = crossStats[kept.key] || { compared: 0, agreed: 0, disputed: 0, events: 0, theirSel: 0, keptSel: 0, keptNoSide: 0, noCounterpart: 0 };
+  st.events++; st.theirSel += theirs.size;
   let compared = 0, agreed = 0, disputed = 0;
   // A disputed selection is still removed from bm.markets (so line shopping, EV, middles etc. can never use either
   // price), but BOTH prices are now kept on bm.disputed. findArbs treats them as duplicate odds of this book: above
@@ -265,8 +268,9 @@ function crossCheckBook(kept, other, keptNames, otherNames) {
     ...mkt,
     outcomes: (mkt.outcomes || []).filter(o => {
       const s = sideTag(o.name, keptNames.home, keptNames.away);
+      st.keptSel++; if (!s) st.keptNoSide++;
       const p2 = s ? theirs.get(selKey(mkt.key, s, o.point)) : undefined;
-      if (!(p2 > 1) || !(o.price > 1)) return true;       // the other source does not list it: nothing to compare
+      if (!(p2 > 1) || !(o.price > 1)) { if (s) st.noCounterpart++; return true; }       // the other source does not list it: nothing to compare
       compared++;
       if (Math.abs(o.price - p2) / Math.min(o.price, p2) > CROSS_SOURCE_MAX_DIFF) {
         disputed++;
@@ -314,7 +318,7 @@ function mergeEvents(globalEvents, waEvents) {
   }
 
   const cs = Object.entries(crossStats);
-  if (cs.length) console.log('[odds][crosscheck]', cs.map(([b, s]) => b + ': ' + s.compared + ' compared, ' + s.agreed + ' agreed, ' + s.disputed + ' disputed (dropped)').join(' | '));
+  if (cs.length) console.log('[odds][crosscheck]', cs.map(([b, s]) => b + ': ' + s.compared + ' compared, ' + s.agreed + ' agreed, ' + s.disputed + ' disputed (dropped) [events ' + s.events + ', their selections ' + s.theirSel + ', our selections ' + s.keptSel + ', name unresolved ' + s.keptNoSide + ', no counterpart ' + s.noCounterpart + ']').join(' | '));
   return merged;
 }
 
