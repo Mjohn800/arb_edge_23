@@ -705,6 +705,15 @@ const MULTI_OUTLIER_MIN_LEGS = 2;  // this many simultaneous outliers from one b
 // A soft book can beat the sharp market by a few percent (a lagging line). Much more than that is
 // almost always bad data. 5% is a starting point: tune it from the [findArbs] logs.
 const ANCHOR_MAX_DEV = 0.05;
+// Rank-based leg selection (see findArbs). A leg is the best credible price that at least one other book quotes within
+// AGREE_TOL; if the best stands alone the 2nd, then the 3rd best is tried (RANK_DEPTH). A book that lists the same
+// selection at several prices contributes its DUP_RANK-th best (0 = best, 1 = 2nd best) instead of being dropped.
+const RANK_DEPTH = 3;
+const AGREE_TOL = 0.07;                // 7%: two books "agree" if their prices are within this of each other
+const DUP_RANK = 1;
+const RANK_RULE_MIN_MARGIN = 0.6;      // % — arbs whose plain-best margin is <= this keep their plain best prices; the rank rule only applies above it
+const CLEAN_MIN_AGREE_NO_ANCHOR = 1;  // with no Pinnacle/Betfair price, every leg needs this many agreeing books to stay out of 'review'
+const MISLABEL_MARGIN = 2;             // % — a consensus-matching set that arbs by MORE than this is suspected of a mislabelled market
 const ANCHOR_SHARPS = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
 // Two standard ways to remove a bookmaker's margin. Both turn one book's prices for ALL sides of a
 // market into probabilities that sum to 1.
@@ -938,11 +947,18 @@ function assessArb(slot, outs, margin, ev) {
 
   // No margin gate here either — a mislabelled market or a thin-book arb is
   // just as real a concern at 2% margin as at 8%.
-  if (!slot.anchor) reasons.push('no sharp-book price (Pinnacle/Betfair/etc.) for this market, so there is no independent reference for these prices');
-  // With an anchor every leg is already within ANCHOR_MAX_DEV of the sharp fair price, which covers both
-  // "too few books to compare" and "mislabelled market" (a wrong market would sit far from fair).
-  if (!slot.anchor && uncheckable > 0) reasons.push(uncheckable + ' leg(s) have fewer than 2 other books to cross-check against');
-  if (!slot.anchor && outliers === 0 && uncheckable === 0) reasons.push('every leg matches other books yet the set arbs — market or line is probably mislabelled');
+  // Duplicate odds: a leg whose book listed this selection at several prices (we used its 2nd best) is never 'clean'.
+  outs.filter(o => o.dup).forEach(o => reasons.push(o.displayLabel + ' (' + o.bookName + ') was listed at ' + o.dupPrices.join(' / ') + ' by the same book; used ' + o.price + (o.price === Math.max(...o.dupPrices) ? ' (its highest)' : ' (2nd best)') + ' — verify which one is the real full-time price'));
+  // Every leg was already chosen because at least one other book agrees with it (rank-based selection in findArbs),
+  // so with no sharp book the books agreeing with each other are the reference. A leg only needs the minimum below.
+  // Arbs at or under RANK_RULE_MIN_MARGIN are left as priced, so they are not demoted for lack of agreeing books.
+  if (!slot.anchor && margin > RANK_RULE_MIN_MARGIN) {
+    const weak = outs.filter(o => (o.agreeBooks || []).length < CLEAN_MIN_AGREE_NO_ANCHOR);
+    if (weak.length) reasons.push('no sharp-book price and ' + weak.map(o => o.displayLabel + ' (' + o.bookName + ')').join(', ') + ' has too few agreeing books to cross-check against');
+    // A set that matches consensus yet arbs is normal at a small margin (that is what a real small arb looks like).
+    // Only a big one, with nothing to anchor it, points at a mislabelled market.
+    else if (outliers === 0 && margin > MISLABEL_MARGIN) reasons.push('every leg matches other books yet the set arbs by ' + margin + '% — market or line is probably mislabelled');
+  }
   return { level: reasons.length ? 'review' : 'standard', reasons };
 }
 
@@ -1009,7 +1025,10 @@ function findArbs(events, mode = 'global', userRegion = null) {
       // only accessible books may be an arb LEG (slot.best). Previously WA mode dropped non-accessible
       // books entirely, so WA arbs had too few comparators and showed as "uncheckable".
       const bookable = mode !== 'wa' || isBookAccessible(bm.key, userRegion);
-      for (const mkt of (bm.markets || [])) {
+      // Selections two sources of the SAME book disagreed on (odds.js crossCheckBook) are kept out of bm.markets so
+      // no other finder can use either price, but both prices come back here as duplicate quotes of that book.
+      const disputedMkts = (bm.disputed || []).flatMap(d => (d.prices || []).map(p => ({ key: d.mktKey, marketName: d.marketName, outcomes: [{ name: d.name, price: p, point: d.point }] })));
+      for (const mkt of [...(bm.markets || []), ...disputedMkts]) {
         if (!['h2h', 'spreads', 'totals', 'outrights'].includes(mkt.key)) continue;
         for (const o of mkt.outcomes) {
           if (!(o.price > 1)) continue;
@@ -1049,18 +1068,28 @@ function findArbs(events, mode = 'global', userRegion = null) {
       }
     }
 
-    const priceSets = {};
+    // DUPLICATE ODDS: one book quoting the SAME slot+side at several different prices means its feed leaked
+    // more than one market (half-time, early-payout, team total...) into this slot. Skipping the book lost real
+    // arbs and taking its highest price is how fake ones appear, so we take that book's DUP_RANK-th best price
+    // (0 = best, 1 = 2nd best, ...; capped at its lowest) and mark the quote 'dup' so assessArb flags it.
+    const dupGroups = {};
     for (const q of quotes) {
       const k = q.slotKey + '|' + q.sideKey + '|' + q.book;
-      (priceSets[k] = priceSets[k] || new Set()).add(q.price);
+      (dupGroups[k] = dupGroups[k] || []).push(q);
     }
     const marketSlots = {};
-    for (const q of quotes) {
-      if (priceSets[q.slotKey + '|' + q.sideKey + '|' + q.book].size > 1) continue; // ambiguous — skip this book here
-      if (!marketSlots[q.slotKey]) marketSlots[q.slotKey] = { mktKey: q.mktKey, line: q.line, best: {}, all: {} };
+    for (const g of Object.values(dupGroups)) {
+      const prices = [...new Set(g.map(x => x.price))].sort((a, b) => b - a);
+      const picked = prices[Math.min(DUP_RANK, prices.length - 1)];
+      const q = { ...g.find(x => x.price === picked), dup: prices.length > 1, dupPrices: prices };
+      if (!marketSlots[q.slotKey]) marketSlots[q.slotKey] = { mktKey: q.mktKey, line: q.line, best: {}, bestPlain: {}, all: {} };
       const slot = marketSlots[q.slotKey];
       (slot.all[q.sideKey] = slot.all[q.sideKey] || []).push({ book: q.book, price: q.price });
-      if (q.bookable) (slot.cands = slot.cands || []).push(q); // comparator-only books never become legs
+      if (q.bookable) {
+        (slot.cands = slot.cands || []).push(q); // comparator-only books never become legs
+        // Untouched version for the low-margin path below: the book's highest price, whatever the rank rule would pick.
+        (slot.candsPlain = slot.candsPlain || []).push({ ...g.find(x => x.price === prices[0]), dup: prices.length > 1, dupPrices: prices });
+      }
     }
 
     // BEST-PRICE SELECTION WITH A FAIR-VALUE ANCHOR.
@@ -1069,20 +1098,53 @@ function findArbs(events, mode = 'global', userRegion = null) {
     // CREDIBLE: no more than ANCHOR_MAX_DEV above the no-vig price implied by the sharp books
     // (Pinnacle/Betfair/...) for the same market. Implausible prices never become legs, whichever
     // books are in the scan. No sharp price for the market -> no anchor -> assessArb marks it review.
+    //
+    // RANK-BASED LEG SELECTION (1st / 2nd / 3rd best). The highest price on a side is the one most likely to be
+    // wrong, so it only becomes the leg if at least one OTHER book (any book in the scan, comparators included)
+    // quotes the same selection within AGREE_TOL of it. If the best price stands alone, the 2nd best is tried,
+    // then the 3rd (RANK_DEPTH). A side with no corroborated price in its top RANK_DEPTH gets no leg, so the
+    // slot cannot form an arb from an unconfirmed price. This is how the four WA books (SportyBet, 22Bet,
+    // Betano, Betway) check each other, with Pinnacle/Betfair etc. adding extra agreement where present.
     for (const slot of Object.values(marketSlots)) {
       slot.anchor = sharpAnchor(slot);
+      // LOW-MARGIN PATH: plain highest credible price per side, no rank rule. An arb this small is what real
+      // pre-match arbs look like, so when the plain legs give <= RANK_RULE_MIN_MARGIN the rank rule is not applied
+      // (see the check below). Still anchor-filtered; agreeBooks is computed for display only.
+      const plainBySide = {};
+      for (const q of (slot.candsPlain || [])) {
+        const fp = slot.anchor ? slot.anchor.fair[q.sideKey] : null;
+        if (fp && q.price * fp > 1 + ANCHOR_MAX_DEV) continue;
+        if (!plainBySide[q.sideKey] || q.price > plainBySide[q.sideKey].price) plainBySide[q.sideKey] = q;
+      }
+      for (const [sideKey, q] of Object.entries(plainBySide)) {
+        const agree = (slot.all[sideKey] || []).filter(p => p.book !== q.book && Math.abs(p.price - q.price) / Math.min(p.price, q.price) <= AGREE_TOL);
+        slot.bestPlain[sideKey] = { sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, updatedMs: q.updatedMs, srcEvent: q.srcEvent, updatedKind: q.updatedKind, pulledMs: q.pulledMs,
+          rankUsed: 1, agreeBooks: agree.map(p => p.book), dup: !!q.dup, dupPrices: q.dup ? q.dupPrices : null };
+      }
+      const bySide = {};
       for (const q of (slot.cands || [])) {
         const fp = slot.anchor ? slot.anchor.fair[q.sideKey] : null;
         if (fp && q.price * fp > 1 + ANCHOR_MAX_DEV) { slot.rejected = (slot.rejected || 0) + 1; continue; }
-        if (!slot.best[q.sideKey] || q.price > slot.best[q.sideKey].price) {
-          slot.best[q.sideKey] = { sideKey: q.sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, updatedMs: q.updatedMs, srcEvent: q.srcEvent , updatedKind: q.updatedKind, pulledMs: q.pulledMs };
+        (bySide[q.sideKey] = bySide[q.sideKey] || []).push(q);
+      }
+      for (const [sideKey, list] of Object.entries(bySide)) {
+        const ranked = list.sort((a, b) => b.price - a.price);
+        for (let r = 0; r < Math.min(RANK_DEPTH, ranked.length); r++) {
+          const q = ranked[r];
+          const agree = (slot.all[sideKey] || []).filter(p => p.book !== q.book && Math.abs(p.price - q.price) / Math.min(p.price, q.price) <= AGREE_TOL);
+          if (!agree.length) { slot.uncorroborated = (slot.uncorroborated || 0) + 1; continue; }
+          slot.best[sideKey] = { sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, updatedMs: q.updatedMs, srcEvent: q.srcEvent, updatedKind: q.updatedKind, pulledMs: q.pulledMs,
+            rankUsed: r + 1, agreeBooks: agree.map(p => p.book), dup: !!q.dup, dupPrices: q.dup ? q.dupPrices : null };
+          break;
         }
       }
     }
 
     // Check each market slot independently for an arb
-    for (const slot of Object.values(marketSlots)) {
-      const sides = Object.keys(slot.best);
+    // Returns the sorted legs of a slot from one leg set (slot.bestPlain or slot.best), or null if the set is not a
+    // complete, genuinely cross-book hedge.
+    const legsFor = (slot, set) => {
+      const sides = Object.keys(set);
       const has = s => sides.includes(s);
 
       // Completeness: the slot must contain exactly the complementary legs.
@@ -1090,19 +1152,37 @@ function findArbs(events, mode = 'global', userRegion = null) {
       // without being a real hedge.
       if (slot.mktKey === 'h2h') {
         const threeWay = isSoccer || has('__draw__');
-        if (threeWay ? !(has('__home__') && has('__draw__') && has('__away__')) : !(has('__home__') && has('__away__'))) continue;
+        if (threeWay ? !(has('__home__') && has('__draw__') && has('__away__')) : !(has('__home__') && has('__away__'))) return null;
       } else if (slot.mktKey === 'spreads') {
-        if (!(has('__home__') && has('__away__') && sides.length === 2)) continue;
+        if (!(has('__home__') && has('__away__') && sides.length === 2)) return null;
       } else if (slot.mktKey === 'totals') {
-        if (!(has('over') && has('under') && sides.length === 2)) continue;
-      } else if (sides.length < 2) continue;
+        if (!(has('over') && has('under') && sides.length === 2)) return null;
+      } else if (sides.length < 2) return null;
 
-      const outs = Object.values(slot.best)
+      const legs = Object.values(set)
         .sort((a, b) => (SIDE_ORDER[a.sideKey] ?? 0) - (SIDE_ORDER[b.sideKey] ?? 0));
 
       // All legs at one bookmaker is not a cross-book arb — it means a
       // parsing/labelling error (this is exactly how the same-sign AH bug showed).
-      if (new Set(outs.map(o => o.book)).size < 2) continue;
+      if (new Set(legs.map(o => o.book)).size < 2) return null;
+      return legs;
+    };
+
+    for (const slot of Object.values(marketSlots)) {
+      // MARGIN-GATED RANK RULE. First price the slot with the plain highest credible price per side. If that
+      // is not an arb, nothing below can be (rank legs are never higher), so skip. If the plain margin is
+      // <= RANK_RULE_MIN_MARGIN the arb is left exactly as priced (small arbs are believable). Above that, a
+      // price this good is more likely a wrong odd, so the legs are re-picked with the rank rule (1st/2nd/3rd
+      // best that another book agrees with; a duplicated price uses its 2nd best) and must still arb.
+      let outs = legsFor(slot, slot.bestPlain);
+      let rule = 'plain';
+      if (outs) {
+        const impPlain = outs.reduce((s, o) => s + 1 / o.price, 0);
+        if (!(impPlain < 1)) continue;
+        const plainMargin = (1 - impPlain) / impPlain * 100;
+        if (plainMargin > RANK_RULE_MIN_MARGIN) { outs = legsFor(slot, slot.best); rule = 'rank'; }
+      }
+      if (!outs) continue;
 
       const imp = outs.reduce((s, o) => s + 1 / o.price, 0);
       if (imp < 1) {
@@ -1123,6 +1203,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
           match: ev.home_team + ' vs ' + ev.away_team,
           commenceTime: ev.commence_time,
           margin,
+          rule,   // 'plain' = plain best prices (margin <= RANK_RULE_MIN_MARGIN); 'rank' = 1st/2nd/3rd best rule applied
           verify,
           // 'clean' = every leg cross-checked against >=2 other books, fresh, no flags; otherwise 'review'
           // (hidden in the UI unless opened). A live re-check that returns 'confirmed' promotes it.
@@ -1141,6 +1222,9 @@ function findArbs(events, mode = 'global', userRegion = null) {
             book: o.book,
             bookName: o.bookName,
             odds: o.price,
+            rankUsed: o.rankUsed || 1,                 // 1 = best price on this side, 2/3 = best was uncorroborated so a lower one was used
+            agreeBooks: o.agreeBooks || [],            // other books quoting this selection within AGREE_TOL
+            dup: !!o.dup,
             fixtureRef: o.fixtureRef,
             updatedAt: o.updatedMs || null,
             srcLabel: o.srcEvent ? o.srcEvent.home + ' vs ' + o.srcEvent.away : null,
