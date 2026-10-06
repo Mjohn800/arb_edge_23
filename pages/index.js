@@ -711,7 +711,8 @@ const ANCHOR_MAX_DEV = 0.05;
 const RANK_DEPTH = 3;
 const AGREE_TOL = 0.07;                // 7%: two books "agree" if their prices are within this of each other
 const DUP_RANK = 1;
-const RANK_RULE_MIN_MARGIN = 0.6;      // % — arbs whose plain-best margin is <= this keep their plain best prices; the rank rule only applies above it
+const FLAGGED_KEEP_MARGIN = 1;         // % — a flagged arb under this margin is kept as a hidden, viewable 'review' arb instead of being dropped
+const RANK_RULE_MIN_MARGIN = 0.6;     // % — arbs whose plain-best margin is <= this keep their plain best prices; the rank rule only applies above it
 const CLEAN_MIN_AGREE_NO_ANCHOR = 1;  // with no Pinnacle/Betfair price, every leg needs this many agreeing books to stay out of 'review'
 const MISLABEL_MARGIN = 2;             // % — a consensus-matching set that arbs by MORE than this is suspected of a mislabelled market
 const ANCHOR_SHARPS = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
@@ -938,6 +939,7 @@ function assessArb(slot, outs, margin, ev) {
     if (ratios.length >= MULTI_OUTLIER_MIN_LEGS) {
       return {
         level: 'excluded',
+        kind: 'multi-outlier',   // findArbs keeps these as 'review' (hidden, viewable) when the margin is under FLAGGED_KEEP_MARGIN
         reasons: [book + ' prices ' + ratios.length + ' legs of this market simultaneously at ' +
           ratios.map(r => '+' + Math.round((r - 1) * 100) + '%').join(' and ') +
           ' above consensus — a real repricing moves one side, not several unrelated outcomes at once; looks like broken data for this match on ' + book + ', not a real price'],
@@ -1187,7 +1189,11 @@ function findArbs(events, mode = 'global', userRegion = null) {
       const imp = outs.reduce((s, o) => s + 1 / o.price, 0);
       if (imp < 1) {
         const margin = parseFloat((((1 - imp) / imp) * 100).toFixed(2));
-        const verify = assessArb(slot, outs, margin, ev);
+        let verify = assessArb(slot, outs, margin, ev);
+        // Flagged arbs under FLAGGED_KEEP_MARGIN are never thrown away: a multi-outlier flag at this size stays in
+        // the hidden 'review' tier (viewable with "Show review arbs"). In-play stale-leg exclusions still drop, because
+        // those prices genuinely cannot be bet together.
+        if (verify.level === 'excluded' && verify.kind === 'multi-outlier' && margin < FLAGGED_KEEP_MARGIN) verify = { level: 'review', reasons: verify.reasons };
         if (verify.level === 'excluded') { console.warn('[findArbs] excluded (multi-outlier)', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons); continue; }
         if (verify.level === 'review') console.warn('[findArbs] review flag', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons);
         const minOdds = minOddsFor(outs);
