@@ -2327,13 +2327,31 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
   const fetchOddsRef = React.useRef(fetchOdds);
   useEffect(() => { fetchOddsRef.current = fetchOdds; }, [fetchOdds]);
 
+  const lastFetchRef = React.useRef(lastFetch);
+  lastFetchRef.current = lastFetch;
   useEffect(() => {
   const now = new Date();
   if (!lastFetch || (now - new Date(lastFetch)) > 5 * 60 * 1000) {
     fetchOddsRef.current(apiKey || 'server');
   }
   const id = setInterval(() => { if (apiKey) fetchOddsRef.current(apiKey); }, 5 * 60 * 1000);
-  return () => clearInterval(id);
+  // Phones pause timers while the screen is off or the tab is in the background, so a page left open can show
+  // prices 20+ minutes old. Rescan as soon as the page is visible again IF the last scan is over 5 min old
+  // (the same gate as above, so this never scans more often than every 5 min and the shared cache absorbs it).
+  const onVisible = () => {
+    if (document.visibilityState !== 'visible' || !apiKey) return;
+    const last = lastFetchRef.current ? new Date(lastFetchRef.current).getTime() : 0;
+    if (Date.now() - last <= 5 * 60 * 1000) return;
+    lastFetchRef.current = new Date(); // claim it now: visibilitychange and pageshow often fire together
+    fetchOddsRef.current(apiKey);
+  };
+  document.addEventListener('visibilitychange', onVisible);
+  window.addEventListener('pageshow', onVisible);
+  return () => {
+    clearInterval(id);
+    document.removeEventListener('visibilitychange', onVisible);
+    window.removeEventListener('pageshow', onVisible);
+  };
 }, [apiKey]); // fetchOdds intentionally omitted — read via fetchOddsRef so edits to
               // selectedSports/minEV don't tear down and restart this interval
 
