@@ -509,6 +509,8 @@ async function fetchGlobalOddsFresh(sport, markets, keys, cacheKey) {
 
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
+  // Authenticated, user-specific responses must never be stored by an edge or intermediary cache.
+  res.setHeader('Cache-Control', 'no-store');
   try {
     const { sport, region, market } = req.query;
 
@@ -535,7 +537,8 @@ export default async function handler(req, res) {
       process.env.ODDS_API_KEY_8,
     ].filter(Boolean);
 
-    console.log('[odds] keys loaded:', keys.map((k, i) => `KEY_${i+1}=${k ? k.slice(0,8)+'...' : 'MISSING'}`));
+    // Never log any part of a key (logs are retained). Count only; the per-call line below shows which index worked.
+    console.log('[odds] keys loaded:', keys.length);
     console.log('[odds] requesting sport:', sport, 'regions:', GLOBAL_REGIONS, 'markets:', markets);
 
     let lastError = null;

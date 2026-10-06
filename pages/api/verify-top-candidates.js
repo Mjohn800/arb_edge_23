@@ -27,7 +27,7 @@
 // against, so its legs are marked "uncheckable" rather than silently trusted
 // or silently dropped. (Melbet was removed: its scraper has ended.)
 import { getUserPlan } from '../../lib/serverAuth';
-import { checkRateLimit } from '../../lib/supabaseCache';
+import { checkRateLimit, cacheGet, cacheSet } from '../../lib/supabaseCache';
 import { fetch22BetEventDetail, normalise22BetEvent } from './scrapers/22bet';
 
 const LIVE_VERIFIABLE_BOOKS = new Set(['22bet']);
@@ -58,6 +58,32 @@ const VERIFY_LIMIT_WINDOW_SECONDS = 10 * 60;
 // body cannot turn into a huge amount of work (only ~10 legs are fetched live anyway).
 const MAX_CANDIDATES = 300;
 const MAX_LEGS_PER_CANDIDATE = 4;
+
+// QUOTA: every live 22bet event fetch can fall back to a ScraperAPI ultra_premium proxy call (see 22bet.js: "an
+// expensive call per event"). This route runs automatically after every scan for every open tab, and the same
+// top arbs are shown to every user. So a freshly fetched event is shared for FRESH_EVENT_TTL_MS across users and
+// instances (Supabase kv_cache), and concurrent requests for the same event on one instance share one fetch.
+// 60 s keeps the check "live" (the client treats a check as fresh for 5 min) while cutting duplicate paid fetches.
+const FRESH_EVENT_TTL_MS = 60 * 1000;
+const inFlightFresh = new Map(); // cacheKey -> Promise<{ state, fresh?, fetchedAt? }>
+
+async function getFreshEvent(fixtureRef, sport) {
+  const key = 'verify22:' + sport + ':' + fixtureRef;
+  const hit = await cacheGet(key);
+  if (hit && hit.fresh) return { state: 'ok', fresh: hit.fresh, fetchedAt: hit.fetchedAt };
+  if (inFlightFresh.has(key)) return inFlightFresh.get(key);
+  const p = (async () => {
+    const raw = await fetch22BetEventDetail(fixtureRef);
+    if (!raw) return { state: 'missing' };            // not cached: a vanished event should be re-checked next time
+    const fresh = normalise22BetEvent(raw, sport);
+    if (!fresh) return { state: 'unparsed' };
+    const fetchedAt = new Date().toISOString();
+    await cacheSet(key, { fresh, fetchedAt }, FRESH_EVENT_TTL_MS);
+    return { state: 'ok', fresh, fetchedAt };
+  })().finally(() => inFlightFresh.delete(key));
+  inFlightFresh.set(key, p);
+  return p;
+}
 
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : null);
 
@@ -126,20 +152,20 @@ async function verifyLeg(leg) {
   if (!isNumericFixtureRef(leg.fixtureRef)) {
     return { checked: false, reason: 'fixture id is not a valid 22bet event id' };
   }
-  const raw = await fetch22BetEventDetail(leg.fixtureRef);
-  if (!raw) return { checked: true, vanished: true, reason: '22bet event not found on re-fetch — likely suspended, settled, or removed' };
+  const got = await getFreshEvent(leg.fixtureRef, leg.sportKeyForRefetch);
+  if (got.state === 'missing') return { checked: true, vanished: true, reason: '22bet event not found on re-fetch — likely suspended, settled, or removed' };
+  if (got.state === 'unparsed') return { checked: true, vanished: true, reason: 'could not parse fresh 22bet data for this event' };
 
-  const fresh = normalise22BetEvent(raw, leg.sportKeyForRefetch);
-  if (!fresh) return { checked: true, vanished: true, reason: 'could not parse fresh 22bet data for this event' };
-
+  const fresh = got.fresh;
   const freshPrice = findFreshPrice(fresh, leg);
   if (freshPrice == null) return { checked: true, vanished: true, reason: 'this exact outcome is no longer quoted (market suspended or line changed)' };
 
   const moved = Math.abs(freshPrice / leg.odds - 1) > PRICE_TOLERANCE;
-  return { checked: true, vanished: false, freshPrice, moved };
+  return { checked: true, vanished: false, freshPrice, moved, fetchedAt: got.fetchedAt };
 }
 
 export default async function handler(req, res) {
+  res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') return res.status(405).json({ error: 'method_not_allowed' });
 
   const plan = await getUserPlan(req);
@@ -199,7 +225,7 @@ export default async function handler(req, res) {
       if (!v.checked) { impliedFromFresh += 1 / leg.odds; return { ...leg, checked: false, reason: v.reason }; }
       if (v.vanished) { vanished = true; return { ...leg, checked: true, vanished: true, reason: v.reason }; }
       impliedFromFresh += 1 / v.freshPrice;
-      return { ...leg, checked: true, freshPrice: v.freshPrice, moved: v.moved };
+      return { ...leg, checked: true, freshPrice: v.freshPrice, moved: v.moved, fetchedAt: v.fetchedAt };
     });
 
     const legsChecked = legReports.filter(l => l.checked).length;
@@ -223,6 +249,5 @@ export default async function handler(req, res) {
     results.push({ id: arb.id, status, freshMargin, legsChecked, legsTotal, legs: legReports });
   }
 
-  res.setHeader('Cache-Control', 'no-store');
   return res.status(200).json({ results, checkedCount: toCheck.length, totalCandidates: candidates.length });
 }
