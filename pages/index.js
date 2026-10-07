@@ -525,7 +525,9 @@ const MOCK = [
 // freshly built scan data in place.
 // Feeds held back from every finder until they are verified against the bookmaker's own site.
 // (Empty: Melbet was removed — its scraper has ended. Add { bookkey: 'reason' } to quarantine a feed.)
-const QUARANTINED_FEEDS = {};
+const QUARANTINED_FEEDS = {
+  '1xbet': 'OddsPapi feed prices run 8-28% above SportyBet and other books on EPL totals; not verified',
+};
 const EXCHANGE_RE = /betfair|matchbook|smarkets/i;
 const OVERROUND_MAX = { 2: 1.25, 3: 1.30 };
 const LADDER_TOL = 0.01;
@@ -726,6 +728,39 @@ const RANK_RULE_MIN_MARGIN = 0.6;     // % — arbs whose plain-best margin is <
 const CLEAN_MIN_AGREE_NO_ANCHOR = 1;  // with no Pinnacle/Betfair price, every leg needs this many agreeing books to stay out of 'review'
 const MISLABEL_MARGIN = 2;             // % — a consensus-matching set that arbs by MORE than this is suspected of a mislabelled market
 const ANCHOR_SHARPS = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
+
+// ── PER-BOOK TRUST PROFILES ─────────────────────────────────────────────────────────────────────────────────
+// Prices that pass through OUR code (OddsPapi catalogue mapping, or a scraper's parser) can be wrong in ways no
+// generic check can see (22bet's totals were). So each such book needs its own entry here:
+//   source   - where its prices come from. Two books on the SAME source can share one upstream mistake, so they
+//              cannot vouch for each other in the rank rule (below).
+//   verified - per market, true only once the book's OWN site was compared with what the app showed.
+// The server tags these books feedPipeline='wa'. One with no entry here, or a market not marked true, is UNVERIFIED:
+// its arbs are never dropped, but they go to the hidden 'review' tier with a reason on the card, and its price only
+// becomes a leg if a VERIFIED book on a different source agrees with it. Odds API books (Pinnacle, Betfair, ...) are
+// the provider's own feed and need no entry. TO ADD A BOOK: add a line, with every market false until you have checked it.
+const BOOK_PROFILES = {
+  sportybet: { source: 'scraper',  verified: { h2h: true,  spreads: true,  totals: true  } }, // read from SportyBet's own API
+  betano:    { source: 'oddspapi', verified: { h2h: true,  spreads: true,  totals: true  } }, // catalogue names checked against betano.com
+  '22bet':   { source: 'oddspapi', verified: { h2h: true,  spreads: false, totals: false } }, // totals proven wrong 24 Sep; spreads never checked
+  '1xbet':   { source: 'oddspapi', verified: { h2h: false, spreads: false, totals: false } }, // OddsPapi feed, new: nothing checked yet
+};
+const feedSource = (book, ownFeed) => !ownFeed ? 'oddsapi' : ((BOOK_PROFILES[book] && BOOK_PROFILES[book].source) || 'unknown:' + book);
+const feedVerified = (book, ownFeed, mktKey) => !ownFeed || !!(BOOK_PROFILES[book] && BOOK_PROFILES[book].verified[mktKey]);
+// May book p (an agreeing quote) vouch for candidate q? Two of OUR OWN feeds on the same source may not; and an
+// unverified q needs a verified voucher.
+const canVouch = (q, p) => {
+  if (q.ownFeed && p.ownFeed && feedSource(q.book, q.ownFeed) === feedSource(p.book, p.ownFeed)) return false;
+  if (!feedVerified(q.book, q.ownFeed, q.mktKey) && !feedVerified(p.book, p.ownFeed, q.mktKey)) return false;
+  return true;
+};
+const UNPROFILED_SEEN = new Set();
+const noteUnprofiled = bm => {
+  if (bm.feedPipeline === 'wa' && !BOOK_PROFILES[bm.key] && !UNPROFILED_SEEN.has(bm.key)) {
+    UNPROFILED_SEEN.add(bm.key);
+    console.warn('[books] "' + bm.key + '" comes through our own pipeline but has no BOOK_PROFILES entry: treated as UNVERIFIED (its arbs go to review).');
+  }
+};
 // Two standard ways to remove a bookmaker's margin. Both turn one book's prices for ALL sides of a
 // market into probabilities that sum to 1.
 //   proportional: p_i = (1/o_i) / sum(1/o_j)
@@ -1099,7 +1134,8 @@ function findArbs(events, mode = 'global', userRegion = null) {
             slotKey = 'outrights'; sideKey = o.name;
             marketLabel = 'Outright';
           }
-          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, bookable, displayLabel, marketLabel, point: o.point ?? null, fixtureRef: bm.bookmakerFixtureId || bm.eventId || null, updatedMs: parseQuoteTime(o.last_update || mkt.last_update || bm.last_update), updatedKind: (o.last_update || mkt.last_update || bm.last_update_kind !== 'pull') ? 'book' : 'pull', pulledMs: bm.last_update_kind === 'pull' ? parseQuoteTime(bm.last_update) : null, srcEvent: bm.srcEvent || null });
+          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, bookable, displayLabel, marketLabel, point: o.point ?? null, fixtureRef: bm.bookmakerFixtureId || bm.eventId || null, updatedMs: parseQuoteTime(o.last_update || mkt.last_update || bm.last_update), updatedKind: (o.last_update || mkt.last_update || bm.last_update_kind !== 'pull') ? 'book' : 'pull', pulledMs: bm.last_update_kind === 'pull' ? parseQuoteTime(bm.last_update) : null, srcEvent: bm.srcEvent || null, ownFeed: bm.feedPipeline === 'wa' });
+          noteUnprofiled(bm);
         }
       }
     }
@@ -1126,7 +1162,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
       const q = { ...g.find(x => x.price === picked), dup: prices.length > 1, dupPrices: prices };
       if (!marketSlots[q.slotKey]) marketSlots[q.slotKey] = { mktKey: q.mktKey, line: q.line, best: {}, bestPlain: {}, all: {} };
       const slot = marketSlots[q.slotKey];
-      (slot.all[q.sideKey] = slot.all[q.sideKey] || []).push({ book: q.book, price: q.price });
+      (slot.all[q.sideKey] = slot.all[q.sideKey] || []).push({ book: q.book, price: q.price, ownFeed: q.ownFeed, mktKey: q.mktKey });
       if (q.bookable) {
         (slot.cands = slot.cands || []).push(q); // comparator-only books never become legs
         // Untouched version for the low-margin path below: the book's highest price, whatever the rank rule would pick.
@@ -1161,7 +1197,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
       for (const [sideKey, q] of Object.entries(plainBySide)) {
         const agree = (slot.all[sideKey] || []).filter(p => p.book !== q.book && Math.abs(p.price - q.price) / Math.min(p.price, q.price) <= AGREE_TOL);
         slot.bestPlain[sideKey] = { sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, updatedMs: q.updatedMs, srcEvent: q.srcEvent, updatedKind: q.updatedKind, pulledMs: q.pulledMs,
-          rankUsed: 1, agreeBooks: agree.map(p => p.book), dup: !!q.dup, dupPrices: q.dup ? q.dupPrices : null };
+          ownFeed: q.ownFeed, rankUsed: 1, agreeBooks: agree.map(p => p.book), dup: !!q.dup, dupPrices: q.dup ? q.dupPrices : null };
       }
       const bySide = {};
       for (const q of (slot.cands || [])) {
@@ -1174,9 +1210,9 @@ function findArbs(events, mode = 'global', userRegion = null) {
         for (let r = 0; r < Math.min(RANK_DEPTH, ranked.length); r++) {
           const q = ranked[r];
           const agree = (slot.all[sideKey] || []).filter(p => p.book !== q.book && Math.abs(p.price - q.price) / Math.min(p.price, q.price) <= AGREE_TOL);
-          if (!agree.length) { slot.uncorroborated = (slot.uncorroborated || 0) + 1; continue; }
+          if (!agree.some(p => canVouch(q, p))) { slot.uncorroborated = (slot.uncorroborated || 0) + 1; continue; }
           slot.best[sideKey] = { sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, updatedMs: q.updatedMs, srcEvent: q.srcEvent, updatedKind: q.updatedKind, pulledMs: q.pulledMs,
-            rankUsed: r + 1, agreeBooks: agree.map(p => p.book), dup: !!q.dup, dupPrices: q.dup ? q.dupPrices : null };
+            ownFeed: q.ownFeed, rankUsed: r + 1, agreeBooks: agree.map(p => p.book), dup: !!q.dup, dupPrices: q.dup ? q.dupPrices : null };
           break;
         }
       }
@@ -1236,6 +1272,11 @@ function findArbs(events, mode = 'global', userRegion = null) {
         if (verify.level === 'excluded' && verify.kind === 'multi-outlier' && margin < FLAGGED_KEEP_MARGIN) verify = { level: 'review', reasons: verify.reasons };
         if (verify.level === 'excluded') { console.warn('[findArbs] excluded (multi-outlier)', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons); continue; }
         if (verify.level === 'review') console.warn('[findArbs] review flag', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons);
+        // Per-book trust: a leg from a feed not yet verified for this market keeps the arb visible but moves it to 'review'.
+        const unverifiedLegs = outs.filter(o => !feedVerified(o.book, o.ownFeed, o.marketKey));
+        if (unverifiedLegs.length) {
+          verify = { ...verify, level: 'review', reasons: [...(verify.reasons || []), 'Unverified feed: ' + unverifiedLegs.map(o => (o.bookName || o.book) + ' ' + (o.marketLabel || o.marketKey)).join(', ') + ' (not yet checked against the book\'s own site). Confirm the price on the book before staking'] };
+        }
         const minOdds = minOddsFor(outs);
         const pullTimes = outs.filter(o => typeof o.pulledMs === 'number').map(o => o.pulledMs);
         const foundAtMs = Date.now();
@@ -1269,7 +1310,8 @@ function findArbs(events, mode = 'global', userRegion = null) {
             bookName: o.bookName,
             odds: o.price,
             rankUsed: o.rankUsed || 1,                 // 1 = best price on this side, 2/3 = best was uncorroborated so a lower one was used
-            agreeBooks: o.agreeBooks || [],            // other books quoting this selection within AGREE_TOL
+            agreeBooks: o.agreeBooks || [],
+            feedVerified: feedVerified(o.book, o.ownFeed, o.marketKey),            // other books quoting this selection within AGREE_TOL
             dup: !!o.dup,
             fixtureRef: o.fixtureRef,
             updatedAt: o.updatedMs || null,
@@ -3187,6 +3229,7 @@ const analyzeArb = async (arb) => {
                   !isBookAccessible(o.book, userRegion) && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b91c1c', marginBottom: 1 } }, '🚫 Not accessible'),
                   e('div', { style: { fontSize: 16, fontWeight: 700, color: C.green } }, o.odds.toFixed(2)),
                   o.minOdds && e('div', { style: { fontSize: 9, color: '#92400e', marginTop: 1 } }, 'bet only at ≥ ' + o.minOdds.toFixed(2)),
+                  o.feedVerified === false && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b45309', marginTop: 1 } }, '⚠ unverified feed'),
                   typeof o.fairDev === 'number' && e('div', { style: { fontSize: 9, color: C.muted } }, (o.fairDev >= 0 ? '+' : '') + (o.fairDev * 100).toFixed(1) + '% vs sharp fair price'),
                   typeof o.updatedAt === 'number' && e('div', { style: { fontSize: 9, color: C.muted } }, (o.updatedKind === 'pull' ? 'fetched ' : 'price last changed ') + new Date(o.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
                   e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportUrls[arb.sport.split('_')[0]]) || (BOOKS[o.book] && BOOKS[o.book].url) || '#', target: '_blank', style: { display: 'block', marginTop: 4, fontSize: 10, fontWeight: 700, color: '#fff', background: C.green, borderRadius: 6, padding: '3px 6px', textDecoration: 'none', textAlign: 'center' } }, 'Bet Now →')
