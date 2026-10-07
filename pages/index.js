@@ -729,6 +729,30 @@ const CLEAN_MIN_AGREE_NO_ANCHOR = 1;  // with no Pinnacle/Betfair price, every l
 const MISLABEL_MARGIN = 2;             // % — a consensus-matching set that arbs by MORE than this is suspected of a mislabelled market
 const ANCHOR_SHARPS = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
 
+// ── PRICE-VS-CONSENSUS FILTER (every sportsbook, every odds provider, every sport) ───────────────────────────
+// A candidate leg is REJECTED outright (it cannot be the best price, in either the plain or the rank path) when it
+// is more than CONSENSUS_MAX_DEV above the MEDIAN of what the other books quote for the same slot and side. The old
+// check only warned (12%+, review tier) and was skipped entirely for arbs under RANK_RULE_MIN_MARGIN, which is how a
+// bad 1xBet price made +0.1% and +0.2% arbs that looked safe. Odds API 1X2 prices are held to a tighter bound and
+// need more corroborating books, because real 1X2 arbs are very rare and Odds API prices cannot be checked by hand
+// from Ghana. A leg quoted by fewer books than the minimum is also rejected: an uncorroborated price is not trusted.
+// Books sharing one operator (1xbet/onexbet) never count as each other's "other books" (see bookGroup).
+const CONSENSUS_MAX_DEV = 0.06;           // 6%: any book, any market
+const CONSENSUS_MIN_OTHERS = 1;           // other books that must quote the same slot+side
+const CONSENSUS_MAX_DEV_STRICT = 0.04;    // 4%: Odds API (non-own-feed) 1X2 legs
+const CONSENSUS_MIN_OTHERS_STRICT = 2;
+function consensusCheck(slot, q) {
+  const strict = q.mktKey === 'h2h' && !q.ownFeed;
+  const maxDev = strict ? CONSENSUS_MAX_DEV_STRICT : CONSENSUS_MAX_DEV;
+  const minOthers = strict ? CONSENSUS_MIN_OTHERS_STRICT : CONSENSUS_MIN_OTHERS;
+  const others = (slot.all[q.sideKey] || []).filter(p => bookGroup(p.book) !== bookGroup(q.book) && p.price > 1).map(p => p.price);
+  if (others.length < minOthers) return { ok: false, reason: 'thin', strict, nOthers: others.length };
+  const med = medianOf(others);
+  const ratio = q.price / med;
+  if (ratio > 1 + maxDev) return { ok: false, reason: 'high', strict, nOthers: others.length, med, ratio };
+  return { ok: true, strict, nOthers: others.length, med, ratio };
+}
+
 // ── PER-BOOK TRUST PROFILES ─────────────────────────────────────────────────────────────────────────────────
 // Prices that pass through OUR code (OddsPapi catalogue mapping, or a scraper's parser) can be wrong in ways no
 // generic check can see (22bet's totals were). So each such book needs its own entry here:
@@ -1055,6 +1079,8 @@ function findArbs(events, mode = 'global', userRegion = null) {
   const covOf = k => (cov[k] = cov[k] || { quotes: 0, unresolved: 0, rescued: 0, unresolvedNames: [] });
   // Duplicate-odds diagnostic: which book lists the same slot+side at several prices, in which market, with what prices.
   const dupDiag = {};
+  const consensusDiag = {};        // book -> { high, thin, examples } for legs the consensus filter rejected
+  const consensusSeen = new Set(); // so a quote rejected in both the plain and rank pass is counted once
   // A book's outcome names come from the same feed as its srcEvent (that feed's own home/away names, matched to this
   // event by the server). So when the global-name lookup fails, resolve against the book's OWN names instead of
   // silently dropping the quote.
@@ -1170,6 +1196,15 @@ function findArbs(events, mode = 'global', userRegion = null) {
       }
     }
 
+    const noteConsensusReject = (ev2, slot2, q, cc) => {
+      const key = ev2.id + '|' + q.slotKey + '|' + q.sideKey + '|' + q.book + '|' + q.price;
+      if (consensusSeen.has(key)) return;
+      consensusSeen.add(key);
+      const d = (consensusDiag[q.book] = consensusDiag[q.book] || { high: 0, thin: 0, examples: [] });
+      d[cc.reason]++;
+      if (d.examples.length < 3) d.examples.push((cc.strict ? '[strict 1X2] ' : '') + q.mktKey + (q.line != null ? ' ' + q.line : '') + ' ' + q.sideKey + ' @' + q.price + (cc.reason === 'high' ? ' vs median ' + cc.med.toFixed(2) + ' (+' + Math.round((cc.ratio - 1) * 100) + '%)' : ' (only ' + cc.nOthers + ' other book(s))') + ' @ ' + ev2.home_team + ' v ' + ev2.away_team);
+    };
+
     // BEST-PRICE SELECTION WITH A FAIR-VALUE ANCHOR.
     // Taking the highest price per side across many books picks the most wrong one (stale price, parse
     // error): drop that book and the next-most-wrong takes over. So a candidate leg must first be
@@ -1190,6 +1225,8 @@ function findArbs(events, mode = 'global', userRegion = null) {
       // (see the check below). Still anchor-filtered; agreeBooks is computed for display only.
       const plainBySide = {};
       for (const q of (slot.candsPlain || [])) {
+        const cc = consensusCheck(slot, q);
+        if (!cc.ok) { noteConsensusReject(ev, slot, q, cc); continue; }
         const fp = slot.anchor ? slot.anchor.fair[q.sideKey] : null;
         if (fp && q.price * fp > 1 + ANCHOR_MAX_DEV) continue;
         if (!plainBySide[q.sideKey] || q.price > plainBySide[q.sideKey].price) plainBySide[q.sideKey] = q;
@@ -1201,6 +1238,8 @@ function findArbs(events, mode = 'global', userRegion = null) {
       }
       const bySide = {};
       for (const q of (slot.cands || [])) {
+        const cc = consensusCheck(slot, q);
+        if (!cc.ok) { noteConsensusReject(ev, slot, q, cc); continue; }
         const fp = slot.anchor ? slot.anchor.fair[q.sideKey] : null;
         if (fp && q.price * fp > 1 + ANCHOR_MAX_DEV) { slot.rejected = (slot.rejected || 0) + 1; continue; }
         (bySide[q.sideKey] = bySide[q.sideKey] || []).push(q);
@@ -1330,11 +1369,15 @@ function findArbs(events, mode = 'global', userRegion = null) {
       LAST_ARB_DIAG = {
         at: Date.now(),
         dups: dupDiag,
+        consensus: consensusDiag,
         unresolved: Object.fromEntries(bad.map(([k, c]) => [k, { unresolved: c.unresolved, rescuedByOwnNames: c.rescued, examples: c.unresolvedNames }])),
         quotes: Object.fromEntries(Object.entries(cov).map(([k, c]) => [k, c.quotes])),
       };
       if (dupBooks.length) console.warn('[findArbs] DUPLICATE ODDS by book (same slot+side listed at several prices):', JSON.stringify(Object.fromEntries(dupBooks)));
       else console.log('[findArbs] duplicate odds: none in this scan');
+      const consBooks = Object.entries(consensusDiag);
+      if (consBooks.length) console.warn('[findArbs] CONSENSUS FILTER rejected legs (price too far above other books, or too few books quoting it), by book:', JSON.stringify(Object.fromEntries(consBooks)));
+      else console.log('[findArbs] consensus filter: no legs rejected in this scan');
       if (bad.length) console.warn('[findArbs] team-name resolution:', JSON.stringify(Object.fromEntries(bad.map(([k, c]) => [k, { unresolved: c.unresolved, rescuedByOwnNames: c.rescued, examples: c.unresolvedNames }]))));
     } catch {}
   }
