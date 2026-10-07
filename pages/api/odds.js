@@ -317,6 +317,28 @@ function mergeEvents(globalEvents, waEvents) {
     }
   }
 
+  // ── MERGE DIAGNOSTIC ─────────────────────────────────────────────────────────
+  // Events that did NOT match any Odds API fixture become standalone events. Two very different causes look identical in
+  // the totals: (a) the WA books list later fixtures than the Odds API does (a horizon difference, harmless), or (b) the
+  // same match is named differently by two sources, so it splits into several one-book events that can never be compared.
+  // Printing the standalone events with their books tells these apart: (b) shows the same teams/kickoff repeated with a
+  // single book each.
+  try {
+    const gCount = globalEvents.length;
+    const standalone = merged.slice(gCount);
+    if (standalone.length) {
+      const oneBook = standalone.filter(ev => (ev.bookmakers || []).length <= 1).length;
+      const gTimes = globalEvents.map(ev => Date.parse(ev.commence_time)).filter(Number.isFinite);
+      const gMax = gTimes.length ? new Date(Math.max(...gTimes)).toISOString().slice(0, 16) : 'n/a';
+      const gMin = gTimes.length ? new Date(Math.min(...gTimes)).toISOString().slice(0, 16) : 'n/a';
+      const later = gTimes.length ? standalone.filter(ev => Date.parse(ev.commence_time) > Math.max(...gTimes)).length : 0;
+      console.log('[odds][merge-diag] standalone WA events:', standalone.length, '| with only 1 book:', oneBook, '| later than the last Odds API fixture:', later, '| Odds API fixtures span', gMin, '→', gMax);
+      standalone.slice(0, 12).forEach(ev => console.log('[odds][merge-diag]  standalone:', ev.home_team, 'v', ev.away_team, '@', String(ev.commence_time).slice(0, 16), '[' + (ev.bookmakers || []).map(b => b.key).join(',') + ']'));
+    }
+    const gNoWA = merged.slice(0, gCount).filter(ev => !(ev.bookmakers || []).some(b => b._wa)).length;
+    if (gNoWA) console.log('[odds][merge-diag] Odds API fixtures with NO WA book matched:', gNoWA, 'of', gCount);
+  } catch {}
+
   const cs = Object.entries(crossStats);
   if (cs.length) console.log('[odds][crosscheck]', cs.map(([b, s]) => b + ': ' + s.compared + ' compared, ' + s.agreed + ' agreed, ' + s.disputed + ' disputed (dropped) [events ' + s.events + ', their selections ' + s.theirSel + ', our selections ' + s.keptSel + ', name unresolved ' + s.keptNoSide + ', no counterpart ' + s.noCounterpart + ']').join(' | '));
   return merged;
