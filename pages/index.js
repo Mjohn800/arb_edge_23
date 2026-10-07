@@ -1007,6 +1007,8 @@ function findArbs(events, mode = 'global', userRegion = null) {
   // and quotes rescued by the book's own event names. Logged once per global scan as '[findArbs] coverage'.
   const cov = {};
   const covOf = k => (cov[k] = cov[k] || { quotes: 0, unresolved: 0, rescued: 0, unresolvedNames: [] });
+  // Duplicate-odds diagnostic: which book lists the same slot+side at several prices, in which market, with what prices.
+  const dupDiag = {};
   // A book's outcome names come from the same feed as its srcEvent (that feed's own home/away names, matched to this
   // event by the server). So when the global-name lookup fails, resolve against the book's OWN names instead of
   // silently dropping the quote.
@@ -1103,6 +1105,12 @@ function findArbs(events, mode = 'global', userRegion = null) {
     const marketSlots = {};
     for (const g of Object.values(dupGroups)) {
       const prices = [...new Set(g.map(x => x.price))].sort((a, b) => b - a);
+      if (prices.length > 1) {
+        const d = (dupDiag[g[0].book] = dupDiag[g[0].book] || { groups: 0, byMarket: {}, examples: [] });
+        d.groups++;
+        d.byMarket[g[0].mktKey] = (d.byMarket[g[0].mktKey] || 0) + 1;
+        if (d.examples.length < 3) d.examples.push(g[0].mktKey + (g[0].line != null ? ' ' + g[0].line : '') + ' ' + g[0].sideKey + ' [' + prices.join(' / ') + '] @ ' + ev.home_team + ' v ' + ev.away_team);
+      }
       const picked = prices[Math.min(DUP_RANK, prices.length - 1)];
       const q = { ...g.find(x => x.price === picked), dup: prices.length > 1, dupPrices: prices };
       if (!marketSlots[q.slotKey]) marketSlots[q.slotKey] = { mktKey: q.mktKey, line: q.line, best: {}, bestPlain: {}, all: {} };
@@ -1265,6 +1273,9 @@ function findArbs(events, mode = 'global', userRegion = null) {
     try {
       const bad = Object.entries(cov).filter(([, c]) => c.unresolved > 0 || c.rescued > 0);
       console.log('[findArbs] coverage (quotes per book):', Object.entries(cov).map(([k, c]) => k + '=' + c.quotes).join(' '));
+      const dupBooks = Object.entries(dupDiag);
+      if (dupBooks.length) console.warn('[findArbs] DUPLICATE ODDS by book (same slot+side listed at several prices):', JSON.stringify(Object.fromEntries(dupBooks)));
+      else console.log('[findArbs] duplicate odds: none in this scan');
       if (bad.length) console.warn('[findArbs] team-name resolution:', JSON.stringify(Object.fromEntries(bad.map(([k, c]) => [k, { unresolved: c.unresolved, rescuedByOwnNames: c.rescued, examples: c.unresolvedNames }]))));
     } catch {}
   }
