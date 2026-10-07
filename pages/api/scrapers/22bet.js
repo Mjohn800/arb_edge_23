@@ -100,7 +100,9 @@ function getScraperApiKeys() {
 }
 
 function scraperApiUrl(key, targetUrl) {
-  return `http://api.scraperapi.com?api_key=${key}&url=${encodeURIComponent(targetUrl)}&country_code=gh&premium=true`; // premium only: sending ultra_premium alongside it was getting 403 "include premium=true"
+  // ultra_premium ONLY. Sending premium + ultra_premium together returned 403 "include premium=true";
+  // premium alone returned 500 "protected domain, may need ultra_premium". So 22bet needs ultra_premium by itself.
+  return `http://api.scraperapi.com?api_key=${key}&url=${encodeURIComponent(targetUrl)}&country_code=gh&ultra_premium=true`;
 }
 
 // Tries each configured ScraperAPI key against the same target url, in order.
