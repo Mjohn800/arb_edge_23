@@ -284,6 +284,36 @@ function crossCheckBook(kept, other, keptNames, otherNames) {
   return { ...kept, markets, disputed: disputedKept, crossCheck: { with: other.source || 'second source', compared, agreed, disputed } };
 }
 
+// Fold another event's bookmakers into an already-merged event (same logic the main merge loop uses).
+function absorbBooks(match, books, ownNames) {
+  for (const bm of books) {
+    const names = bm.srcEvent || ownNames;
+    const keptIdx = match.bookmakers.findIndex(b => b.key === bm.key);
+    if (keptIdx >= 0) {
+      if (bm.source === 'oddspapi' && match.bookmakers[keptIdx].source !== 'oddspapi') {
+        const keptNames = match.bookmakers[keptIdx].srcEvent || { home: match.home_team, away: match.away_team };
+        match.bookmakers[keptIdx] = crossCheckBook(match.bookmakers[keptIdx], bm, keptNames, { home: names.home, away: names.away });
+      }
+    } else {
+      match.bookmakers.push({ ...bm, srcEvent: { home: names.home, away: names.away, start: names.start } });
+    }
+  }
+}
+
+// Looser name test, used ONLY by the second merge pass below, and only together with a kickoff match, same home/away
+// order and a unique candidate. Treats "Real Sociedad San Sebastian" ~ "Real Sociedad", "RC Deportivo de A Coruna" ~
+// "Deportivo La Coruna": every word of the shorter name appears in the longer one.
+const LOOSE_SKIP = new Set(['rc', 'la', 'el', 'los', 'las', 'del', 'a']);
+function nameLoose(a, b) {
+  if (!a || !b) return false;
+  if (fuzzyMatch(a, b)) return true;
+  if (squadTags(a) !== squadTags(b)) return false;
+  const ta = teamTokens(a).filter(w => !LOOSE_SKIP.has(w)), tb = teamTokens(b).filter(w => !LOOSE_SKIP.has(w));
+  if (!ta.length || !tb.length) return false;
+  const [sh, lo] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  return sh.every(w => lo.some(x => x === w || (Math.min(w.length, x.length) >= 3 && (x.startsWith(w) || w.startsWith(x)))));
+}
+
 function mergeEvents(globalEvents, waEvents) {
   for (const k of Object.keys(crossStats)) delete crossStats[k];
   const merged = globalEvents.map(ev => ({ ...ev, bookmakers: [...(ev.bookmakers || [])] }));
@@ -316,6 +346,29 @@ function mergeEvents(globalEvents, waEvents) {
       merged.push({ ...waEv, bookmakers: [...(waEv.bookmakers || [])] }); // copy: a later cross-check replaces records in this array
     }
   }
+
+  // ── SECOND PASS: same fixture, different team spellings ────────────────────────
+  // The strict pass above needs BOTH teams to match by name. When two feeds spell one team differently
+  // ("Espanyol" vs "Espanyol Barcelona") the match splits into separate one-source events that can never be compared.
+  // Kickoff within the tolerance + BOTH teams matching loosely (every word of the shorter name appears in the longer one)
+  // identifies the same fixture. Only a UNIQUE candidate is merged; ambiguity is left alone. Home/away order must agree.
+  const gN = globalEvents.length;
+  let rescuedFixtures = 0;
+  const pendingStandalone = merged.splice(gN);
+  const stillStandalone = [];
+  for (const S of pendingStandalone) {
+    const sT = Date.parse(S.commence_time);
+    const cands = merged.filter(G => Math.abs(Date.parse(G.commence_time) - sT) < MERGE_KICKOFF_MS &&
+      nameLoose(G.home_team, S.home_team) && nameLoose(G.away_team, S.away_team));
+    if (cands.length === 1) {
+      absorbBooks(cands[0], S.bookmakers || [], { home: S.home_team, away: S.away_team, start: S.commence_time });
+      rescuedFixtures++;
+    } else {
+      stillStandalone.push(S);
+    }
+  }
+  merged.push(...stillStandalone);
+  if (rescuedFixtures) console.log('[odds][merge-diag] standalone events folded into an Odds API fixture by kickoff + team-name containment:', rescuedFixtures);
 
   // ── MERGE DIAGNOSTIC ─────────────────────────────────────────────────────────
   // Events that did NOT match any Odds API fixture become standalone events. Two very different causes look identical in
@@ -374,7 +427,7 @@ const TEAM_ALIASES = {
   'villarreal': 'villarreal', 'napoli': 'napoli', 'juventus': 'juventus', 'roma': 'as roma', 'lazio': 'lazio',
   'crystal palace': 'crystal palace', 'palace': 'crystal palace', 'villa': 'aston villa', 'fulham': 'fulham',
 };
-const TEAM_STOPWORDS = new Set(['fc', 'cf', 'afc', 'sc', 'ac', 'rcd', 'cd', 'ud', 'fk', 'sk', 'bk', 'ca', 'club', 'de', 'the']);
+const TEAM_STOPWORDS = new Set(['fc', 'cf', 'afc', 'sc', 'ac', 'rcd', 'cd', 'ud', 'fk', 'sk', 'bk', 'ca', 'club', 'de', 'the', 'and']); // 'and': "Brighton and Hove Albion" (Odds API, OddsPapi) vs SportyBet's "Brighton" (alias -> 'brighton hove albion') had different token counts and never merged
 function teamTokens(name) {
   let t = String(name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/&/g, ' and ').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
