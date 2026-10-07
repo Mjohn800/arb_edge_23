@@ -1001,6 +1001,7 @@ function findScannedOddsForGame(game, events, userRegion) {
   return [home, ...(draw ? [draw] : []), away];
 }
 
+let LAST_ARB_DIAG = null; // written by the latest GLOBAL findArbs() call; copied into scanHealth so it shows in the app
 function findArbs(events, mode = 'global', userRegion = null) {
   const arbs = [];
   // Coverage diagnostic, per book: quotes used, quotes dropped because the team name could not be resolved to home/away,
@@ -1274,6 +1275,12 @@ function findArbs(events, mode = 'global', userRegion = null) {
       const bad = Object.entries(cov).filter(([, c]) => c.unresolved > 0 || c.rescued > 0);
       console.log('[findArbs] coverage (quotes per book):', Object.entries(cov).map(([k, c]) => k + '=' + c.quotes).join(' '));
       const dupBooks = Object.entries(dupDiag);
+      LAST_ARB_DIAG = {
+        at: Date.now(),
+        dups: dupDiag,
+        unresolved: Object.fromEntries(bad.map(([k, c]) => [k, { unresolved: c.unresolved, rescuedByOwnNames: c.rescued, examples: c.unresolvedNames }])),
+        quotes: Object.fromEntries(Object.entries(cov).map(([k, c]) => [k, c.quotes])),
+      };
       if (dupBooks.length) console.warn('[findArbs] DUPLICATE ODDS by book (same slot+side listed at several prices):', JSON.stringify(Object.fromEntries(dupBooks)));
       else console.log('[findArbs] duplicate odds: none in this scan');
       if (bad.length) console.warn('[findArbs] team-name resolution:', JSON.stringify(Object.fromEntries(bad.map(([k, c]) => [k, { unresolved: c.unresolved, rescuedByOwnNames: c.rescued, examples: c.unresolvedNames }]))));
@@ -2441,6 +2448,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
       eventsScanned: all.length,
       eventsWithWACoverage,
       scannedAt: new Date().toISOString(),
+      arbDiag: LAST_ARB_DIAG, // duplicate-odds + team-name diagnostics from findArbs (also logged to the console)
     };
     setScanHealth(scanHealthResult);
 
@@ -3527,6 +3535,17 @@ const analyzeArb = async (arb) => {
             e('div', { style: { fontSize: 22, fontWeight: 700, color: scanHealth.eventsWithWACoverage > 0 ? '#6ee7b7' : '#6b7280' } }, scanHealth.eventsWithWACoverage),
             e('div', { style: { fontSize: 11, color: '#6b7280', marginTop: 2 } }, 'events with WA coverage')
           )
+        ),
+        scanHealth.arbDiag && e('div', { style: { marginTop: 10, background: '#111827', borderRadius: 8, padding: '8px 10px' } },
+          e('div', { style: { fontSize: 12, fontWeight: 700, color: '#f9fafb', marginBottom: 4 } }, '🔁 Duplicate odds'),
+          Object.keys(scanHealth.arbDiag.dups || {}).length === 0
+            ? e('div', { style: { fontSize: 11, color: '#6ee7b7' } }, 'None in this scan: no book listed the same selection at several prices.')
+            : Object.entries(scanHealth.arbDiag.dups).map(([k, d]) =>
+                e('div', { key: k, style: { fontSize: 11, color: '#fbbf24', marginTop: 4 } },
+                  e('div', { style: { fontWeight: 600 } }, ((BOOKS[k] && BOOKS[k].name) || k) + ': ' + d.groups + ' group' + (d.groups === 1 ? '' : 's') + ' (' + Object.entries(d.byMarket || {}).map(([m, n]) => m + ' ' + n).join(', ') + ')'),
+                  (d.examples || []).map((x, i) => e('div', { key: i, style: { fontSize: 10, color: '#9ca3af', fontFamily: 'monospace', marginTop: 2, wordBreak: 'break-word' } }, x)))),
+          Object.keys(scanHealth.arbDiag.unresolved || {}).length > 0 && e('div', { style: { marginTop: 8, fontSize: 11, color: '#f59e0b' } },
+            '⚠ Team names not resolved: ' + Object.entries(scanHealth.arbDiag.unresolved).map(([k, u]) => ((BOOKS[k] && BOOKS[k].name) || k) + ' ' + u.unresolved + (u.rescuedByOwnNames ? ' (' + u.rescuedByOwnNames + ' rescued)' : '')).join(', '))
         ),
         scanHealth.eventsWithWACoverage === 0 && e('div', { style: { marginTop: 10, fontSize: 12, color: '#f59e0b', background: '#451a03', borderRadius: 8, padding: '8px 10px' } },
           '⚠ No events had 2+ WA books priced. This means Betway/1xBet aren\'t appearing in the Odds API feed for your selected sports right now — likely off-season or those books aren\'t covered for the current leagues.'
