@@ -12,8 +12,8 @@ export const config = { maxDuration: 60 };
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const SHARP_BOOKS_GLOBAL     = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet'];
-export const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet', '1xbet']; // same Pinnacle reference as global, output filtered to WA-accessible books client-side
-export const WA_BOOKS               = ['sportybet', 'betano', '22bet', 'betway', '1xbet'];
+export const SHARP_BOOKS_WESTAFRICA = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 'sbobet']; // same Pinnacle reference as global, output filtered to WA-accessible books client-side
+export const WA_BOOKS               = ['sportybet', 'betano', '22bet', 'betway', '1xbet', 'onexbet'];
 
 // Real Odds-API bookmaker keys we actually compare for the GLOBAL feed.
 // NOTE: We use regions= instead of bookmakers= because the bookmakers= param
@@ -560,6 +560,10 @@ async function fetchGlobalOddsFresh(sport, markets, keys, cacheKey) {
         lastError = (body && (body.message || body.error_code)) || `key error (${response.status})`;
         lastErrorDetail = body;
         console.log(`[odds] key ${keys.indexOf(key)+1} error body:`, lastError);
+        // The Odds API reports an exhausted key as 401 "Usage quota has been reached" (not 429), so such keys were retried
+        // on every sport of every scan (3 wasted calls each time). Park them for about an hour; the check above skips a key
+        // until DEAD_KEY_TTL after its stored time, so storing a time 55 min ahead gives a 60 min park.
+        if (/quota/i.test(String(lastError))) deadKeys.set(key, Date.now() + 55 * 60 * 1000);
         continue;
       }
       if (!response.ok) {
@@ -745,8 +749,8 @@ export default async function handler(req, res) {
     // Books accessible to this user based on their detected region.
     // WA users: sportybet, betano, 1xbet, betway + new WA books
     // Global users: all books accessible (Betfair, Pinnacle, Bet365, William Hill etc.)
-    const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','sportybet','betano','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag'];
-    const WA_ACCESSIBLE     = ['1xbet','betway','sportybet','betano','22bet','betwinner','betking','bet9ja','1win','premierbet'];
+    const GLOBAL_ACCESSIBLE = ['pinnacle','betfair_ex_eu','betfair_ex_uk','singbet','sbobet','bet365','marathonbet','unibet_eu','williamhill','betway','1xbet','onexbet','sportybet','betano','matchbook','paddypower','boylesports','casumo','nordicbet','betsson','betclic','draftkings','fanduel','pointsbetting','betonlineag','mybookieag'];
+    const WA_ACCESSIBLE     = ['1xbet','onexbet','betway','sportybet','betano','22bet','betwinner','betking','bet9ja','1win','premierbet'];
     const userAccessibleBooks = isWAUser ? WA_ACCESSIBLE : GLOBAL_ACCESSIBLE;
 
     return res.status(200).json({
