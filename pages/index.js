@@ -740,10 +740,13 @@ const ANCHOR_SHARPS = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 
 const CONSENSUS_MAX_DEV = 0.06;           // 6%: any book, any market
 const CONSENSUS_MIN_OTHERS = 1;           // other books that must quote the same slot+side
 const CONSENSUS_MAX_DEV_STRICT = 0.04;    // 4%: Odds API (non-own-feed) 1X2 legs
+const CONSENSUS_MAX_DEV_SPREADS = 0.10;   // 10%: Asian handicap legs; quarter lines legitimately sit further apart between books
 const CONSENSUS_MIN_OTHERS_STRICT = 2;
 function consensusCheck(slot, q) {
   const strict = q.mktKey === 'h2h' && !q.ownFeed;
-  const maxDev = strict ? CONSENSUS_MAX_DEV_STRICT : CONSENSUS_MAX_DEV;
+  const maxDev = strict ? CONSENSUS_MAX_DEV_STRICT
+    : q.mktKey === 'spreads' ? CONSENSUS_MAX_DEV_SPREADS
+    : CONSENSUS_MAX_DEV;
   const minOthers = strict ? CONSENSUS_MIN_OTHERS_STRICT : CONSENSUS_MIN_OTHERS;
   const others = (slot.all[q.sideKey] || []).filter(p => bookGroup(p.book) !== bookGroup(q.book) && p.price > 1).map(p => p.price);
   if (others.length < minOthers) return { ok: false, reason: 'thin', strict, nOthers: others.length };
@@ -888,6 +891,16 @@ const REPORT_REASONS = [
 // feed gives one, otherwise falls back to match + kickoff.
 function legKey(arb, o) {
   return o.book + ':' + (o.fixtureRef ? o.fixtureRef : arb.match + '|' + arb.commenceTime);
+}
+// Manual-check link (OddsPapi fixturePath, e.g. https://22bet.com/line/369147714). It comes from third-party data, so only a
+// plain https link to a 22bet host is ever put in an <a href>; anything else is ignored. Prefers the link carried from the scan,
+// falls back to the one a live re-check returned for the same leg.
+const SAFE_22BET_LINK = /^https:\/\/(?:[a-z0-9-]+\.)*22bet\.(?:com|net|org|info|[a-z]{2}|(?:com|co)\.[a-z]{2})(?:[\/?#]|$)/i;
+function legManualLink(o, rc) {
+  if (!o || o.book !== '22bet') return null;
+  const fromRecheck = rc && rc.legs && (rc.legs.find(l => l.book === o.book && l.label === o.label) || {}).link;
+  const url = o.fixtureUrl || fromRecheck;
+  return typeof url === 'string' && SAFE_22BET_LINK.test(url) ? url : null;
 }
 const normLabel = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
 const KICKOFF_DIFF_MS = 15 * 60 * 1000; // a book's kickoff this far from the merged event's gets flagged
@@ -1160,7 +1173,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
             slotKey = 'outrights'; sideKey = o.name;
             marketLabel = 'Outright';
           }
-          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, bookable, displayLabel, marketLabel, point: o.point ?? null, fixtureRef: bm.bookmakerFixtureId || bm.eventId || null, updatedMs: parseQuoteTime(o.last_update || mkt.last_update || bm.last_update), updatedKind: (o.last_update || mkt.last_update || bm.last_update_kind !== 'pull') ? 'book' : 'pull', pulledMs: bm.last_update_kind === 'pull' ? parseQuoteTime(bm.last_update) : null, srcEvent: bm.srcEvent || null, ownFeed: bm.feedPipeline === 'wa' });
+          quotes.push({ slotKey, sideKey, line, mktKey: mkt.key, book: bm.key, bookName: bm.title, price: o.price, bookable, displayLabel, marketLabel, point: o.point ?? null, fixtureRef: bm.bookmakerFixtureId || bm.eventId || null, fixtureUrl: bm.fixturePath || null, updatedMs: parseQuoteTime(o.last_update || mkt.last_update || bm.last_update), updatedKind: (o.last_update || mkt.last_update || bm.last_update_kind !== 'pull') ? 'book' : 'pull', pulledMs: bm.last_update_kind === 'pull' ? parseQuoteTime(bm.last_update) : null, srcEvent: bm.srcEvent || null, ownFeed: bm.feedPipeline === 'wa' });
           noteUnprofiled(bm);
         }
       }
@@ -1233,7 +1246,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
       }
       for (const [sideKey, q] of Object.entries(plainBySide)) {
         const agree = (slot.all[sideKey] || []).filter(p => p.book !== q.book && Math.abs(p.price - q.price) / Math.min(p.price, q.price) <= AGREE_TOL);
-        slot.bestPlain[sideKey] = { sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, updatedMs: q.updatedMs, srcEvent: q.srcEvent, updatedKind: q.updatedKind, pulledMs: q.pulledMs,
+        slot.bestPlain[sideKey] = { sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, fixtureUrl: q.fixtureUrl, updatedMs: q.updatedMs, srcEvent: q.srcEvent, updatedKind: q.updatedKind, pulledMs: q.pulledMs,
           ownFeed: q.ownFeed, rankUsed: 1, agreeBooks: agree.map(p => p.book), dup: !!q.dup, dupPrices: q.dup ? q.dupPrices : null };
       }
       const bySide = {};
@@ -1250,7 +1263,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
           const q = ranked[r];
           const agree = (slot.all[sideKey] || []).filter(p => p.book !== q.book && Math.abs(p.price - q.price) / Math.min(p.price, q.price) <= AGREE_TOL);
           if (!agree.some(p => canVouch(q, p))) { slot.uncorroborated = (slot.uncorroborated || 0) + 1; continue; }
-          slot.best[sideKey] = { sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, updatedMs: q.updatedMs, srcEvent: q.srcEvent, updatedKind: q.updatedKind, pulledMs: q.pulledMs,
+          slot.best[sideKey] = { sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, fixtureUrl: q.fixtureUrl, updatedMs: q.updatedMs, srcEvent: q.srcEvent, updatedKind: q.updatedKind, pulledMs: q.pulledMs,
             ownFeed: q.ownFeed, rankUsed: r + 1, agreeBooks: agree.map(p => p.book), dup: !!q.dup, dupPrices: q.dup ? q.dupPrices : null };
           break;
         }
@@ -1353,6 +1366,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
             feedVerified: feedVerified(o.book, o.ownFeed, o.marketKey),            // other books quoting this selection within AGREE_TOL
             dup: !!o.dup,
             fixtureRef: o.fixtureRef,
+            fixtureUrl: o.fixtureUrl || null,
             updatedAt: o.updatedMs || null,
             srcLabel: o.srcEvent ? o.srcEvent.home + ' vs ' + o.srcEvent.away : null,
             srcStart: o.srcEvent ? o.srcEvent.start : null,
@@ -3275,6 +3289,7 @@ const analyzeArb = async (arb) => {
                   o.feedVerified === false && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b45309', marginTop: 1 } }, '⚠ unverified feed'),
                   typeof o.fairDev === 'number' && e('div', { style: { fontSize: 9, color: C.muted } }, (o.fairDev >= 0 ? '+' : '') + (o.fairDev * 100).toFixed(1) + '% vs sharp fair price'),
                   typeof o.updatedAt === 'number' && e('div', { style: { fontSize: 9, color: C.muted } }, (o.updatedKind === 'pull' ? 'fetched ' : 'price last changed ') + new Date(o.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
+                  legManualLink(o, recheck[arb.id]) && e('a', { href: legManualLink(o, recheck[arb.id]), target: '_blank', rel: 'noopener noreferrer', onClick: ev => ev.stopPropagation(), style: { display: 'block', marginTop: 4, fontSize: 10, fontWeight: 700, color: '#1e3a8a', background: C.blueLight, border: '1px solid #bfdbfe', borderRadius: 6, padding: '3px 6px', textDecoration: 'none', textAlign: 'center' } }, 'Check price on ' + (o.bookName || '22Bet') + ' ↗'),
                   e('a', { href: (BOOKS[o.book] && BOOKS[o.book].sportUrls && BOOKS[o.book].sportUrls[arb.sport.split('_')[0]]) || (BOOKS[o.book] && BOOKS[o.book].url) || '#', target: '_blank', style: { display: 'block', marginTop: 4, fontSize: 10, fontWeight: 700, color: '#fff', background: C.green, borderRadius: 6, padding: '3px 6px', textDecoration: 'none', textAlign: 'center' } }, 'Bet Now →')
                 ))
               )
