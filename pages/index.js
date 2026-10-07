@@ -3,6 +3,8 @@ import React, { useState, useEffect, useCallback, createElement } from 'react';
 import { supabase } from '../lib/supabaseClient';
 
 // ─── BOOKMAKERS ───────────────────────────────────────────────────────────────
+// Two feeds of the same operator must never count as two bookmakers when checking for a cross-book arb.
+const bookGroup = k => (k === 'onexbet' ? '1xbet' : k);
 const BOOKS = {
   // ── Global / Rest of World ─────────────────────────────────────────────────
   pinnacle:      { name: 'Pinnacle',     momo: false, licensed: false, manual: false, accessible: false, sharp: true,  wa: false, url: 'https://www.pinnacle.com/en/soccer/matchups', sportUrls: { soccer: 'https://www.pinnacle.com/en/soccer/matchups', basketball: 'https://www.pinnacle.com/en/basketball/matchups', tennis: 'https://www.pinnacle.com/en/tennis/matchups', cricket: 'https://www.pinnacle.com/en/cricket/matchups', mma: 'https://www.pinnacle.com/en/mixed-martial-arts/matchups' } },
@@ -17,8 +19,8 @@ const BOOKS = {
   footballcom:   { name: 'Football.com', momo: false, licensed: false, manual: true,  accessible: false, sharp: false, wa: false, url: 'https://www.football.com/betting', sportUrls: { soccer: 'https://www.football.com/betting/football' } },
 
   // ── West Africa + Global (accessible in WA, also in global feed) ───────────
-  '1xbet':       { name: '1xBet',        momo: true,  licensed: true,  manual: false, accessible: true,  sharp: true,  wa: true,  url: 'https://1xbet.com/en/line', sportUrls: { soccer: 'https://1xbet.com/en/line/football', basketball: 'https://1xbet.com/en/line/basketball', tennis: 'https://1xbet.com/en/line/tennis', cricket: 'https://1xbet.com/en/line/cricket', mma: 'https://1xbet.com/en/line/mma' } },
-  onexbet:       { name: '1xBet',        momo: true,  licensed: true,  manual: false, accessible: true,  sharp: true,  wa: true,  url: 'https://1xbet.com/en/line', sportUrls: { soccer: 'https://1xbet.com/en/line/football', basketball: 'https://1xbet.com/en/line/basketball', tennis: 'https://1xbet.com/en/line/tennis', cricket: 'https://1xbet.com/en/line/cricket', mma: 'https://1xbet.com/en/line/mma' } },
+  '1xbet':       { name: '1xBet (GH)',        momo: true,  licensed: true,  manual: false, accessible: true,  sharp: true,  wa: true,  url: 'https://1xbet.com/en/line', sportUrls: { soccer: 'https://1xbet.com/en/line/football', basketball: 'https://1xbet.com/en/line/basketball', tennis: 'https://1xbet.com/en/line/tennis', cricket: 'https://1xbet.com/en/line/cricket', mma: 'https://1xbet.com/en/line/mma' } },
+  onexbet:       { name: '1xBet (EU/UK feed)',        momo: true,  licensed: true,  manual: false, accessible: true,  sharp: true,  wa: true,  url: 'https://1xbet.com/en/line', sportUrls: { soccer: 'https://1xbet.com/en/line/football', basketball: 'https://1xbet.com/en/line/basketball', tennis: 'https://1xbet.com/en/line/tennis', cricket: 'https://1xbet.com/en/line/cricket', mma: 'https://1xbet.com/en/line/mma' } },
   betway:        { name: 'Betway',       momo: true,  licensed: true,  manual: false, accessible: true,  sharp: false, wa: true,  url: 'https://www.betway.com.gh/sports/all-sports', sportUrls: { soccer: 'https://www.betway.com.gh/sports/soccer', basketball: 'https://www.betway.com.gh/sports/basketball', tennis: 'https://www.betway.com.gh/sports/tennis', cricket: 'https://www.betway.com.gh/sports/cricket', mma: 'https://www.betway.com.gh/sports/mma' } },
 
   // ── West Africa only (scraped, not in global API feed) ────────────────────
@@ -590,7 +592,7 @@ function sanitizeEvents(events) {
       // 1b/2. handicaps, by home-perspective line
       const sp = {};
       for (const mkt of bm.markets || []) if (mkt.key === 'spreads') for (const o of mkt.outcomes || []) {
-        const s = resolveSide(o.name, ev);
+        const s = resolveSide(o.name, ev, bm);
         if ((s !== '__home__' && s !== '__away__') || typeof o.point !== 'number' || !(o.price > 1)) continue;
         const L = s === '__home__' ? o.point : -o.point;
         (sp[L] = sp[L] || {})[s === '__home__' ? 'home' : 'away'] = o;
@@ -635,12 +637,20 @@ function totalsVariant(mkt) {
 // on the same side. Returns '__home__' | '__away__' | '__draw__' | null.
 // null = can't tell which side this is, so the caller skips it rather than
 // letting an unrecognised spelling become its own fake "outcome".
-function resolveSide(name, ev) {
+function resolveSide(name, ev, bm) {
   const n = normaliseOutcome(name, ev.home_team, ev.away_team);
   if (n === '__home__' || n === '__away__' || n === '__draw__') return n;
   const t = normaliseTeamName(name);
   if (t && t === normaliseTeamName(ev.home_team)) return '__home__';
   if (t && t === normaliseTeamName(ev.away_team)) return '__away__';
+  // A book's outcome names come from the same feed as its own event labels (bm.srcEvent, set by the server merge, which
+  // matched that label to this event). When the shared-name lookup fails ("Brighton" vs "Brighton and Hove Albion"),
+  // resolve against the book's OWN home/away names instead of dropping the quote.
+  const se = bm && bm.srcEvent;
+  if (se && se.home && se.away) {
+    const r = normaliseOutcome(name, se.home, se.away);
+    if (r === '__home__' || r === '__away__' || r === '__draw__') return r;
+  }
   return null;
 }
 
@@ -986,7 +996,7 @@ function findScannedOddsForGame(game, events, userRegion) {
     for (const mkt of (bm.markets || [])) {
       if (mkt.key !== 'h2h') continue;
       for (const o of (mkt.outcomes || [])) {
-        const sd = resolveSide(o.name, ev);
+        const sd = resolveSide(o.name, ev, bm);
         if (sd && typeof o.price === 'number' && o.price > 1) side[sd].push({ price: o.price, book: name });
       }
     }
@@ -1196,7 +1206,7 @@ function findArbs(events, mode = 'global', userRegion = null) {
 
       // All legs at one bookmaker is not a cross-book arb — it means a
       // parsing/labelling error (this is exactly how the same-sign AH bug showed).
-      if (new Set(legs.map(o => o.book)).size < 2) return null;
+      if (new Set(legs.map(o => bookGroup(o.book))).size < 2) return null;
       return legs;
     };
 
@@ -1402,7 +1412,7 @@ function findEVBets(events, minEV = 2, mode = 'all', userRegion = null, teamForm
         if (!mkt) { if ((bm.markets || []).some(m => m.key === 'h2h')) diag.skippedAmbiguous++; continue; }
         for (const o of mkt.outcomes) {
           if (!(o.price > 1)) continue;
-          const normKey = resolveSide(o.name, ev);
+          const normKey = resolveSide(o.name, ev, bm);
           if (!normKey) continue;
           const prob = trueProbs[normKey];
           if (!prob) continue;
@@ -1580,7 +1590,7 @@ function findMiddles(events, mode = 'global', userRegion = null) {
           if (marketKey === 'totals' && Math.abs(o.point * 2 - Math.round(o.point * 2)) > 1e-9) continue; // no quarter lines
           let side;
           if (marketKey === 'spreads') {
-            side = resolveSide(o.name, ev);
+            side = resolveSide(o.name, ev, bm);
             if (side !== '__home__' && side !== '__away__') continue;
           } else {
             side = String(o.name || '').trim().toLowerCase();
