@@ -10,6 +10,8 @@ export default function Document() {
         <link rel="apple-touch-icon" href="/apple-touch-icon-180.png" sizes="180x180" />
         <link rel="manifest" href="/site.webmanifest" />
         <meta name="theme-color" content="#0b1220" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-title" content="ArbEdge" />
       </Head>
       <body>
         <Main />
