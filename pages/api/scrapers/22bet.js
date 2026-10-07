@@ -100,7 +100,7 @@ function getScraperApiKeys() {
 }
 
 function scraperApiUrl(key, targetUrl) {
-  return `http://api.scraperapi.com?api_key=${key}&url=${encodeURIComponent(targetUrl)}&country_code=gh&premium=true&ultra_premium=true`;
+  return `http://api.scraperapi.com?api_key=${key}&url=${encodeURIComponent(targetUrl)}&country_code=gh&premium=true`; // premium only: sending ultra_premium alongside it was getting 403 "include premium=true"
 }
 
 // Tries each configured ScraperAPI key against the same target url, in order.
