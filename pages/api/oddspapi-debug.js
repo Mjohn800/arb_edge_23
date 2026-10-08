@@ -20,7 +20,8 @@
 //
 // Params: token, sport (default soccer_epl), team (name fragment, default arsenal),
 //         type (spreads | totals | 1x2, default spreads), lines (comma list), book (22bet |
-//         betano | melbet | all, default all = 22bet + betano), raw=1, format=text|json.
+//         betano | melbet | all, default all = 22bet + betano), halves=1 (also show first/second-
+//         half markets; hidden by default), raw=1, format=text|json.
 
 import { ODDSPAPI_TOURNAMENT_MAP } from '../../lib/oddspapi-wa';
 import { debugFixtureMarkets } from '../../lib/oddspapi';
@@ -121,8 +122,16 @@ async function run(req, res) {
     }
   }
 
+  // Half-time markets share a line number with the full-time market (e.g. "Over 2.5" exists for
+  // the whole match AND for the second half), so they are hidden unless halves=1. Without this
+  // filter one market would silently overwrite the other in the side-by-side view.
+  const includeHalves = req.query.halves === '1' || req.query.halves === 'true';
+  const isHalfMarket = r => /half|1st|2nd/i.test(String(r.marketName || ''));
   const rowsByBook = {};
-  for (const book of books) rowsByBook[book] = (results[book] && results[book].markets) || (results[book] && results[book].rows) || [];
+  for (const book of books) {
+    const all = (results[book] && results[book].markets) || (results[book] && results[book].rows) || [];
+    rowsByBook[book] = includeHalves ? all : all.filter(r => !isHalfMarket(r));
+  }
   const shift = rowsByBook['22bet'] && rowsByBook['betano'] ? shiftTest(rowsByBook) : null;
 
   if (wantJson) return res.status(200).json({ sport, team, type, books, results, shiftTest: shift });
@@ -142,16 +151,17 @@ async function run(req, res) {
   const grouped = new Map();
   for (const book of books) {
     for (const row of rowsByBook[book] || []) {
-      const k = `${row.marketType}|${row.line == null ? '' : row.line}`;
-      if (!grouped.has(k)) grouped.set(k, { marketType: row.marketType, line: row.line, perBook: {} });
+      const k = `${row.marketType}|${row.line == null ? '' : row.line}|${row.marketName}`;
+      if (!grouped.has(k)) grouped.set(k, { marketType: row.marketType, marketName: row.marketName, line: row.line, perBook: {} });
       grouped.get(k).perBook[book] = row;
     }
   }
-  const ordered = [...grouped.values()].sort((a, b) => (a.marketType + '').localeCompare(b.marketType + '') || (a.line ?? 0) - (b.line ?? 0));
+  const ordered = [...grouped.values()].sort((a, b) => (a.marketType + '').localeCompare(b.marketType + '') || (a.line ?? 0) - (b.line ?? 0) || String(a.marketName).localeCompare(String(b.marketName)));
   if (!ordered.length) out.push('No matching markets returned (check type/lines, or the fixture may have no odds yet).');
+  if (!includeHalves) out.push('(half-time markets hidden; add &halves=1 to show them)');
 
   for (const g of ordered) {
-    out.push(`${g.marketType} line ${g.line == null ? '-' : g.line}`);
+    out.push(`${g.marketType} line ${g.line == null ? '-' : g.line}${includeHalves ? '  (' + g.marketName + ')' : ''}`);
     for (const book of books) {
       const row = g.perBook[book];
       out.push(row
