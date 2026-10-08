@@ -737,13 +737,13 @@ const ANCHOR_SHARPS = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 
 // need more corroborating books, because real 1X2 arbs are very rare and Odds API prices cannot be checked by hand
 // from Ghana. A leg quoted by fewer books than the minimum is also rejected: an uncorroborated price is not trusted.
 // Books sharing one operator (1xbet/onexbet) never count as each other's "other books" (see bookGroup).
-const CONSENSUS_MAX_DEV = 0.08;           // 8%: totals and other markets, any book
+const CONSENSUS_MAX_DEV = 0.06;           // 6%: any book, any market
 const CONSENSUS_MIN_OTHERS = 1;           // other books that must quote the same slot+side
-const CONSENSUS_MAX_DEV_STRICT = 0.04;    // 4%: 1X2 legs from any book or provider (real 1X2 arbs are very rare)
-const CONSENSUS_MAX_DEV_SPREADS = 0.12;   // 12%: Asian handicap legs; quarter lines legitimately sit further apart between books
+const CONSENSUS_MAX_DEV_STRICT = 0.04;    // 4%: Odds API (non-own-feed) 1X2 legs
+const CONSENSUS_MAX_DEV_SPREADS = 0.10;   // 10%: Asian handicap legs; quarter lines legitimately sit further apart between books
 const CONSENSUS_MIN_OTHERS_STRICT = 2;
 function consensusCheck(slot, q) {
-  const strict = q.mktKey === 'h2h';
+  const strict = q.mktKey === 'h2h' && !q.ownFeed;
   const maxDev = strict ? CONSENSUS_MAX_DEV_STRICT
     : q.mktKey === 'spreads' ? CONSENSUS_MAX_DEV_SPREADS
     : CONSENSUS_MAX_DEV;
@@ -767,13 +767,23 @@ function consensusCheck(slot, q) {
 // becomes a leg if a VERIFIED book on a different source agrees with it. Odds API books (Pinnacle, Betfair, ...) are
 // the provider's own feed and need no entry. TO ADD A BOOK: add a line, with every market false until you have checked it.
 const BOOK_PROFILES = {
-  sportybet: { source: 'scraper',  verified: { h2h: true,  spreads: true,  totals: true  } }, // read from SportyBet's own API
-  betano:    { source: 'oddspapi', verified: { h2h: true,  spreads: true,  totals: true  } }, // catalogue names checked against betano.com
-  '22bet':   { source: 'oddspapi', verified: { h2h: true,  spreads: false, totals: false } }, // totals proven wrong 24 Sep; spreads never checked
-  '1xbet':   { source: 'oddspapi', verified: { h2h: false, spreads: false, totals: false } }, // OddsPapi feed, new: nothing checked yet
+  sportybet: { source: 'scraper'  }, // read from SportyBet's own API
+  betano:    { source: 'oddspapi' }, // catalogue names checked against betano.com
+  '22bet':   { source: 'oddspapi' }, // totals proven wrong 24 Sep; spreads never checked
+  '1xbet':   { source: 'oddspapi' }, // OddsPapi feed, new: nothing checked yet
 };
+// TRUST, per book and per market. '*' = every market; an array = only those markets (h2h / spreads / totals).
+// A leg from a feed + market that is NOT listed is HELD BACK: the arb is still computed, but it is hidden from every
+// user and shows only in the owner's "Audit view". TO OPEN A MARKET: audit it against the book's own site (every line
+// exact on 5+ fixtures across 2+ leagues), then add it here, e.g. '22bet': ['h2h', 'totals'].
+const AUDITED_FEEDS = {
+  sportybet: '*',
+  betano: '*',
+  '22bet': ['h2h'],   // totals: pending audit (shut off 24 Sep, Under 4 showed 2.14 vs 1.571 on the site); spreads: never checked
+};
+const isAudited = (book, mktKey) => { const a = AUDITED_FEEDS[book]; return a === '*' || (Array.isArray(a) && a.includes(mktKey)); };
 const feedSource = (book, ownFeed) => !ownFeed ? 'oddsapi' : ((BOOK_PROFILES[book] && BOOK_PROFILES[book].source) || 'unknown:' + book);
-const feedVerified = (book, ownFeed, mktKey) => !ownFeed || !!(BOOK_PROFILES[book] && BOOK_PROFILES[book].verified[mktKey]);
+const feedVerified = (book, ownFeed, mktKey) => !ownFeed || isAudited(book, mktKey);
 // May book p (an agreeing quote) vouch for candidate q? Two of OUR OWN feeds on the same source may not; and an
 // unverified q needs a verified voucher.
 const canVouch = (q, p) => {
@@ -1346,7 +1356,8 @@ function findArbs(events, mode = 'global', userRegion = null) {
           verify,
           // 'clean' = every leg cross-checked against >=2 other books, fresh, no flags; otherwise 'review'
           // (hidden in the UI unless opened). A live re-check that returns 'confirmed' promotes it.
-          tier: verify.level === 'standard' ? 'clean' : 'review',
+          tier: unverifiedLegs.length ? 'held' : (verify.level === 'standard' ? 'clean' : 'review'),
+          held: unverifiedLegs.length > 0,   // a leg is from a feed+market not in AUDITED_FEEDS: hidden from users, owner Audit view only
           home: ev.home_team,
           away: ev.away_team,
           outcomes: outs.map((o, oi) => ({
@@ -2004,6 +2015,8 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [minMargin, setMinMargin] = useState(0);
   const [showHighProfit, setShowHighProfit] = useState(false);
   const [showReview, setShowReview] = useState(false); // review-tier arbs stay hidden unless opened
+  const [heldArbs, setHeldArbs] = useState([]);        // arbs held back by AUDITED_FEEDS: owner Audit view only, never shown to users
+  const [showAudit, setShowAudit] = useState(false);
   // user's active reports = their personal denylist (table arb_reports, see arb_reports.sql)
   const [reports, setReports] = useState([]);
   const [reportOpenId, setReportOpenId] = useState(null);
@@ -2494,7 +2507,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     // anything ≥ HIGH_MARGIN_REVIEW); anything it confirms as gone is dropped
     // here, everything else is stamped with its liveVerify result so cards
     // can show "live-verified" / "margin adjusted" without another round trip.
-    const verifyMap = await verifyTopCandidates(found.concat(foundArbsWA));
+    const verifyMap = await verifyTopCandidates(found.concat(foundArbsWA).filter(a => !a.held));
     const applyVerification = (list) => list
       .filter(a => !verifyMap[a.id] || verifyMap[a.id].status !== 'dropped')
       .map(a => verifyMap[a.id] ? { ...a, liveVerify: verifyMap[a.id] } : a);
@@ -2507,14 +2520,18 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
         return { ...a, firstSeenMs: seen[sig] };
       });
     };
-    const foundVerified = stampAge(applyVerification(found));
-    const foundArbsWAVerified = stampAge(applyVerification(foundArbsWA));
+    const heldMap = {};
+    found.concat(foundArbsWA).filter(a => a.held).forEach(a => { heldMap[a.id + '|' + a.outcomes.map(o => o.book + ':' + o.odds).join(',')] = a; });
+    const heldNow = Object.values(heldMap).sort((x, y) => y.margin - x.margin);
+    const foundVerified = stampAge(applyVerification(found.filter(a => !a.held)));
+    const foundArbsWAVerified = stampAge(applyVerification(foundArbsWA.filter(a => !a.held)));
     const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
     const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
     if (foundVerified.length > 0) { setArbs(foundVerified); setIsDemo(false); }
     else if (okCount === 0) { setArbs(MOCK); setIsDemo(true); } // scan failed entirely — labelled demo
     else { setArbs([]); setIsDemo(false); } // scan worked, genuinely no arbs
     setArbsWAReal(foundArbsWAVerified);
+    setHeldArbs(okCount > 0 ? heldNow : []);
     // Only forget arbs that disappeared when the scan itself worked — a failed scan
     // must not reset every arb's age. An arb that vanishes and later returns starts over.
     if (okCount > 0) {
@@ -3227,8 +3244,6 @@ const analyzeArb = async (arb) => {
       ),
       integrity && (integrity.total > 0 || Object.keys(integrity.quarantined || {}).length > 0) && e('div', { style: { fontSize: 11, color: '#1e3a8a', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
         integrity.total > 0 && e('div', null, '🛡 ' + integrity.total + ' quote' + (integrity.total === 1 ? '' : 's') + ' excluded by data-integrity checks (impossible margins or out-of-order lines) — they never enter an arb. ' + Object.entries(integrity.byBook).map(([b, n]) => b + ': ' + n).join(', ')),
-        integrity.total > 0 && e('div', null, 'Why: ' + Object.entries(integrity.byReason || {}).map(([r, n]) => r + ' x' + n).join('; ') + (integrity.examples && integrity.examples.length ? ' | e.g. ' + integrity.examples.slice(0, 3).map(x => x.book + ' ' + x.market + ' (' + x.match + ')').join('; ') : '')),
-        scanHealth && scanHealth.arbDiag && scanHealth.arbDiag.consensus && Object.keys(scanHealth.arbDiag.consensus).length > 0 && e('div', null, 'Consensus filter rejected legs (price too far above other books / too few books quote it): ' + Object.entries(scanHealth.arbDiag.consensus).map(([b, d]) => b + ' high ' + d.high + ', thin ' + d.thin).join('; ')),
         Object.entries(integrity.quarantined || {}).map(([b, why]) => e('div', { key: b }, '⏸ ' + b + ' is held back from all results: ' + why + '.'))
       ),
       filteredArbs.length === 0 && !isDemo && e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
@@ -3239,6 +3254,21 @@ const analyzeArb = async (arb) => {
  (hiddenReview > 0 || showReview) && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
    !showReview ? e('div', null, '🔍 ' + hiddenReview + ' arb' + (hiddenReview === 1 ? '' : 's') + ' hidden: not enough cross-checks or a flagged price. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(true); } }, 'Show review arbs'))
      : e('div', null, 'Showing review arbs: verify every leg on the book before staking. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(false); } }, 'Hide again'))
+ ),
+ plan.isOwner && e('div', { style: { fontSize: 11, color: '#1e3a8a', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
+   e('div', null, '🧪 Audit view (owner only): ' + heldArbs.length + ' held-back arb' + (heldArbs.length === 1 ? '' : 's') + ' from feeds not yet audited. Users never see these. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowAudit(v => !v); } }, showAudit ? 'Hide' : 'Open')),
+   showAudit && e('div', { style: { marginTop: 6 } },
+     heldArbs.length === 0 && e('div', null, 'Nothing held back in the last scan.'),
+     heldArbs.map(a => e('div', { key: a.id + '|' + a.outcomes.map(o => o.book + ':' + o.odds).join(','), style: { background: '#fff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '6px 8px', marginBottom: 6 } },
+       e('div', { style: { fontWeight: 700, color: C.text } }, a.match + '  +' + a.margin + '%'),
+       e('div', { style: { color: C.muted, fontSize: 10, marginBottom: 3 } }, new Date(a.commenceTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' · ' + a.sport),
+       a.outcomes.map((o, oi) => e('div', { key: oi, style: { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '2px 0', borderTop: oi ? '1px solid #eff6ff' : 'none' } },
+         e('span', { style: { color: o.feedVerified === false ? '#b45309' : C.text } }, (o.feedVerified === false ? '⚠ ' : '') + (o.bookName || o.book) + ' · ' + (o.marketLabel || o.marketKey) + (o.point != null ? ' ' + o.point : '') + ' · ' + o.label),
+         e('span', { style: { fontWeight: 700 } }, o.odds),
+         legManualLink(o, null) && e('a', { href: legManualLink(o, null), target: '_blank', rel: 'noopener noreferrer', style: { fontWeight: 700, color: '#1e3a8a' } }, 'site ↗')
+       ))
+     ))
+   )
  ),
  (hiddenHighProfit > 0 || showHighProfit || hiddenByReports > 0) && e('div', { style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
    hiddenHighProfit > 0 && !showHighProfit && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden — that size is far more often a bad price than a real edge. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(true); } }, 'Show them')),
