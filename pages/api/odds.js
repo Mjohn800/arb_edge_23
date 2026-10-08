@@ -213,6 +213,7 @@ async function getWAOdds(sportKey) {
   for (const ev of results) for (const bm of (ev.bookmakers || [])) {
     if (!bm.last_update) bm.last_update = stampNow;
     bm.last_update_kind = 'pull';
+    bm.feedPipeline = 'wa'; // passed through our own mapping/parsing: the client needs a BOOK_PROFILES entry to trust it
     const t = Date.parse(bm.last_update);
     if (Number.isFinite(t) && t < oldestPull) oldestPull = t;
   }
