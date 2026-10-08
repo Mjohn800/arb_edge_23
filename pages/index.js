@@ -737,13 +737,13 @@ const ANCHOR_SHARPS = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 
 // need more corroborating books, because real 1X2 arbs are very rare and Odds API prices cannot be checked by hand
 // from Ghana. A leg quoted by fewer books than the minimum is also rejected: an uncorroborated price is not trusted.
 // Books sharing one operator (1xbet/onexbet) never count as each other's "other books" (see bookGroup).
-const CONSENSUS_MAX_DEV = 0.06;           // 6%: any book, any market
+const CONSENSUS_MAX_DEV = 0.08;           // 8%: totals and other markets, any book
 const CONSENSUS_MIN_OTHERS = 1;           // other books that must quote the same slot+side
-const CONSENSUS_MAX_DEV_STRICT = 0.04;    // 4%: Odds API (non-own-feed) 1X2 legs
-const CONSENSUS_MAX_DEV_SPREADS = 0.10;   // 10%: Asian handicap legs; quarter lines legitimately sit further apart between books
+const CONSENSUS_MAX_DEV_STRICT = 0.04;    // 4%: 1X2 legs from any book or provider (real 1X2 arbs are very rare)
+const CONSENSUS_MAX_DEV_SPREADS = 0.12;   // 12%: Asian handicap legs; quarter lines legitimately sit further apart between books
 const CONSENSUS_MIN_OTHERS_STRICT = 2;
 function consensusCheck(slot, q) {
-  const strict = q.mktKey === 'h2h' && !q.ownFeed;
+  const strict = q.mktKey === 'h2h';
   const maxDev = strict ? CONSENSUS_MAX_DEV_STRICT
     : q.mktKey === 'spreads' ? CONSENSUS_MAX_DEV_SPREADS
     : CONSENSUS_MAX_DEV;
@@ -3227,6 +3227,8 @@ const analyzeArb = async (arb) => {
       ),
       integrity && (integrity.total > 0 || Object.keys(integrity.quarantined || {}).length > 0) && e('div', { style: { fontSize: 11, color: '#1e3a8a', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
         integrity.total > 0 && e('div', null, '🛡 ' + integrity.total + ' quote' + (integrity.total === 1 ? '' : 's') + ' excluded by data-integrity checks (impossible margins or out-of-order lines) — they never enter an arb. ' + Object.entries(integrity.byBook).map(([b, n]) => b + ': ' + n).join(', ')),
+        integrity.total > 0 && e('div', null, 'Why: ' + Object.entries(integrity.byReason || {}).map(([r, n]) => r + ' x' + n).join('; ') + (integrity.examples && integrity.examples.length ? ' | e.g. ' + integrity.examples.slice(0, 3).map(x => x.book + ' ' + x.market + ' (' + x.match + ')').join('; ') : '')),
+        scanHealth && scanHealth.arbDiag && scanHealth.arbDiag.consensus && Object.keys(scanHealth.arbDiag.consensus).length > 0 && e('div', null, 'Consensus filter rejected legs (price too far above other books / too few books quote it): ' + Object.entries(scanHealth.arbDiag.consensus).map(([b, d]) => b + ' high ' + d.high + ', thin ' + d.thin).join('; ')),
         Object.entries(integrity.quarantined || {}).map(([b, why]) => e('div', { key: b }, '⏸ ' + b + ' is held back from all results: ' + why + '.'))
       ),
       filteredArbs.length === 0 && !isDemo && e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
