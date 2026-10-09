@@ -787,7 +787,13 @@ const feedVerified = (book, ownFeed, mktKey) => !ownFeed || isAudited(book, mktK
 // May book p (an agreeing quote) vouch for candidate q? Two of OUR OWN feeds on the same source may not; and an
 // unverified q needs a verified voucher.
 const canVouch = (q, p) => {
-  if (q.ownFeed && p.ownFeed && feedSource(q.book, q.ownFeed) === feedSource(p.book, p.ownFeed)) return false;
+  // Two books from the SAME own feed (e.g. 22bet and Betano, both OddsPapi) may vouch for each other only when BOTH are
+  // audited for this market in AUDITED_FEEDS (9 Oct 2026). Before, same-feed books could never vouch at all, while two
+  // Odds API books could. An unaudited book from the same feed still cannot vouch, so a shared catalogue mistake in a
+  // market nobody has checked stays blocked.
+  if (q.ownFeed && p.ownFeed && feedSource(q.book, q.ownFeed) === feedSource(p.book, p.ownFeed)) {
+    return feedVerified(q.book, q.ownFeed, q.mktKey) && feedVerified(p.book, p.ownFeed, q.mktKey);
+  }
   if (!feedVerified(q.book, q.ownFeed, q.mktKey) && !feedVerified(p.book, p.ownFeed, q.mktKey)) return false;
   return true;
 };
@@ -2933,7 +2939,7 @@ const analyzeArb = async (arb) => {
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
     if (isDenied(a)) return false;
     if (!showHighProfit && a.margin > DEFAULT_MAX_PROFIT) return false;
-    if (!showReview && !isShownByDefault(a)) return false;
+    if (!showReview && !isShownByDefault(a) && !(showHighProfit && a.margin > DEFAULT_MAX_PROFIT)) return false; // 'Show them' on the high-profit banner also reveals high-profit arbs that sit in the review tier (almost all of them do)
     if (accessOnly && !isFullyAccessible(a.outcomes, userRegion)) return false;
     if (arbSection === 'global' && isFullyAccessible(a.outcomes, userRegion)) return false;
     return a.margin >= minMargin;
@@ -2944,7 +2950,7 @@ const analyzeArb = async (arb) => {
   const sameFilters = a => {
     if (isDenied(a)) return false;
     if (!showHighProfit && a.margin > DEFAULT_MAX_PROFIT) return false;
-    if (!showReview && !isShownByDefault(a)) return false;
+    if (!showReview && !isShownByDefault(a) && !(showHighProfit && a.margin > DEFAULT_MAX_PROFIT)) return false; // 'Show them' on the high-profit banner also reveals high-profit arbs that sit in the review tier (almost all of them do)
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
