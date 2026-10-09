@@ -779,7 +779,7 @@ const BOOK_PROFILES = {
 const AUDITED_FEEDS = {
   sportybet: '*',
   betano: '*',
-  '22bet': ['h2h'],   // totals: pending audit (shut off 24 Sep, Under 4 showed 2.14 vs 1.571 on the site); spreads: never checked
+  '22bet': ['h2h', 'totals', 'spreads'],   // opened 9 Oct 2026 after page checks on Arsenal, Galatasaray, Malaga, Dortmund (totals shut off 24 Sep earlier, cause never found)
 };
 const isAudited = (book, mktKey) => { const a = AUDITED_FEEDS[book]; return a === '*' || (Array.isArray(a) && a.includes(mktKey)); };
 const feedSource = (book, ownFeed) => !ownFeed ? 'oddsapi' : ((BOOK_PROFILES[book] && BOOK_PROFILES[book].source) || 'unknown:' + book);
