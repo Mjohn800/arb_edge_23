@@ -2985,15 +2985,7 @@ const analyzeArb = async (arb) => {
       e('div', { style: st.headerRow },
         e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ ' + scanProgress.sport + '...' : '● ' + filteredArbs.length + ' arbs'),
         lastFetch && e('span', { style: st.badge('#1f2937', '#9ca3af') }, lastFetch.toLocaleTimeString()),
-        isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, '⚠ Demo'),
-        e('button', { onClick: () => setShowSetup(v => !v), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 10px' } }, apiKey ? '⚙ Connected' : 'Connect Live ↗')
-      ),
-      showSetup && e('div', { style: st.setupBox },
-        e('div', { style: st.setupText }, 'Free API key at the-odds-api.com — covers FIFA World Cup, AFCON, all tennis Slams, NBA, UFC, Cricket + 100 leagues.'),
-        e('div', { style: { display: 'flex', gap: 8 } },
-          e('input', { value: apiInput, onChange: ev => setApiInput(ev.target.value), placeholder: 'Paste Odds API key...', style: { ...st.input, flex: 1, background: '#1f2937', borderColor: '#374151', color: '#f9fafb' } }),
-          e('button', { onClick: saveKey, style: st.btn('primary') }, 'Save')
-        )
+        isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, '⚠ Demo')
       ),
     ),
            e('div', { style: { display: 'flex', justifyContent: 'flex-end', padding: '6px 4px' } },
