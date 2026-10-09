@@ -737,13 +737,13 @@ const ANCHOR_SHARPS = ['pinnacle', 'betfair_ex_eu', 'betfair_ex_uk', 'singbet', 
 // need more corroborating books, because real 1X2 arbs are very rare and Odds API prices cannot be checked by hand
 // from Ghana. A leg quoted by fewer books than the minimum is also rejected: an uncorroborated price is not trusted.
 // Books sharing one operator (1xbet/onexbet) never count as each other's "other books" (see bookGroup).
-const CONSENSUS_MAX_DEV = 0.06;           // 6%: any book, any market
+const CONSENSUS_MAX_DEV = 0.08;           // 8%: totals and other markets, any book
 const CONSENSUS_MIN_OTHERS = 1;           // other books that must quote the same slot+side
-const CONSENSUS_MAX_DEV_STRICT = 0.04;    // 4%: Odds API (non-own-feed) 1X2 legs
-const CONSENSUS_MAX_DEV_SPREADS = 0.10;   // 10%: Asian handicap legs; quarter lines legitimately sit further apart between books
+const CONSENSUS_MAX_DEV_STRICT = 0.04;    // 4%: 1X2 legs from any book or provider (real 1X2 arbs are very rare)
+const CONSENSUS_MAX_DEV_SPREADS = 0.12;   // 12%: Asian handicap legs; quarter lines legitimately sit further apart between books
 const CONSENSUS_MIN_OTHERS_STRICT = 2;
 function consensusCheck(slot, q) {
-  const strict = q.mktKey === 'h2h' && !q.ownFeed;
+  const strict = q.mktKey === 'h2h';
   const maxDev = strict ? CONSENSUS_MAX_DEV_STRICT
     : q.mktKey === 'spreads' ? CONSENSUS_MAX_DEV_SPREADS
     : CONSENSUS_MAX_DEV;
@@ -1322,11 +1322,18 @@ function findArbs(events, mode = 'global', userRegion = null) {
       // best that another book agrees with; a duplicated price uses its 2nd best) and must still arb.
       let outs = legsFor(slot, slot.bestPlain);
       let rule = 'plain';
+      let uncorroborated = false; // above the threshold, but no second source confirms every leg: kept in the review tier
       if (outs) {
         const impPlain = outs.reduce((s, o) => s + 1 / o.price, 0);
         if (!(impPlain < 1)) continue;
         const plainMargin = (1 - impPlain) / impPlain * 100;
-        if (plainMargin > RANK_RULE_MIN_MARGIN) { outs = legsFor(slot, slot.best); rule = 'rank'; }
+        if (plainMargin > RANK_RULE_MIN_MARGIN) {
+          const plainOuts = outs;
+          const rankOuts = legsFor(slot, slot.best);
+          const rankImp = rankOuts ? rankOuts.reduce((sum, o) => sum + 1 / o.price, 0) : null;
+          if (rankOuts && rankImp < 1) { outs = rankOuts; rule = 'rank'; }
+          else { outs = plainOuts; uncorroborated = true; } // previously dropped silently; now shown under "Show review arbs"
+        }
       }
       if (!outs) continue;
 
@@ -1340,6 +1347,9 @@ function findArbs(events, mode = 'global', userRegion = null) {
         if (verify.level === 'excluded' && verify.kind === 'multi-outlier' && margin < FLAGGED_KEEP_MARGIN) verify = { level: 'review', reasons: verify.reasons };
         if (verify.level === 'excluded') { console.warn('[findArbs] excluded (multi-outlier)', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons); continue; }
         if (verify.level === 'review') console.warn('[findArbs] review flag', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons);
+        if (uncorroborated && verify.level === 'standard') {
+          verify = { ...verify, level: 'review', reasons: [...(verify.reasons || []), 'Above +' + RANK_RULE_MIN_MARGIN + '%: no second source confirms the best price on every leg. Kept in review: verify each leg on the book first.'] };
+        }
         // Per-book trust: a leg from a feed not yet verified for this market keeps the arb visible but moves it to 'review'.
         const unverifiedLegs = outs.filter(o => !feedVerified(o.book, o.ownFeed, o.marketKey));
         if (unverifiedLegs.length) {
@@ -3250,6 +3260,8 @@ const analyzeArb = async (arb) => {
       ),
       integrity && (integrity.total > 0 || Object.keys(integrity.quarantined || {}).length > 0) && e('div', { style: { fontSize: 11, color: '#1e3a8a', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
         integrity.total > 0 && e('div', null, '🛡 ' + integrity.total + ' quote' + (integrity.total === 1 ? '' : 's') + ' excluded by data-integrity checks (impossible margins or out-of-order lines) — they never enter an arb. ' + Object.entries(integrity.byBook).map(([b, n]) => b + ': ' + n).join(', ')),
+        integrity.total > 0 && e('div', null, 'Why: ' + Object.entries(integrity.byReason || {}).map(([r, n]) => r + ' x' + n).join('; ') + (integrity.examples && integrity.examples.length ? ' | e.g. ' + integrity.examples.slice(0, 3).map(x => x.book + ' ' + x.market + ' (' + x.match + ')').join('; ') : '')),
+        scanHealth && scanHealth.arbDiag && scanHealth.arbDiag.consensus && Object.keys(scanHealth.arbDiag.consensus).length > 0 && e('div', null, 'Consensus filter rejected legs (price too far above other books / too few books quote it): ' + Object.entries(scanHealth.arbDiag.consensus).map(([b, d]) => b + ' high ' + d.high + ', thin ' + d.thin).join('; ')),
         Object.entries(integrity.quarantined || {}).map(([b, why]) => e('div', { key: b }, '⏸ ' + b + ' is held back from all results: ' + why + '.'))
       ),
       filteredArbs.length === 0 && !isDemo && e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
