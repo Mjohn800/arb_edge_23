@@ -8,6 +8,8 @@
 //
 //   All soccer leagues in the map:   /api/sportybet-leagues?token=TOKEN
 //   One league:                      /api/sportybet-leagues?token=TOKEN&sport=soccer_belgium_first_div
+//   One match as the scraper READS it (prices to compare with SportyBet's page):
+//                                    /api/sportybet-leagues?token=TOKEN&sport=soccer_epl&team=arsenal
 //   Try ANY tournament ID (to find a correct one):
 //                                    /api/sportybet-leagues?token=TOKEN&id=sr:tournament:38
 //
@@ -19,7 +21,7 @@
 // checked here automatically (needs the scraper to export SPORTYBET_SPORT_MAP, SPORTYBET_BASE and
 // SPORTYBET_HEADERS, which your current version does). Request body = the scraper's own (markets 1,16,18,29).
 
-import { SPORTYBET_SPORT_MAP, SPORTYBET_BASE as BASE, SPORTYBET_HEADERS as HEADERS } from './scrapers/sportybet';
+import { SPORTYBET_SPORT_MAP, SPORTYBET_BASE as BASE, SPORTYBET_HEADERS as HEADERS, fetchSportybetOdds } from './scrapers/sportybet';
 
 export const config = { maxDuration: 60 };
 
@@ -105,12 +107,56 @@ async function checkOne(key, id, words) {
   return { key, id, mark, text: lines.join('\n') };
 }
 
+
+const r2 = n => Math.round(n * 1000) / 1000;
+const near = (a, b) => Math.abs(a - b) < 1e-9;
+
+// What the scraper actually produces for one fixture (after its own parsing), so the numbers can be put side by
+// side with SportyBet's page: 1X2, every totals line, every Asian-handicap line (home perspective).
+async function showMatch(sport, team) {
+  const { events, status } = await fetchSportybetOdds(sport);
+  const t = String(team).toLowerCase();
+  const ev = (events || []).find(e => `${e.home_team} ${e.away_team}`.toLowerCase().includes(t));
+  if (!ev) {
+    return `No "${team}" fixture in the scraper output for ${sport} (${(events || []).length} events read${status && status.reason ? ', reason ' + status.reason : ''}).\n` +
+      (events || []).slice(0, 12).map(e => `  ${e.home_team} vs ${e.away_team}`).join('\n');
+  }
+  const bm = (ev.bookmakers || [])[0] || {};
+  const mk = key => ((bm.markets || []).find(m => m.key === key) || { outcomes: [] }).outcomes;
+  const out = [`SportyBet as the scraper reads it | ${sport} | ${ev.home_team} vs ${ev.away_team} | ${ev.commence_time.slice(0, 16)}Z`];
+
+  const h2h = mk('h2h');
+  out.push('1X2: ' + (h2h.length ? h2h.map(o => `${o.name} ${r2(o.price)}`).join(' | ') : 'not read'));
+
+  const tot = new Map();
+  for (const o of mk('totals')) { const l = tot.get(o.point) || {}; l[String(o.name).toLowerCase()] = o.price; tot.set(o.point, l); }
+  out.push('totals (line: over / under):' + (tot.size ? '' : ' none read'));
+  [...tot.entries()].sort((a, b) => a[0] - b[0]).forEach(([line, v]) => out.push(`  ${line}: ${v.over != null ? r2(v.over) : '-'} / ${v.under != null ? r2(v.under) : '-'}`));
+
+  const sp = mk('spreads');
+  const homes = sp.filter(o => o.name === ev.home_team);
+  out.push('Asian handicap (home line: home price / away price):' + (homes.length ? '' : ' none read'));
+  homes.sort((a, b) => a.point - b.point).forEach(h => {
+    const a = sp.find(o => o.name === ev.away_team && near(o.point, -h.point));
+    out.push(`  ${h.point > 0 ? '+' : ''}${h.point}: ${r2(h.price)} / ${a ? r2(a.price) : '-'}`);
+  });
+  if (mk('handicap_3way').length) out.push('(3-way handicap is also read, but is not used for arbs)');
+  out.push('Compare these with the same fixture on SportyBet. Every line should match exactly.');
+  return out.join('\n');
+}
+
 export default async function handler(req, res) {
   const token = process.env.ADMIN_DEBUG_TOKEN;
   if (!token || req.query.token !== token) return res.status(404).json({ error: 'not_found' });
   res.setHeader('Cache-Control', 'no-store');
   try {
     const out = [];
+    if (req.query.team && req.query.sport) {
+      const k = String(req.query.sport);
+      if (!soccerLeagues().some(j => j[0] === k)) return res.status(400).json({ error: 'unknown_sport', available: soccerLeagues().map(j => j[0]) });
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.status(200).send(await showMatch(k, String(req.query.team).slice(0, 40)));
+    }
     let jobs;
     if (req.query.id) {
       const id = String(req.query.id).trim();
