@@ -749,10 +749,10 @@ function consensusCheck(slot, q) {
     : CONSENSUS_MAX_DEV;
   const minOthers = strict ? CONSENSUS_MIN_OTHERS_STRICT : CONSENSUS_MIN_OTHERS;
   const others = (slot.all[q.sideKey] || []).filter(p => bookGroup(p.book) !== bookGroup(q.book) && p.price > 1).map(p => p.price);
-  if (others.length < minOthers) return { ok: false, reason: 'thin', strict, nOthers: others.length };
+  if (others.length < minOthers) return { ok: false, reason: 'thin', strict, nOthers: others.length, minOthers };
   const med = medianOf(others);
   const ratio = q.price / med;
-  if (ratio > 1 + maxDev) return { ok: false, reason: 'high', strict, nOthers: others.length, med, ratio };
+  if (ratio > 1 + maxDev) return { ok: false, reason: 'high', strict, nOthers: others.length, med, ratio, maxDev };
   return { ok: true, strict, nOthers: others.length, med, ratio };
 }
 
@@ -1253,8 +1253,11 @@ function findArbs(events, mode = 'global', userRegion = null) {
       // pre-match arbs look like, so when the plain legs give <= RANK_RULE_MIN_MARGIN the rank rule is not applied
       // (see the check below). Still anchor-filtered; agreeBooks is computed for display only.
       const plainBySide = {};
+      const shadowBySide = {}; // best price per side IGNORING the consensus check: feeds the owner-only "rejected arbs" list
       for (const q of (slot.candsPlain || [])) {
         const cc = consensusCheck(slot, q);
+        const fpShadow = slot.anchor ? slot.anchor.fair[q.sideKey] : null;
+        if (!(fpShadow && q.price * fpShadow > 1 + ANCHOR_MAX_DEV) && (!shadowBySide[q.sideKey] || q.price > shadowBySide[q.sideKey].q.price)) shadowBySide[q.sideKey] = { q, cc };
         if (!cc.ok) { noteConsensusReject(ev, slot, q, cc); continue; }
         const fp = slot.anchor ? slot.anchor.fair[q.sideKey] : null;
         if (fp && q.price * fp > 1 + ANCHOR_MAX_DEV) continue;
@@ -1264,6 +1267,12 @@ function findArbs(events, mode = 'global', userRegion = null) {
         const agree = (slot.all[sideKey] || []).filter(p => p.book !== q.book && Math.abs(p.price - q.price) / Math.min(p.price, q.price) <= AGREE_TOL);
         slot.bestPlain[sideKey] = { sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, fixtureUrl: q.fixtureUrl, updatedMs: q.updatedMs, srcEvent: q.srcEvent, updatedKind: q.updatedKind, pulledMs: q.pulledMs,
           ownFeed: q.ownFeed, rankUsed: 1, agreeBooks: agree.map(p => p.book), dup: !!q.dup, dupPrices: q.dup ? q.dupPrices : null };
+      }
+      slot.shadow = {};
+      for (const [sideKey, sh] of Object.entries(shadowBySide)) {
+        const q = sh.q;
+        slot.shadow[sideKey] = { sideKey, price: q.price, book: q.book, bookName: q.bookName, displayLabel: q.displayLabel, marketLabel: q.marketLabel, marketKey: q.mktKey, point: q.point, fixtureRef: q.fixtureRef, fixtureUrl: q.fixtureUrl, updatedMs: q.updatedMs, srcEvent: q.srcEvent, updatedKind: q.updatedKind, pulledMs: q.pulledMs,
+          ownFeed: q.ownFeed, rankUsed: 1, agreeBooks: [], dup: !!q.dup, dupPrices: q.dup ? q.dupPrices : null, ccFail: sh.cc.ok ? null : sh.cc };
       }
       const bySide = {};
       for (const q of (slot.cands || [])) {
@@ -1315,6 +1324,41 @@ function findArbs(events, mode = 'global', userRegion = null) {
     };
 
     for (const slot of Object.values(marketSlots)) {
+      // REJECTED ARBS. If the plain best prices WOULD form an arb but the consensus filter stopped a leg from being used,
+      // keep that arb in a separate 'rejected' tier so the owner can see whether the filter is throwing away real arbs.
+      // These never enter results, counts, alerts or live verification (see the scan code).
+      if (slot.shadow) {
+        const shLegs = legsFor(slot, slot.shadow);
+        if (shLegs && shLegs.some(o => o.ccFail)) {
+          const shImp = shLegs.reduce((sum, o) => sum + 1 / o.price, 0);
+          if (shImp < 1) {
+            const shMargin = parseFloat((((1 - shImp) / shImp) * 100).toFixed(2));
+            const reasonOf = o => !o.ccFail ? null
+              : o.ccFail.reason === 'high'
+                ? (o.bookName || o.book) + ' ' + (o.displayLabel || o.sideKey) + ' @' + o.price + ' is +' + Math.round((o.ccFail.ratio - 1) * 100) + '% above the median ' + o.ccFail.med.toFixed(2) + ' of ' + o.ccFail.nOthers + ' other book(s); limit is +' + Math.round(o.ccFail.maxDev * 100) + '%'
+                : (o.bookName || o.book) + ' ' + (o.displayLabel || o.sideKey) + ' @' + o.price + ': only ' + o.ccFail.nOthers + ' other book(s) quote it; needs ' + o.ccFail.minOthers;
+            const shMin = minOddsFor(shLegs);
+            const shPulls = shLegs.filter(o => typeof o.pulledMs === 'number').map(o => o.pulledMs);
+            const shNow = Date.now();
+            arbs.push({
+              id: ev.id + '_' + slot.mktKey + (slot.line != null ? '_' + slot.line : '') + '_rejected',
+              foundAtMs: shNow, pulledAtMs: shPulls.length ? Math.min(...shPulls) : shNow,
+              sport: ev.sport_key, match: ev.home_team + ' vs ' + ev.away_team, commenceTime: ev.commence_time,
+              margin: shMargin, rule: 'rejected', tier: 'rejected', rejected: true, held: false,
+              verify: { level: 'rejected', reasons: shLegs.map(reasonOf).filter(Boolean) },
+              home: ev.home_team, away: ev.away_team,
+              outcomes: shLegs.map((o, oi) => ({
+                minOdds: shMin[oi], fairDev: null, updatedKind: o.updatedKind, side: o.sideKey, label: o.displayLabel,
+                marketLabel: o.marketLabel, marketKey: o.marketKey, point: o.point, book: o.book, bookName: o.bookName,
+                odds: o.price, rankUsed: 1, agreeBooks: [], feedVerified: feedVerified(o.book, o.ownFeed, o.marketKey), dup: !!o.dup,
+                fixtureRef: o.fixtureRef, fixtureUrl: o.fixtureUrl || null, updatedAt: o.updatedMs || null,
+                srcLabel: o.srcEvent ? o.srcEvent.home + ' vs ' + o.srcEvent.away : null, srcStart: o.srcEvent ? o.srcEvent.start : null,
+                rejectReason: reasonOf(o),
+              })),
+            });
+          }
+        }
+      }
       // MARGIN-GATED RANK RULE. First price the slot with the plain highest credible price per side. If that
       // is not an arb, nothing below can be (rank legs are never higher), so skip. If the plain margin is
       // <= RANK_RULE_MIN_MARGIN the arb is left exactly as priced (small arbs are believable). Above that, a
@@ -1421,6 +1465,11 @@ function findArbs(events, mode = 'global', userRegion = null) {
       else console.log('[findArbs] consensus filter: no legs rejected in this scan');
       if (bad.length) console.warn('[findArbs] team-name resolution:', JSON.stringify(Object.fromEntries(bad.map(([k, c]) => [k, { unresolved: c.unresolved, rescuedByOwnNames: c.rescued, examples: c.unresolvedNames }]))));
     } catch {}
+  }
+  const rejectedAll = arbs.filter(a => a.rejected);
+  if (rejectedAll.length > 60) {
+    const keepRej = new Set(rejectedAll.sort((a, b) => b.margin - a.margin).slice(0, 60));
+    for (let i = arbs.length - 1; i >= 0; i--) if (arbs[i].rejected && !keepRej.has(arbs[i])) arbs.splice(i, 1);
   }
   return arbs.sort((a, b) => b.margin - a.margin);
 }
@@ -2031,6 +2080,8 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [minMargin, setMinMargin] = useState(0);
   const [showHighProfit, setShowHighProfit] = useState(false);
   const [showReview, setShowReview] = useState(false); // review-tier arbs stay hidden unless opened
+  const [rejectedArbs, setRejectedArbs] = useState([]);  // arbs the consensus filter blocked: owner-only list, never in results or counts
+  const [showRejected, setShowRejected] = useState(false);
   const [heldArbs, setHeldArbs] = useState([]);        // arbs held back by AUDITED_FEEDS: owner Audit view only, never shown to users
   const [showAudit, setShowAudit] = useState(false);
   // user's active reports = their personal denylist (table arb_reports, see arb_reports.sql)
@@ -2523,7 +2574,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     // anything ≥ HIGH_MARGIN_REVIEW); anything it confirms as gone is dropped
     // here, everything else is stamped with its liveVerify result so cards
     // can show "live-verified" / "margin adjusted" without another round trip.
-    const verifyMap = await verifyTopCandidates(found.concat(foundArbsWA).filter(a => !a.held));
+    const verifyMap = await verifyTopCandidates(found.concat(foundArbsWA).filter(a => !a.held && !a.rejected));
     const applyVerification = (list) => list
       .filter(a => !verifyMap[a.id] || verifyMap[a.id].status !== 'dropped')
       .map(a => verifyMap[a.id] ? { ...a, liveVerify: verifyMap[a.id] } : a);
@@ -2539,8 +2590,11 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     const heldMap = {};
     found.concat(foundArbsWA).filter(a => a.held).forEach(a => { heldMap[a.id + '|' + a.outcomes.map(o => o.book + ':' + o.odds).join(',')] = a; });
     const heldNow = Object.values(heldMap).sort((x, y) => y.margin - x.margin);
-    const foundVerified = stampAge(applyVerification(found.filter(a => !a.held)));
-    const foundArbsWAVerified = stampAge(applyVerification(foundArbsWA.filter(a => !a.held)));
+    const rejectedMap = {};
+    found.concat(foundArbsWA).filter(a => a.rejected).forEach(a => { rejectedMap[a.id + '|' + a.outcomes.map(o => o.book + ':' + o.odds).join(',')] = a; });
+    const rejectedNow = Object.values(rejectedMap).sort((x, y) => y.margin - x.margin);
+    const foundVerified = stampAge(applyVerification(found.filter(a => !a.held && !a.rejected)));
+    const foundArbsWAVerified = stampAge(applyVerification(foundArbsWA.filter(a => !a.held && !a.rejected)));
     const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
     const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
     if (foundVerified.length > 0) { setArbs(foundVerified); setIsDemo(false); }
@@ -2548,6 +2602,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     else { setArbs([]); setIsDemo(false); } // scan worked, genuinely no arbs
     setArbsWAReal(foundArbsWAVerified);
     setHeldArbs(okCount > 0 ? heldNow : []);
+    setRejectedArbs(okCount > 0 ? rejectedNow : []);
     // Only forget arbs that disappeared when the scan itself worked — a failed scan
     // must not reset every arb's age. An arb that vanishes and later returns starts over.
     if (okCount > 0) {
@@ -3278,6 +3333,24 @@ const analyzeArb = async (arb) => {
      ))
    )
  ),
+  plan.isOwner && e('div', { style: { fontSize: 11, color: '#7f1d1d', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
+    e('div', null, 'Rejected arbs (owner only): ' + rejectedArbs.length + ' arb' + (rejectedArbs.length === 1 ? '' : 's') + ' the consensus filter blocked because a price was too far above the other books or too few books quote it. Not in your results or counts. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowRejected(v => !v); } }, showRejected ? 'Hide' : 'Show')),
+    showRejected && e('div', { style: { marginTop: 6 } },
+      rejectedArbs.length === 0 && e('div', null, 'Nothing was rejected in the last scan.'),
+      rejectedArbs.map(a => e('div', { key: a.id + '|' + a.outcomes.map(o => o.book + ':' + o.odds).join(','), style: { background: '#fff', border: '1px solid #fecaca', borderRadius: 8, padding: '6px 8px', marginBottom: 6 } },
+        e('div', { style: { fontWeight: 700, color: C.text } }, a.match + '  would-be +' + a.margin + '%'),
+        e('div', { style: { color: C.muted, fontSize: 10, marginBottom: 3 } }, new Date(a.commenceTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' - ' + a.sport),
+        a.outcomes.map((o, oi) => e('div', { key: oi, style: { padding: '2px 0', borderTop: oi ? '1px solid #fee2e2' : 'none' } },
+          e('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8 } },
+            e('span', { style: { color: o.rejectReason ? '#b91c1c' : C.text } }, (o.bookName || o.book) + ' - ' + (o.marketLabel || o.marketKey) + (o.point != null ? ' ' + o.point : '') + ' - ' + o.label),
+            e('span', { style: { fontWeight: 700 } }, o.odds),
+            legManualLink(o, null) && e('a', { href: legManualLink(o, null), target: '_blank', rel: 'noopener noreferrer', style: { fontWeight: 700, color: '#1e3a8a' } }, 'site')
+          ),
+          o.rejectReason && e('div', { style: { color: '#b91c1c', fontSize: 10 } }, 'Rejected: ' + o.rejectReason)
+        ))
+      ))
+    )
+  ),
  (hiddenHighProfit > 0 || showHighProfit || hiddenByReports > 0) && e('div', { style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
    hiddenHighProfit > 0 && !showHighProfit && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden — that size is far more often a bad price than a real edge. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(true); } }, 'Show them')),
    showHighProfit && e('div', null, 'Showing arbs above +' + DEFAULT_MAX_PROFIT + '% — treat each as unverified until checked on the book. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(false); } }, 'Hide again')),
