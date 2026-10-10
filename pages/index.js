@@ -1999,7 +1999,7 @@ const [apiKey, setApiKey] = useState('server');
   // so a scan abandoned mid-way still looked fresh), these only move when real data was actually saved.
   const lastGoodScanRef = React.useRef(snap0 ? snap0.savedAt : 0);
   const lastGoodSigRef = React.useRef(snap0 ? (snap0.sports || '') : '');
-  const [arbs, setArbs] = useState(snap0 ? snap0.arbs : MOCK);
+  const [arbs, setArbs] = useState(snap0 ? snap0.arbs : []);
   const [arbsWAReal, setArbsWAReal] = useState(snap0 ? (snap0.arbsWA || []) : []); // properly computed WA-only arbs (not a post-filter of global picks)
   const [loading, setLoading] = useState(false);
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0, sport: '' });
@@ -2119,7 +2119,7 @@ useEffect(() => {
   const [manualMeta, setManualMeta] = useState(EMPTY_MANUAL);
   const [manualStake, setManualStake] = useState(500);
   const [manualResult, setManualResult] = useState(null);
-  const [evBets, setEvBets] = useState(snap0 ? (snap0.ev || []) : MOCK_EV);
+  const [evBets, setEvBets] = useState(snap0 ? (snap0.ev || []) : []);
   const [integrity, setIntegrity] = useState(snap0 ? (snap0.integrity || null) : null);
   const [evDiag, setEvDiag] = useState(null);
   const [evDiagWA, setEvDiagWA] = useState(null);
@@ -2506,7 +2506,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     const keepPrevious = sportsToScan.length > 0 && okCount === 0 && lastGoodScanRef.current > 0;
     if (sportsToScan.length > 0 && okCount === 0 && premiumBlocked === 0) {
       const failMsg = 'Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. ';
-      setError(prev => prev || (failMsg + (keepPrevious ? 'Showing your last successful scan from ' + new Date(lastGoodScanRef.current).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' instead.' : 'Showing demo data below.')));
+      setError(prev => prev || (failMsg + (keepPrevious ? 'Showing your last successful scan from ' + new Date(lastGoodScanRef.current).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' instead.' : 'The scan will retry automatically.')));
     }
     if (keepPrevious) {
       // The scan itself failed (quota, outage, offline). Keep showing the last real results instead of replacing them with demo data.
@@ -2544,7 +2544,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
     const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
     if (foundVerified.length > 0) { setArbs(foundVerified); setIsDemo(false); }
-    else if (okCount === 0) { setArbs(MOCK); setIsDemo(true); } // scan failed entirely — labelled demo
+    else if (okCount === 0) { setArbs([]); setIsDemo(true); } // scan failed entirely: no example cards, shown as scanning — labelled demo
     else { setArbs([]); setIsDemo(false); } // scan worked, genuinely no arbs
     setArbsWAReal(foundArbsWAVerified);
     setHeldArbs(okCount > 0 ? heldNow : []);
@@ -2556,7 +2556,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
       try { localStorage.setItem('arb_firstSeen', JSON.stringify(firstSeenRef.current)); } catch {}
     }
     if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
-    else if (okCount === 0) { setEvBets(MOCK_EV); setIsDemoEV(true); } // scan failed entirely
+    else if (okCount === 0) { setEvBets([]); setIsDemoEV(true); } // scan failed entirely: no example cards
     else { setEvBets([]); setIsDemoEV(false); } // scan worked, genuinely no +EV right now
     setEvWA(foundEVWA);
     setEvDiag(foundEV.diag || null);
@@ -2985,7 +2985,7 @@ const analyzeArb = async (arb) => {
       e('div', { style: st.headerRow },
         e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ ' + scanProgress.sport + '...' : '● ' + filteredArbs.length + ' arbs'),
         lastFetch && e('span', { style: st.badge('#1f2937', '#9ca3af') }, lastFetch.toLocaleTimeString()),
-        isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, '⚠ Demo')
+        isDemo && e('span', { style: st.badge('#052e16', '#6ee7b7') }, 'Scanning...')
       ),
     ),
            e('div', { style: { display: 'flex', justifyContent: 'flex-end', padding: '6px 4px' } },
@@ -3246,9 +3246,7 @@ const analyzeArb = async (arb) => {
       error && e('div', { style: { background: '#fef3c7', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 } }, error),
         quota.remaining !== null && e('div', { style: { background: parseInt(quota.remaining) < 50 ? '#fef3c7' : '#f0fdf4', color: parseInt(quota.remaining) < 50 ? '#92400e' : '#14532d', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10, display: 'flex', justifyContent: 'space-between' } }, e('span', null, 'Key ' + (quota.keyIndex || 1) + ' | Used: ' + quota.used), e('span', { style: { fontWeight: 700 } }, quota.remaining + ' remaining')),
       isDemo && !error && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
-        apiKey
-          ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 5 min.'
-          : '📌 Demo mode — tap Connect Live to scan real odds across the ' + 20 + ' top leagues. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'
+        'Scanning for arbs... results appear here as soon as the scan finishes. The scan repeats automatically every 5 minutes.'
       ),
       integrity && (integrity.total > 0 || Object.keys(integrity.quarantined || {}).length > 0) && e('div', { style: { fontSize: 11, color: '#1e3a8a', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
         integrity.total > 0 && e('div', null, '🛡 ' + integrity.total + ' quote' + (integrity.total === 1 ? '' : 's') + ' excluded by data-integrity checks (impossible margins or out-of-order lines) — they never enter an arb. ' + Object.entries(integrity.byBook).map(([b, n]) => b + ': ' + n).join(', ')),
@@ -3340,8 +3338,7 @@ const analyzeArb = async (arb) => {
           sel && sel.id === arb.id && e('div', { style: { marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' } },
             e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →'),
             e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); setReportOpenId(reportOpenId === arb.id ? null : arb.id); setReportStatus('idle'); } }, '🚩 Report'),
-            e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis'),
-            arb.home && e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); recheckArb(arb); } }, recheckingId === arb.id ? 'Checking...' : '🔄 Re-check (uses API quota)')
+            e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis')
           ),
           recheck[arb.id] && e('div', { style: { marginTop: 10, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', fontSize: 12, lineHeight: 1.6 } },
             recheck[arb.id].error
@@ -3548,7 +3545,7 @@ const analyzeArb = async (arb) => {
           ['+EV found', (evSection === 'wa' ? evWA : evBets).filter(b => evFilter === 'all' || b.sport === evFilter).length, null],
           ['Best EV', (evSection === 'wa' ? evWA : evBets)[0] ? '+' + (evSection === 'wa' ? evWA : evBets)[0].ev_pct.toFixed(1) + '%' : '—', C.blue],
           ['Avg EV', (evSection === 'wa' ? evWA : evBets).length > 0 ? '+' + ((evSection === 'wa' ? evWA : evBets).reduce((s,b) => s + b.ev_pct, 0) / (evSection === 'wa' ? evWA : evBets).length).toFixed(1) + '%' : '—', C.blue],
-          ['Mode', isDemoEV ? 'Demo' : 'Live', isDemoEV ? C.amber : C.green],
+          ['Mode', isDemoEV ? 'Scanning' : 'Live', isDemoEV ? C.amber : C.green],
         ].map(([l, v, c]) => e('div', { key: l, style: st.metric }, e('div', { style: st.metricLabel }, l), e('div', { style: st.metricVal(c) }, v)))
       ),
       e('div', { style: { display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' } },
@@ -3582,11 +3579,11 @@ const analyzeArb = async (arb) => {
         if (activeBets.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
           e('div', { style: { fontSize: 28, marginBottom: 10 } }, isDemoEV ? '📡' : drawOnly ? '🎯' : reboundOnly ? '🔄' : '✅'),
           e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } },
-            isDemoEV ? 'Scan failed — showing demo data' : drawOnly ? 'No +EV draws right now' : reboundOnly ? 'No rebound-signal bets right now' : 'No +EV opportunities right now'
+            isDemoEV ? 'Scanning...' : drawOnly ? 'No +EV draws right now' : reboundOnly ? 'No rebound-signal bets right now' : 'No +EV opportunities right now'
           ),
           e('div', { style: { fontSize: 12, lineHeight: 1.6 } },
             isDemoEV
-              ? 'The odds API could not be reached. Check your API key or connection.'
+              ? 'Results appear here as soon as the scan finishes.'
               : (() => {
                   const d = evSection === 'wa' ? evDiagWA : evDiag;
                   if (!d) return 'Scan finished but no diagnostics were recorded.';
