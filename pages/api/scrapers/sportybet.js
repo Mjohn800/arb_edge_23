@@ -22,17 +22,20 @@ const SPORTYBET_SPORT_MAP = {
   soccer_germany_bundesliga:    { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:35'   },
   soccer_italy_serie_a:         { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:23'   },
   soccer_france_ligue_one:      { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:34'   },
+  // UNRESOLVED (10 Oct 2026): /api/sportybet-leagues returned NO events for this ID although the 2026/27 season began 4-7 Sep.
+  // Find the real ID (SportyBet > Football > Ghana > Premier League: the tournamentId in the pcEvents payload) and test it with ?id=.
   soccer_ghana_premiership:     { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:1436' },
-  soccer_africa_cup_of_nations: { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:5765' },
-  soccer_fifa_world_cup:        { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:16'   }, // ✓ confirmed
-  // -- Added for ArbEdge's 20 scanned leagues (same Sportradar IDs the Betfox scraper uses) --
-  // IDs below the 'verified' note were cross-checked between SportyBet and Betfox.
+  soccer_africa_cup_of_nations: { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:5765' }, // 10 Oct 2026: no fixtures returned; recheck when matches are scheduled
+  soccer_fifa_world_cup:        { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:16'   }, // ✓ confirmed; 10 Oct 2026: no fixtures (tournament over)
+  // -- Added for ArbEdge's scanned leagues. Every ID below was verified on 10 Oct 2026 with /api/sportybet-leagues:
+  // SportyBet returned the expected league name for each (they also match the IDs the removed Betfox scraper used). --
   soccer_netherlands_eredivisie:    { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:37' },
   soccer_portugal_primeira_liga:    { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:238' },
   soccer_norway_eliteserien:        { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:20' },
   soccer_sweden_allsvenskan:        { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:40' },
   soccer_spl:                       { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:36' },
-  // UNVERIFIED: check each in SportyBet's network tab. A wrong ID just returns no matches.
+  // Verified 10 Oct 2026 (/api/sportybet-leagues): Belgium / Pro League, England / Championship, Brazil / Brasileiro Serie A,
+  // USA / MLS, International Clubs / CONMEBOL Libertadores.
   soccer_belgium_first_div:         { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:38' },
   soccer_efl_champ:                 { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:18' },
   soccer_brazil_campeonato:         { type: 'tournament', sportId: 'sr:sport:1',   tournamentId: 'sr:tournament:325' },
