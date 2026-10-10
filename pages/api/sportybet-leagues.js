@@ -15,43 +15,29 @@
 //         ??  = it returned matches but the league name is not what we expected (or has no name): look
 //         --  = no matches (wrong ID, or the league is between seasons / has no upcoming fixtures)
 //
-// NOTE: the ID list below is a copy of SPORTYBET_SPORT_MAP in scrapers/sportybet.js. If you change an
-// ID there, change it here too (or test it with ?id=).
+// The league list is read straight from SPORTYBET_SPORT_MAP in scrapers/sportybet.js, so a changed ID there is
+// checked here automatically (needs the scraper to export SPORTYBET_SPORT_MAP, SPORTYBET_BASE and
+// SPORTYBET_HEADERS, which your current version does). Request body = the scraper's own (markets 1,16,18,29).
+
+import { SPORTYBET_SPORT_MAP, SPORTYBET_BASE as BASE, SPORTYBET_HEADERS as HEADERS } from './scrapers/sportybet';
 
 export const config = { maxDuration: 60 };
 
-const BASE = 'https://www.sportybet.com/api/gh/factsCenter';
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-  'Accept': 'application/json, text/plain, */*',
-  'Accept-Language': 'en-GB,en;q=0.9',
-  'Origin': 'https://www.sportybet.com',
-  'Referer': 'https://www.sportybet.com/gh/m/sport/football',
+// What the league name SportyBet returns must contain (any one of these words, lower-case) for each key.
+// A key that is in the scraper's map but not listed here is still checked, but can only get "??" (look by eye).
+const EXPECT = {
+  soccer_epl: ['premier league'], soccer_uefa_champs_league: ['champions league'], soccer_uefa_europa_league: ['europa league'],
+  soccer_spain_la_liga: ['laliga', 'la liga'], soccer_germany_bundesliga: ['bundesliga'], soccer_italy_serie_a: ['serie a'],
+  soccer_france_ligue_one: ['ligue 1'], soccer_ghana_premiership: ['ghana'], soccer_africa_cup_of_nations: ['africa cup', 'afcon'],
+  soccer_fifa_world_cup: ['world cup'], soccer_netherlands_eredivisie: ['eredivisie'], soccer_portugal_primeira_liga: ['primeira', 'liga portugal'],
+  soccer_norway_eliteserien: ['eliteserien'], soccer_sweden_allsvenskan: ['allsvenskan'], soccer_spl: ['scotland', 'premiership'],
+  soccer_belgium_first_div: ['belgi', 'pro league', 'jupiler'], soccer_efl_champ: ['championship'],
+  soccer_brazil_campeonato: ['brasil', 'brazil'], soccer_usa_mls: ['mls', 'major league'], soccer_conmebol_copa_libertadores: ['libertadores'],
 };
-
-// key -> [tournamentId, words that must appear in the league/country name SportyBet returns (any one)]
-const LEAGUES = {
-  soccer_epl:                       ['sr:tournament:17',   ['premier league']],
-  soccer_uefa_champs_league:        ['sr:tournament:7',    ['champions league']],
-  soccer_uefa_europa_league:        ['sr:tournament:679',  ['europa league']],
-  soccer_spain_la_liga:             ['sr:tournament:8',    ['laliga', 'la liga']],
-  soccer_germany_bundesliga:        ['sr:tournament:35',   ['bundesliga']],
-  soccer_italy_serie_a:             ['sr:tournament:23',   ['serie a']],
-  soccer_france_ligue_one:          ['sr:tournament:34',   ['ligue 1']],
-  soccer_ghana_premiership:         ['sr:tournament:1436', ['ghana']],
-  soccer_africa_cup_of_nations:     ['sr:tournament:5765', ['africa cup', 'afcon']],
-  soccer_fifa_world_cup:            ['sr:tournament:16',   ['world cup']],
-  soccer_netherlands_eredivisie:    ['sr:tournament:37',   ['eredivisie']],
-  soccer_portugal_primeira_liga:    ['sr:tournament:238',  ['primeira', 'liga portugal']],
-  soccer_norway_eliteserien:        ['sr:tournament:20',   ['eliteserien']],
-  soccer_sweden_allsvenskan:        ['sr:tournament:40',   ['allsvenskan']],
-  soccer_spl:                       ['sr:tournament:36',   ['scotland', 'premiership']],
-  soccer_belgium_first_div:         ['sr:tournament:38',   ['belgi', 'pro league', 'jupiler']],
-  soccer_efl_champ:                 ['sr:tournament:18',   ['championship']],
-  soccer_brazil_campeonato:         ['sr:tournament:325',  ['brasil', 'brazil']],
-  soccer_usa_mls:                   ['sr:tournament:242',  ['mls', 'major league']],
-  soccer_conmebol_copa_libertadores:['sr:tournament:384',  ['libertadores']],
-};
+// The scraper's tournament-type soccer leagues, live from its own map.
+const soccerLeagues = () => Object.entries(SPORTYBET_SPORT_MAP || {})
+  .filter(([k, m]) => k.startsWith('soccer_') && m && m.type === 'tournament' && m.tournamentId)
+  .map(([k, m]) => [k, m.tournamentId, EXPECT[k] || []]);
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -87,7 +73,7 @@ async function checkOne(key, id, words) {
     res = await fetch(`${BASE}/pcEvents`, {
       method: 'POST',
       headers: { ...HEADERS, 'Content-Type': 'application/json' },
-      body: JSON.stringify([{ sportId: 'sr:sport:1', marketId: '1,18,10,29,11,26,36,14', tournamentId: [[id]] }]),
+      body: JSON.stringify([{ sportId: 'sr:sport:1', marketId: '1,16,18,29', tournamentId: [[id]] }]),
       signal: AbortSignal.timeout(9000),
     });
   } catch (err) {
@@ -112,8 +98,8 @@ async function checkOne(key, id, words) {
   const lines = [`${mark} ${key} (${id}) | SportyBet calls it: ${labelText || '(no league name in response)'} | events ${events.length}, upcoming ${upcoming.length}`];
   for (const ev of upcoming.slice(0, 3)) {
     const ms = startMs(ev);
-    const mk = (ev.markets || []).map(m => m.id || m.marketId).filter(Boolean).join(',');
-    lines.push(`     ${ev.homeTeamName || '?'} vs ${ev.awayTeamName || '?'} | ${ms ? new Date(ms).toISOString().slice(0, 16) + 'Z' : 'no time'} | markets ${mk || 'none inline'}`);
+    const ids = new Set((ev.markets || []).map(m => String(m.id || m.marketId)).filter(Boolean));
+    lines.push(`     ${ev.homeTeamName || '?'} vs ${ev.awayTeamName || '?'} | ${ms ? new Date(ms).toISOString().slice(0, 16) + 'Z' : 'no time'} | 1X2 ${ids.has('1') ? 'y' : 'n'} | totals ${ids.has('18') ? 'y' : 'n'} | AH ${ids.has('16') ? 'y' : 'n'}${ids.size ? '' : ' (no markets inline)'}`);
   }
   if (mark === '??' && !labelText) lines.push('     first event keys: ' + Object.keys(events[0] || {}).slice(0, 14).join(','));
   return { key, id, mark, text: lines.join('\n') };
@@ -132,10 +118,11 @@ export default async function handler(req, res) {
       jobs = [['custom', id, []]];
     } else if (req.query.sport) {
       const k = String(req.query.sport);
-      if (!LEAGUES[k]) return res.status(400).json({ error: 'unknown_sport', available: Object.keys(LEAGUES) });
-      jobs = [[k, LEAGUES[k][0], LEAGUES[k][1]]];
+      const hit = soccerLeagues().find(j => j[0] === k);
+      if (!hit) return res.status(400).json({ error: 'unknown_sport', available: soccerLeagues().map(j => j[0]) });
+      jobs = [hit];
     } else {
-      jobs = Object.entries(LEAGUES).map(([k, [id, w]]) => [k, id, w]);
+      jobs = soccerLeagues();
     }
 
     const results = [];
