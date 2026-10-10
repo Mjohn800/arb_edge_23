@@ -18,6 +18,7 @@
 //   Machine-readable output:
 //     add &format=json
 //
+// 1xbet: /api/oddspapi-debug?token=TOKEN&book=1xbet&team=arsenal&type=totals&lines=2.5 (prints the link host of the feed's fixtures)
 // Params: token, sport (default soccer_epl), team (name fragment, default arsenal),
 //         type (spreads | totals | 1x2, default spreads), lines (comma list), book (22bet |
 //         betano | melbet | all, default all = 22bet + betano), halves=1 (also show first/second-
@@ -29,7 +30,13 @@ import { debugFixtureMarkets } from '../../lib/oddspapi';
 export const config = { maxDuration: 60 };
 
 const BOOKS_ALL = ['22bet', 'betano'];
-const ALLOWED_BOOKS = new Set(['22bet', 'betano', 'melbet']);
+const ALLOWED_BOOKS = new Set(['22bet', 'betano', 'melbet', '1xbet']); // 1xbet added 10 Oct 2026 to see which regional site its OddsPapi feed links to
+
+// Hostname of a bookmaker fixture link (e.g. '1xbet.com' vs '1xbet.com.gh'), so the feed's regional site is visible.
+const hostOf = u => {
+  if (!u) return null;
+  try { return new URL(String(u)).hostname; } catch { const m = String(u).match(/^(?:https?:\/\/)?([^\/\s]+)/); return m ? m[1] : null; }
+};
 const FLAG_PCT = 12; // flag a >12% gap between two books on the same line
 
 const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
@@ -144,6 +151,10 @@ async function run(req, res) {
     if (!r) continue;
     if (r.error) { out.push(`[${book}] ${r.error}${r.available ? ' | available: ' + r.available.slice(0, 8).join('; ') : ''}`); continue; }
     out.push(`[${book}] ${r.match || '?'} | fixtures for this pair in feed: ${r.fixturesForThisPairInFeed != null ? r.fixturesForThisPairInFeed : '?'}${r.startTime ? ' | start ' + r.startTime : ''}`);
+    // Which regional site does this bookmaker's feed link to? (host of each fixturePath for this pair)
+    const links = (r.sameTeamFixtures || []).map(f => f.fixturePath).filter(Boolean);
+    const hosts = [...new Set(links.map(hostOf).filter(Boolean))];
+    out.push(`[${book}] link host: ${hosts.length ? hosts.join(', ') : '(no fixturePath in feed)'}${links[0] ? ' | e.g. ' + links[0] : ''}`);
   }
   out.push('');
 
