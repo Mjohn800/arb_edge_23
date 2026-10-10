@@ -2080,7 +2080,7 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [minMargin, setMinMargin] = useState(0);
   const [showHighProfit, setShowHighProfit] = useState(false);
   const [showReview, setShowReview] = useState(false); // review-tier arbs stay hidden unless opened
-  const [rejectedArbs, setRejectedArbs] = useState([]);  // arbs the consensus filter blocked: owner-only list, never in results or counts
+  const [rejectedArbs, setRejectedArbs] = useState([]);  // arbs the consensus filter blocked: shown only behind the 'Rejected arbs' link, never in results or counts
   const [showRejected, setShowRejected] = useState(false);
   const [heldArbs, setHeldArbs] = useState([]);        // arbs held back by AUDITED_FEEDS: owner Audit view only, never shown to users
   const [showAudit, setShowAudit] = useState(false);
@@ -3333,8 +3333,8 @@ const analyzeArb = async (arb) => {
      ))
    )
  ),
-  plan.isOwner && e('div', { style: { fontSize: 11, color: '#7f1d1d', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
-    e('div', null, 'Rejected arbs (owner only): ' + rejectedArbs.length + ' arb' + (rejectedArbs.length === 1 ? '' : 's') + ' the consensus filter blocked because a price was too far above the other books or too few books quote it. Not in your results or counts. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowRejected(v => !v); } }, showRejected ? 'Hide' : 'Show')),
+  e('div', { style: { fontSize: 11, color: '#7f1d1d', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
+    e('div', null, 'Rejected arbs: ' + rejectedArbs.length + ' arb' + (rejectedArbs.length === 1 ? '' : 's') + ' the consensus filter blocked because a price was too far above the other books or too few books quote it. Not in your results or counts; do not bet these unless you have confirmed every price on the book. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowRejected(v => !v); } }, showRejected ? 'Hide' : 'Show')),
     showRejected && e('div', { style: { marginTop: 6 } },
       rejectedArbs.length === 0 && e('div', null, 'Nothing was rejected in the last scan.'),
       rejectedArbs.map(a => e('div', { key: a.id + '|' + a.outcomes.map(o => o.book + ':' + o.odds).join(','), style: { background: '#fff', border: '1px solid #fecaca', borderRadius: 8, padding: '6px 8px', marginBottom: 6 } },
