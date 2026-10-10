@@ -10,6 +10,8 @@
 //   One league:                      /api/sportybet-leagues?token=TOKEN&sport=soccer_belgium_first_div
 //   One match as the scraper READS it (prices to compare with SportyBet's page):
 //                                    /api/sportybet-leagues?token=TOKEN&sport=soccer_epl&team=arsenal
+//   Test EVERY fixture in every league for impossible numbers (needs no eyeballing):
+//                                    /api/sportybet-leagues?token=TOKEN&sweep=1      (add &sport=KEY for one league)
 //   Try ANY tournament ID (to find a correct one):
 //                                    /api/sportybet-leagues?token=TOKEN&id=sr:tournament:38
 //
@@ -145,12 +147,89 @@ async function showMatch(sport, team) {
   return out.join('\n');
 }
 
+
+// ── Sweep: structural sanity checks on what the scraper reads, for every fixture ───────────────────────────
+// These cannot prove a price equals SportyBet's page, but they catch the mistakes a parser makes: swapped
+// sides, a line read under the wrong number, a market that is not what we think it is.
+//   1X2 margin 0-15%  |  totals: Over price rises (Under falls) as the line goes up, margin 0-20% per line
+//   Asian handicap: every line has both sides, home price falls (away price rises) as the line goes up,
+//   margin 0-20% per line  |  AH -0.5 (home) and away -0.5 must be within 25% of the 1X2 home / away price.
+function checkEvent(ev) {
+  const bm = (ev.bookmakers || [])[0] || {};
+  const mk = key => ((bm.markets || []).find(m => m.key === key) || { outcomes: [] }).outcomes;
+  const issues = [];
+  const pct = m => ((m - 1) * 100).toFixed(1) + '%';
+
+  let ph = null, pd = null, pa = null;
+  for (const o of mk('h2h')) {
+    if (o.name === ev.home_team) ph = o.price; else if (o.name === ev.away_team) pa = o.price; else if (/draw/i.test(o.name)) pd = o.price;
+  }
+  const has1x2 = !!(ph && pd && pa);
+  if (has1x2) { const m = 1 / ph + 1 / pd + 1 / pa; if (m < 1 || m > 1.15) issues.push(`1X2 margin ${pct(m)}`); }
+  else issues.push('1X2 not fully read');
+
+  const tot = new Map();
+  for (const o of mk('totals')) { const l = tot.get(o.point) || {}; l[String(o.name).toLowerCase()] = o.price; tot.set(o.point, l); }
+  const tLines = [...tot.entries()].sort((a, b) => a[0] - b[0]);
+  let prevO = 0, prevU = Infinity;
+  for (const [line, v] of tLines) {
+    if (v.over && v.under) { const m = 1 / v.over + 1 / v.under; if (m < 1 || m > 1.2) issues.push(`totals ${line} margin ${pct(m)}`); }
+    if (v.over) { if (v.over < prevO - 1e-9) issues.push(`totals Over falls at ${line}`); prevO = v.over; }
+    if (v.under) { if (v.under > prevU + 1e-9) issues.push(`totals Under rises at ${line}`); prevU = v.under; }
+  }
+
+  const sp = mk('spreads');
+  const homes = sp.filter(o => o.name === ev.home_team).sort((a, b) => a.point - b.point);
+  let prevH = Infinity, prevA = 0;
+  for (const h of homes) {
+    const a = sp.find(o => o.name === ev.away_team && near(o.point, -h.point));
+    if (!a) { issues.push(`AH ${h.point} has no away side`); continue; }
+    const m = 1 / h.price + 1 / a.price;
+    if (m < 1 || m > 1.2) issues.push(`AH ${h.point} margin ${pct(m)}`);
+    if (h.price > prevH + 1e-9) issues.push(`AH home price rises at ${h.point}`);
+    if (a.price < prevA - 1e-9) issues.push(`AH away price falls at ${h.point}`);
+    prevH = h.price; prevA = a.price;
+  }
+  const h05 = homes.find(h => near(h.point, -0.5));
+  if (h05 && ph && Math.abs(h05.price / ph - 1) > 0.25) issues.push(`AH -0.5 home ${h05.price} vs 1X2 home ${ph}`);
+  const a05 = sp.find(o => o.name === ev.away_team && near(o.point, -0.5));
+  if (a05 && pa && Math.abs(a05.price / pa - 1) > 0.25) issues.push(`AH away -0.5 ${a05.price} vs 1X2 away ${pa}`);
+
+  return { issues, has1x2, hasTotals: tLines.length > 0, hasAH: homes.length > 0 };
+}
+
+async function sweepLeague(sport) {
+  const { events } = await fetchSportybetOdds(sport);
+  if (!events || !events.length) return { sport, mark: '--', text: `-- ${sport} | no fixtures returned` };
+  let flagged = 0, ah = 0, tot = 0;
+  const examples = [];
+  for (const ev of events) {
+    const r = checkEvent(ev);
+    if (r.hasAH) ah++;
+    if (r.hasTotals) tot++;
+    if (r.issues.length) { flagged++; if (examples.length < 3) examples.push(`     ${ev.home_team} vs ${ev.away_team}: ${r.issues.slice(0, 3).join('; ')}`); }
+  }
+  const mark = flagged === 0 ? 'OK' : '!!';
+  return { sport, mark, text: [`${mark} ${sport} | ${events.length} fixtures | ${events.length - flagged} clean | ${flagged} flagged | totals ${tot}/${events.length} | AH ${ah}/${events.length}`, ...examples].join('\n') };
+}
+
 export default async function handler(req, res) {
   const token = process.env.ADMIN_DEBUG_TOKEN;
   if (!token || req.query.token !== token) return res.status(404).json({ error: 'not_found' });
   res.setHeader('Cache-Control', 'no-store');
   try {
     const out = [];
+    if (req.query.sweep) {
+      const only = req.query.sport ? String(req.query.sport) : null;
+      const list = soccerLeagues().filter(j => !only || j[0] === only);
+      if (!list.length) return res.status(400).json({ error: 'unknown_sport', available: soccerLeagues().map(j => j[0]) });
+      const res2 = [];
+      for (const [k] of list) { res2.push(await sweepLeague(k)); if (list.length > 1) await sleep(200); }
+      const n = m => res2.filter(r => r.mark === m).length;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.status(200).send([`SportyBet sweep | ${res2.length} leagues | all clean ${n('OK')} | flagged ${n('!!')} | no fixtures ${n('--')}`,
+        'Checks structure only (margins, ladders, AH vs 1X2). It cannot prove a price equals the site.', '', ...res2.map(r => r.text)].join('\n'));
+    }
     if (req.query.team && req.query.sport) {
       const k = String(req.query.sport);
       if (!soccerLeagues().some(j => j[0] === k)) return res.status(400).json({ error: 'unknown_sport', available: soccerLeagues().map(j => j[0]) });
