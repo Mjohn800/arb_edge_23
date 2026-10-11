@@ -2236,6 +2236,51 @@ useEffect(() => {
     try { localStorage.setItem('arb_region', val); } catch {}
     try { fetchOddsRef.current(apiKey || 'server'); } catch {}
   };
+  // ── ACCOUNT SETTINGS SYNC ───────────────────────────────────────────────────────
+  // Sports, bankroll, region, min EV and min margin used to live only in this browser's localStorage, so an incognito
+  // window or a new device started from the defaults (all leagues selected and scanned). They are now also kept on the
+  // account (table user_settings, see user_settings.sql). The server copy wins on load; the first scan waits for it
+  // (max 4 s) so a fresh device does not burn a full default scan before the saved choices arrive.
+  const settingsUid = session && session.user ? session.user.id : null;
+  const [settingsReady, setSettingsReady] = useState(!settingsUid);
+  const settingsLoadedOkRef = React.useRef(false); // only true after a successful read: a failed read must never overwrite the saved copy
+  useEffect(() => {
+    if (!settingsUid) { setSettingsReady(true); return; }
+    let cancelled = false;
+    const timer = setTimeout(() => { if (!cancelled) setSettingsReady(true); }, 4000);
+    (async () => {
+      try {
+        const { data, error } = await supabase.from('user_settings').select('settings').eq('user_id', settingsUid).maybeSingle();
+        if (cancelled) return;
+        if (!error) {
+          const st = data && data.settings;
+          if (st && typeof st === 'object') {
+            if (Array.isArray(st.sports) && st.sports.length) setSelectedSports(st.sports);
+            if (typeof st.bankroll === 'number' && st.bankroll > 0) setBankroll(st.bankroll);
+            if (typeof st.region === 'string' && st.region && st.region !== 'us') { setMyRegion(st.region); myRegionRef.current = st.region; try { localStorage.setItem('arb_region', st.region); } catch {} }
+            if (typeof st.minEV === 'number') setMinEV(st.minEV);
+            if (typeof st.minMargin === 'number') setMinMargin(st.minMargin);
+          }
+          settingsLoadedOkRef.current = true;
+        }
+      } catch {}
+      if (!cancelled) { clearTimeout(timer); setSettingsReady(true); }
+    })();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [settingsUid]);
+  useEffect(() => {
+    if (!settingsUid || !settingsReady || !settingsLoadedOkRef.current) return;
+    const t = setTimeout(async () => {
+      try {
+        await supabase.from('user_settings').upsert({
+          user_id: settingsUid,
+          settings: { v: 1, sports: selectedSports, bankroll, region: myRegion, minEV, minMargin },
+          updated_at: new Date().toISOString(),
+        });
+      } catch {}
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [settingsUid, settingsReady, selectedSports, bankroll, myRegion, minEV, minMargin]);
   const _regionName = (k) => { const o = REGION_OPTIONS.find(x => x.key === k); return o ? o.label : ''; };
   const isWAUserNow = userRegion.isWA !== false;
   const myLabel = isWAUserNow ? '\uD83C\uDDEC\uD83C\uDDED West Africa' : '\u2705 My region';
@@ -2669,6 +2714,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
   const lastFetchRef = React.useRef(lastFetch);
   lastFetchRef.current = lastFetch;
   useEffect(() => {
+  if (!settingsReady) return; // wait for the saved sports/region so a fresh device does not scan the defaults first
   const scanNow = () => fetchOddsRef.current(apiKey || 'server');
   const ATTEMPT_GAP_MS = 2 * 60 * 1000; // never start two scans closer together than this (guards refresh-spamming and failed scans)
   const lastTry = () => (lastFetchRef.current ? new Date(lastFetchRef.current).getTime() : 0);
@@ -2699,7 +2745,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     document.removeEventListener('visibilitychange', onVisible);
     window.removeEventListener('pageshow', onVisible);
   };
-}, [apiKey]); // fetchOdds intentionally omitted — read via fetchOddsRef so edits to
+}, [apiKey, settingsReady]); // fetchOdds intentionally omitted — read via fetchOddsRef so edits to
               // selectedSports/minEV don't tear down and restart this interval
 
   // ── TEAM FORM ────────────────────────────────────────────────────────────────
