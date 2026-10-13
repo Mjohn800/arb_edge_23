@@ -506,14 +506,6 @@ function getFormContextForOutcome(sportKey, teamName, teamForm) {
   return getFormDivergence(sportKey, teamName, teamForm);
 }
 
-const MOCK = [
-  { id: 'm1', sport: 'soccer_epl', match: 'Arsenal vs Chelsea', commenceTime: new Date(Date.now() + 3 * 3600000).toISOString(), margin: 3.7, outcomes: [{ label: 'Arsenal', book: 'betway', bookName: 'Betway', odds: 2.50 }, { label: 'Draw', book: '1xbet', bookName: '1xBet', odds: 4.10 }, { label: 'Chelsea', book: 'bet365', bookName: 'Bet365', odds: 3.40 }] },
-  { id: 'm2', sport: 'soccer_uefa_champs_league', match: 'Real Madrid vs Man City', commenceTime: new Date(Date.now() + 26 * 3600000).toISOString(), margin: 2.1, outcomes: [{ label: 'Real Madrid', book: 'pinnacle', bookName: 'Pinnacle', odds: 2.20 }, { label: 'Draw', book: 'marathonbet', bookName: 'MarathonBet', odds: 3.80 }, { label: 'Man City', book: '1xbet', bookName: '1xBet', odds: 3.40 }] },
-  { id: 'm3', sport: 'basketball_nba', match: 'Lakers vs Celtics', commenceTime: new Date(Date.now() + 5 * 3600000).toISOString(), margin: 1.8, outcomes: [{ label: 'Lakers', book: 'betway', bookName: 'Betway', odds: 2.10 }, { label: 'Celtics', book: '1xbet', bookName: '1xBet', odds: 1.98 }] },
-  { id: 'm4', sport: 'mma_mixed_martial_arts', match: 'Pereira vs Ankalaev', commenceTime: new Date(Date.now() + 48 * 3600000).toISOString(), margin: 2.4, outcomes: [{ label: 'Pereira', book: 'bet365', bookName: 'Bet365', odds: 1.72 }, { label: 'Ankalaev', book: 'pinnacle', bookName: 'Pinnacle', odds: 2.30 }] },
-  { id: 'm5', sport: 'cricket_ipl', match: 'Mumbai Indians vs CSK', commenceTime: new Date(Date.now() + 12 * 3600000).toISOString(), margin: 1.5, outcomes: [{ label: 'Mumbai Indians', book: '1xbet', bookName: '1xBet', odds: 2.05 }, { label: 'CSK', book: 'betway', bookName: 'Betway', odds: 1.90 }] },
-];
-
 // ── DATA-INTEGRITY FILTER ──────────────────────────────────────────────────
 // Runs once per scan on EVERY event, league and sport, before any finder (arbs,
 // EV, middles, best odds) sees the data. It does not need to know which league
@@ -878,7 +870,7 @@ function minOddsFor(outs) {
 // bad price than a gift. So arbs above DEFAULT_MAX_PROFIT are hidden by default
 // (one tap shows them) — hidden, not deleted, so a genuine one is never lost.
 const DEFAULT_MAX_PROFIT = 10; // %
-const FREE_MAX_PROFIT = 0.2; // % - free plan only sees arbs up to this size; bigger ones are Premium
+const FREE_MAX_PROFIT = 0.6; // % - free plan only sees arbs up to this size; bigger ones are Premium
 // Arb age = how long the same arb (same legs, same prices) has been seen in
 // consecutive scans on THIS device. Real edges are usually closed within minutes;
 // a big one that just sits there is more likely stale data. Heuristic only — it
@@ -1875,13 +1867,6 @@ function kellyCriterion(odds, trueProb, fraction = 0.25) {
   return Math.max(0, parseFloat((kelly * fraction * 100).toFixed(2)));
 }
 
-const MOCK_EV = [
-  { id: 'ev1', sport: 'soccer_epl', match: 'Arsenal vs Chelsea', commenceTime: new Date(Date.now() + 3 * 3600000).toISOString(), outcome: 'Arsenal', book: 'betway', bookName: 'Betway', odds: 2.55, trueProb: 41.2, fairOdds: 2.43, ev_pct: 5.1 },
-  { id: 'ev2', sport: 'basketball_nba', match: 'Lakers vs Celtics', commenceTime: new Date(Date.now() + 5 * 3600000).toISOString(), outcome: 'Celtics', book: '1xbet', bookName: '1xBet', odds: 1.95, trueProb: 52.8, fairOdds: 1.89, ev_pct: 3.0 },
-  { id: 'ev3', sport: 'soccer_uefa_champs_league', match: 'Real Madrid vs Man City', commenceTime: new Date(Date.now() + 26 * 3600000).toISOString(), outcome: 'Draw', book: 'bet365', bookName: 'Bet365', odds: 3.90, trueProb: 26.1, fairOdds: 3.83, ev_pct: 1.8 },
-  { id: 'ev4', sport: 'mma_mixed_martial_arts', match: 'Pereira vs Ankalaev', commenceTime: new Date(Date.now() + 48 * 3600000).toISOString(), outcome: 'Ankalaev', book: 'marathonbet', bookName: 'MarathonBet', odds: 2.45, trueProb: 42.0, fairOdds: 2.38, ev_pct: 2.9 },
-];
-
 function calcStakes(outcomes, total) {
   const imp = outcomes.map(o => 1 / o.odds);
   const sum = imp.reduce((a, b) => a + b, 0);
@@ -1942,7 +1927,7 @@ const EMPTY_MANUAL = { match: '', sport: 'soccer_epl', commenceTime: new Date(Da
 
 // ── LAST-SCAN SNAPSHOT ─────────────────────────────────────────────────────────────────────────────
 // The finished scan is saved on this device (per user), so reopening the site shows the last real results straight
-// away instead of the demo data, and no rescan is made until the 5-minute window is over. The scan itself still
+// away instead of an empty screen, and no rescan is made until the 5-minute window is over. The scan itself still
 // refreshes everything; this only fills the screen (and saves quota) while the data is still current.
 const SNAP_VERSION = 1;
 const SNAP_MAX_AGE_MS = 2 * 60 * 60 * 1000;   // older than this is not shown at all (the 12-min arb expiry hides old arbs anyway)
@@ -1979,7 +1964,7 @@ const [apiKey, setApiKey] = useState('server');
   // so a scan abandoned mid-way still looked fresh), these only move when real data was actually saved.
   const lastGoodScanRef = React.useRef(snap0 ? snap0.savedAt : 0);
   const lastGoodSigRef = React.useRef(snap0 ? (snap0.sports || '') : '');
-  const [arbs, setArbs] = useState(snap0 ? snap0.arbs : MOCK);
+  const [arbs, setArbs] = useState(snap0 ? snap0.arbs : []);
   const [arbsWAReal, setArbsWAReal] = useState(snap0 ? (snap0.arbsWA || []) : []); // properly computed WA-only arbs (not a post-filter of global picks)
   const [loading, setLoading] = useState(false);
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0, sport: '' });
@@ -1990,8 +1975,6 @@ const [apiKey, setApiKey] = useState('server');
   } catch { return null; }
 });
   const [error, setError] = useState('');
-  const [isDemo, setIsDemo] = useState(!snap0);
-  const [isDemoEV, setIsDemoEV] = useState(!snap0);
   const [waHealth, setWaHealth] = useState(snap0 ? (snap0.waHealth || null) : null);
   const [scanHealth, setScanHealth] = useState(snap0 ? (snap0.scanHealth || null) : null); // WA book coverage from last scan
   const [showScanHealth, setShowScanHealth] = useState(false); // expand/collapse detail panel
@@ -2097,7 +2080,7 @@ useEffect(() => {
   const [manualMeta, setManualMeta] = useState(EMPTY_MANUAL);
   const [manualStake, setManualStake] = useState(500);
   const [manualResult, setManualResult] = useState(null);
-  const [evBets, setEvBets] = useState(snap0 ? (snap0.ev || []) : MOCK_EV);
+  const [evBets, setEvBets] = useState(snap0 ? (snap0.ev || []) : []);
   const [integrity, setIntegrity] = useState(snap0 ? (snap0.integrity || null) : null);
   const [evDiag, setEvDiag] = useState(null);
   const [evDiagWA, setEvDiagWA] = useState(null);
@@ -2535,10 +2518,10 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     const keepPrevious = sportsToScan.length > 0 && okCount === 0 && lastGoodScanRef.current > 0;
     if (sportsToScan.length > 0 && okCount === 0 && premiumBlocked === 0) {
       const failMsg = 'Could not load odds for any of the ' + sportsToScan.length + ' sports scanned (last status: ' + (lastFailStatus ?? 'network error') + '). This is not "no arbs found" — the scan itself failed. ';
-      setError(prev => prev || (failMsg + (keepPrevious ? 'Showing your last successful scan from ' + new Date(lastGoodScanRef.current).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' instead.' : 'Showing demo data below.')));
+      setError(prev => prev || (failMsg + (keepPrevious ? 'Showing your last successful scan from ' + new Date(lastGoodScanRef.current).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' instead.' : '')));
     }
     if (keepPrevious) {
-      // The scan itself failed (quota, outage, offline). Keep showing the last real results instead of replacing them with demo data.
+      // The scan itself failed (quota, outage, offline). Keep showing the last real results instead of clearing them.
       setLoading(false);
       setNextScanAt(Date.now() + SCAN_WINDOW_MS);
       return;
@@ -2569,9 +2552,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     const foundArbsWAVerified = stampAge(applyVerification(foundArbsWA));
     const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
     const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
-    if (foundVerified.length > 0) { setArbs(foundVerified); setIsDemo(false); }
-    else if (okCount === 0) { setArbs(MOCK); setIsDemo(true); } // scan failed entirely — labelled demo
-    else { setArbs([]); setIsDemo(false); } // scan worked, genuinely no arbs
+    setArbs(foundVerified.length > 0 ? foundVerified : []); // no arbs found (or the scan failed: the error banner says so)
     setArbsWAReal(foundArbsWAVerified);
     // Only forget arbs that disappeared when the scan itself worked — a failed scan
     // must not reset every arb's age. An arb that vanishes and later returns starts over.
@@ -2580,9 +2561,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
       Object.keys(firstSeenRef.current).forEach(k => { if (!live.has(k)) delete firstSeenRef.current[k]; });
       try { localStorage.setItem('arb_firstSeen', JSON.stringify(firstSeenRef.current)); } catch {}
     }
-    if (foundEV.length > 0) { setEvBets(foundEV); setIsDemoEV(false); }
-    else if (okCount === 0) { setEvBets(MOCK_EV); setIsDemoEV(true); } // scan failed entirely
-    else { setEvBets([]); setIsDemoEV(false); } // scan worked, genuinely no +EV right now
+    setEvBets(foundEV.length > 0 ? foundEV : []);
     setEvWA(foundEVWA);
     setEvDiag(foundEV.diag || null);
     setEvDiagWA(foundEVWA.diag || null);
@@ -3012,17 +2991,8 @@ const analyzeArb = async (arb) => {
         e('div', null, e('div', { style: st.logoTitle }, 'ArbEdge'), e('div', { style: st.logoSub }, '\uD83C\uDF0D Global' + (isWAUserNow ? ' \u00B7 \uD83C\uDDEC\uD83C\uDDED West Africa' : '')))
       ),
       e('div', { style: st.headerRow },
-        e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ ' + scanProgress.sport + '...' : '● ' + filteredArbs.length + ' arbs'),
+        e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ Scanning...' : (filteredArbs.length === 0 ? 'No arbs right now' : '● ' + filteredArbs.length + ' arb' + (filteredArbs.length === 1 ? '' : 's'))),
         lastFetch && e('span', { style: st.badge('#1f2937', '#9ca3af') }, lastFetch.toLocaleTimeString()),
-        isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, '⚠ Demo'),
-        e('button', { onClick: () => setShowSetup(v => !v), style: { ...st.btn('outline'), fontSize: 11, padding: '4px 10px' } }, apiKey ? '⚙ Connected' : 'Connect Live ↗')
-      ),
-      showSetup && e('div', { style: st.setupBox },
-        e('div', { style: st.setupText }, 'Free API key at the-odds-api.com — covers FIFA World Cup, AFCON, all tennis Slams, NBA, UFC, Cricket + 100 leagues.'),
-        e('div', { style: { display: 'flex', gap: 8 } },
-          e('input', { value: apiInput, onChange: ev => setApiInput(ev.target.value), placeholder: 'Paste Odds API key...', style: { ...st.input, flex: 1, background: '#1f2937', borderColor: '#374151', color: '#f9fafb' } }),
-          e('button', { onClick: saveKey, style: st.btn('primary') }, 'Save')
-        )
       ),
     ),
            e('div', { style: { display: 'flex', justifyContent: 'flex-end', padding: '6px 4px' } },
@@ -3283,16 +3253,11 @@ const analyzeArb = async (arb) => {
       error && e('div', { style: { background: '#fef3c7', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 } }, error),
         quota.remaining !== null && e('div', { style: { background: parseInt(quota.remaining) < 50 ? '#fef3c7' : '#f0fdf4', color: parseInt(quota.remaining) < 50 ? '#92400e' : '#14532d', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10, display: 'flex', justifyContent: 'space-between' } }, e('span', null, 'Key ' + (quota.keyIndex || 1) + ' | Used: ' + quota.used), e('span', { style: { fontWeight: 700 } }, quota.remaining + ' remaining')),
       selectedSports.length === 0 && e('div', { style: { background: '#fefce8', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
-        '👉 No sports selected yet. Tap ⚙ Sports above and pick the leagues you want to scan' + (isFreePlan ? ' (the free plan includes EPL and La Liga).' : '.')),
-      isDemo && !error && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
-        apiKey
-          ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 5 min.'
-          : '📌 Demo mode — tap Connect Live to scan real odds across the ' + 20 + ' top leagues. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'
-      ),
-      filteredArbs.length === 0 && !isDemo && e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
+        '👉 No sports selected yet. Tap ⚙ Sports above and pick the leagues you want to scan' + (isFreePlan ? ' (the free plan includes EPL, La Liga, Bundesliga and Serie A).' : '.')),
+      filteredArbs.length === 0 && !loading && !error && selectedSports.length > 0 && e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
         e('div', { style: { fontSize: 28, marginBottom: 10 } }, '✅'),
-        e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No arbitrage opportunities in this scan'),
-        e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, 'The scan completed and no cross-book arbs passed the checks. That is a normal result — real arbs are rare and short-lived.')
+        e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No arbitrage opportunities right now'),
+        e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, 'We scan again automatically every 5 minutes.')
       ),
  (hiddenReview > 0 || showReview) && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
    !showReview ? e('div', null, '🔍 ' + hiddenReview + ' arb' + (hiddenReview === 1 ? '' : 's') + ' hidden: not enough cross-checks or a flagged price. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(true); } }, 'Show review arbs'))
@@ -3313,11 +3278,10 @@ const analyzeArb = async (arb) => {
           (marketGroups[mk] = marketGroups[mk] || []).push(o);
         });
         const multiMarket = Object.keys(marketGroups).length > 1;
-        return e('div', { key: arb.id, style: st.card(sel && sel.id === arb.id, isDemo), onClick: () => setSel(sel && sel.id === arb.id ? null : arb) },
+        return e('div', { key: arb.id, style: st.card(sel && sel.id === arb.id, false), onClick: () => setSel(sel && sel.id === arb.id ? null : arb) },
           e('div', { style: st.cardRow },
             e('div', null, e('div', { style: st.sportLabel }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(arb.commenceTime)), e('div', { style: st.matchTitle }, arb.match)),
             e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
-              isDemo && e('span', { style: st.badge('#451a03', '#fcd34d') }, 'DEMO'),
               !isFullyAccessible(arb.outcomes, userRegion) && e('span', { style: st.badge('#7f1d1d', '#fecaca') }, '🚫 Not all books accessible'),
               e('span', { style: st.profitBadge(arb.margin) }, '+' + arb.margin.toFixed(1) + '%')
             )
@@ -3567,7 +3531,6 @@ const analyzeArb = async (arb) => {
           ['+EV found', (evSection === 'wa' ? evWA : evBets).filter(b => evFilter === 'all' || b.sport === evFilter).length, null],
           ['Best EV', (evSection === 'wa' ? evWA : evBets)[0] ? '+' + (evSection === 'wa' ? evWA : evBets)[0].ev_pct.toFixed(1) + '%' : '—', C.blue],
           ['Avg EV', (evSection === 'wa' ? evWA : evBets).length > 0 ? '+' + ((evSection === 'wa' ? evWA : evBets).reduce((s,b) => s + b.ev_pct, 0) / (evSection === 'wa' ? evWA : evBets).length).toFixed(1) + '%' : '—', C.blue],
-          ['Mode', isDemoEV ? 'Demo' : 'Live', isDemoEV ? C.amber : C.green],
         ].map(([l, v, c]) => e('div', { key: l, style: st.metric }, e('div', { style: st.metricLabel }, l), e('div', { style: st.metricVal(c) }, v)))
       ),
       e('div', { style: { display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' } },
@@ -3599,14 +3562,12 @@ const analyzeArb = async (arb) => {
           .filter(b => !drawOnly || b.isDraw)
           .filter(b => !reboundOnly || (b.formContext && b.formContext.isRebound));
         if (activeBets.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
-          e('div', { style: { fontSize: 28, marginBottom: 10 } }, isDemoEV ? '📡' : drawOnly ? '🎯' : reboundOnly ? '🔄' : '✅'),
+          e('div', { style: { fontSize: 28, marginBottom: 10 } }, drawOnly ? '🎯' : reboundOnly ? '🔄' : '✅'),
           e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } },
-            isDemoEV ? 'Scan failed — showing demo data' : drawOnly ? 'No +EV draws right now' : reboundOnly ? 'No rebound-signal bets right now' : 'No +EV opportunities right now'
+            drawOnly ? 'No +EV draws right now' : reboundOnly ? 'No rebound-signal bets right now' : 'No +EV opportunities right now'
           ),
           e('div', { style: { fontSize: 12, lineHeight: 1.6 } },
-            isDemoEV
-              ? 'The odds API could not be reached. Check your API key or connection.'
-              : (() => {
+            (() => {
                   const d = evSection === 'wa' ? evDiagWA : evDiag;
                   if (!d) return 'Scan finished but no diagnostics were recorded.';
                   if (d.eventsTotal === 0) return 'No events with 2+ bookmakers were found in this scan.';
@@ -3620,7 +3581,7 @@ const analyzeArb = async (arb) => {
           const kellyStake = parseFloat((kelly / 100 * evStake).toFixed(2));
           const expectedProfit = parseFloat(((bet.odds * bet.trueProb / 100 - 1) * kellyStake).toFixed(2));
           const info = getSportInfo(bet.sport);
-          return e('div', { key: bet.id, style: { ...st.card(false, isDemoEV), cursor: 'default' } },
+          return e('div', { key: bet.id, style: { ...st.card(false, false), cursor: 'default' } },
             e('div', { style: st.cardRow },
               e('div', null,
                 e('div', { style: st.sportLabel }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(bet.commenceTime)),
@@ -3642,7 +3603,6 @@ const analyzeArb = async (arb) => {
                 )
               ),
               e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
-                isDemoEV && e('span', { style: st.badge('#451a03', '#fcd34d') }, 'DEMO'),
                 e('span', { style: { background: '#eff6ff', color: '#1e40af', fontSize: 13, fontWeight: 700, padding: '4px 11px', borderRadius: 20 } }, '+' + bet.ev_pct.toFixed(1) + '% EV')
               )
             ),
