@@ -2343,6 +2343,7 @@ useEffect(() => {
           e('span', null, f)
         ))
       ),
+      e('div', { style: { fontSize: 12, color: '#6b7280', marginBottom: 10, lineHeight: 1.4 } }, 'Kindly purchase premium to help raise funds for more arbs'),
       e('button', {
         onClick: () => startCheckout('prepaid'),
         disabled: checkoutLoading,
@@ -3277,12 +3278,6 @@ const analyzeArb = async (arb) => {
           ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 5 min.'
           : '📌 Demo mode — tap Connect Live to scan real odds across the ' + 20 + ' top leagues. For Betano, MSport & SportyBet odds, use the ✏️ Manual Arb tab.'
       ),
-      integrity && (integrity.total > 0 || Object.keys(integrity.quarantined || {}).length > 0) && e('div', { style: { fontSize: 11, color: '#1e3a8a', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
-        integrity.total > 0 && e('div', null, '🛡 ' + integrity.total + ' quote' + (integrity.total === 1 ? '' : 's') + ' excluded by data-integrity checks (impossible margins or out-of-order lines) — they never enter an arb. ' + Object.entries(integrity.byBook).map(([b, n]) => b + ': ' + n).join(', ')),
-        integrity.total > 0 && e('div', null, 'Why: ' + Object.entries(integrity.byReason || {}).map(([r, n]) => r + ' x' + n).join('; ') + (integrity.examples && integrity.examples.length ? ' | e.g. ' + integrity.examples.slice(0, 3).map(x => x.book + ' ' + x.market + ' (' + x.match + ')').join('; ') : '')),
-        scanHealth && scanHealth.arbDiag && scanHealth.arbDiag.consensus && Object.keys(scanHealth.arbDiag.consensus).length > 0 && e('div', null, 'Consensus filter rejected legs (price too far above other books / too few books quote it): ' + Object.entries(scanHealth.arbDiag.consensus).map(([b, d]) => b + ' high ' + d.high + ', thin ' + d.thin).join('; ')),
-        Object.entries(integrity.quarantined || {}).map(([b, why]) => e('div', { key: b }, '⏸ ' + b + ' is held back from all results: ' + why + '.'))
-      ),
       filteredArbs.length === 0 && !isDemo && e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
         e('div', { style: { fontSize: 28, marginBottom: 10 } }, '✅'),
         e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No arbitrage opportunities in this scan'),
@@ -3321,7 +3316,7 @@ const analyzeArb = async (arb) => {
             recheck[arb.id] && recheck[arb.id].verdict === 'confirmed' ? '✅ Verified live · ' + fmtAgeShort(Date.now() - new Date(recheck[arb.id].checkedAt).getTime()) + ' ago'
             : recheck[arb.id] && recheck[arb.id].verdict ? '⚠️ Re-checked: see result below'
             : arb.liveVerify ? '🔎 Live-checked at scan: ' + String(arb.liveVerify.status || 'checked').replace(/_/g, ' ')
-            : '⏳ Feed data, not live-verified. Confirm each leg on the bookmaker and bet only at or above the minimum odds shown.'),
+            : '⏳ Confirm each bookmaker before betting'),
           arb.pulledAtMs && e('div', { style: { fontSize: 10, marginTop: 3, color: isArbExpired(arb) ? '#b91c1c' : C.muted, fontWeight: isArbExpired(arb) ? 700 : 400 } },
             isArbExpired(arb)
               ? '⌛ Expired: prices pulled ' + new Date(arb.pulledAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + fmtAgeShort(Date.now() - arb.pulledAtMs) + ' ago). Rescan before using.'
