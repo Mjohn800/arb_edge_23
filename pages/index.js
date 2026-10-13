@@ -878,6 +878,7 @@ function minOddsFor(outs) {
 // bad price than a gift. So arbs above DEFAULT_MAX_PROFIT are hidden by default
 // (one tap shows them) — hidden, not deleted, so a genuine one is never lost.
 const DEFAULT_MAX_PROFIT = 10; // %
+const FREE_MAX_PROFIT = 0.2; // % - free plan only sees arbs up to this size; bigger ones are Premium
 // Arb age = how long the same arb (same legs, same prices) has been seen in
 // consecutive scans on THIS device. Real edges are usually closed within minutes;
 // a big one that just sits there is more likely stale data. Heuristic only — it
@@ -2004,7 +2005,7 @@ const [apiKey, setApiKey] = useState('server');
   // confirmed WA-scraper tournament ID, so capping doesn't lose WA coverage.
   const TOP_SPORTS = ['soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_italy_serie_a','soccer_france_ligue_one','soccer_africa_cup_of_nations','soccer_ghana_premiership','soccer_fifa_world_cup','soccer_uefa_europa_league','soccer_conmebol_copa_libertadores','soccer_usa_mls','soccer_efl_champ','soccer_netherlands_eredivisie','soccer_portugal_primeira_liga','soccer_belgium_first_div','soccer_spl','soccer_norway_eliteserien','soccer_sweden_allsvenskan','soccer_brazil_campeonato','basketball_nba'];
 const [selectedSports, setSelectedSports] = useState(() => {
-  try { const saved = localStorage.getItem('arb_sports'); return saved ? JSON.parse(saved) : TOP_SPORTS; } catch { return TOP_SPORTS; }
+  try { const saved = localStorage.getItem('arb_sports'); return saved ? JSON.parse(saved) : []; } catch { return []; }
 });
   const [showSportPicker, setShowSportPicker] = useState(false);
   const [minMargin, setMinMargin] = useState(0);
@@ -2254,6 +2255,11 @@ useEffect(() => {
         if (cancelled) return;
         if (!error) {
           const st = data && data.settings;
+          // Brand-new account (no saved settings yet): start with no sports selected, even if this browser has an old selection saved.
+          if (!st) {
+            const createdAt = session && session.user && session.user.created_at ? new Date(session.user.created_at).getTime() : 0;
+            if (createdAt && Date.now() - createdAt < 7 * 24 * 3600 * 1000) setSelectedSports([]);
+          }
           if (st && typeof st === 'object') {
             if (Array.isArray(st.sports) && st.sports.length) setSelectedSports(st.sports);
             if (typeof st.bankroll === 'number' && st.bankroll > 0) setBankroll(st.bankroll);
@@ -2963,12 +2969,15 @@ const analyzeArb = async (arb) => {
   const isShownByDefault = a => recheckFresh(a) || (a.tier !== 'review' && !isArbExpired(a));
   const hiddenReview = arbsBase.filter(a => !isDenied(a) && !isShownByDefault(a)).length;
 
+  const isFreePlan = plan.loaded && !plan.isPremium && !plan.isOwner;
+  const profitCap = isFreePlan ? FREE_MAX_PROFIT : (showHighProfit ? Infinity : DEFAULT_MAX_PROFIT);
+
   const filteredArbs = arbsBase.filter(a => {
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
     if (isDenied(a)) return false;
-    if (!showHighProfit && a.margin > DEFAULT_MAX_PROFIT) return false;
+    if (a.margin > profitCap) return false;
     if (!showReview && !isShownByDefault(a)) return false;
     if (accessOnly && !isFullyAccessible(a.outcomes, userRegion)) return false;
     if (arbSection === 'global' && isFullyAccessible(a.outcomes, userRegion)) return false;
@@ -2979,7 +2988,7 @@ const analyzeArb = async (arb) => {
   // array (not a partition of one mixed array), same pattern as Line Shopping/Middles/+EV.
   const sameFilters = a => {
     if (isDenied(a)) return false;
-    if (!showHighProfit && a.margin > DEFAULT_MAX_PROFIT) return false;
+    if (a.margin > profitCap) return false;
     if (!showReview && !isShownByDefault(a)) return false;
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
@@ -2989,7 +2998,7 @@ const analyzeArb = async (arb) => {
   const arbsGlobal = arbs.filter(sameFilters);
   const arbsWA     = arbsWAReal.filter(sameFilters);
 
-  const hiddenHighProfit = arbsBase.filter(a => !isDenied(a) && a.margin > DEFAULT_MAX_PROFIT).length;
+  const hiddenHighProfit = arbsBase.filter(a => !isDenied(a) && a.margin > (isFreePlan ? FREE_MAX_PROFIT : DEFAULT_MAX_PROFIT)).length;
   const hiddenByReports = arbsBase.filter(a => isDenied(a)).length;
   const calc = sel ? calcStakes(sel.outcomes, stake) : null;
 
@@ -3273,6 +3282,8 @@ const analyzeArb = async (arb) => {
       ),
       error && e('div', { style: { background: '#fef3c7', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 } }, error),
         quota.remaining !== null && e('div', { style: { background: parseInt(quota.remaining) < 50 ? '#fef3c7' : '#f0fdf4', color: parseInt(quota.remaining) < 50 ? '#92400e' : '#14532d', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10, display: 'flex', justifyContent: 'space-between' } }, e('span', null, 'Key ' + (quota.keyIndex || 1) + ' | Used: ' + quota.used), e('span', { style: { fontWeight: 700 } }, quota.remaining + ' remaining')),
+      selectedSports.length === 0 && e('div', { style: { background: '#fefce8', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
+        '👉 No sports selected yet. Tap ⚙ Sports above and pick the leagues you want to scan' + (isFreePlan ? ' (the free plan includes EPL and La Liga).' : '.')),
       isDemo && !error && e('div', { style: { background: C.blueLight, color: '#1e3a8a', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
         apiKey
           ? '📌 No live arbitrage opportunities right now — showing example cards (marked DEMO) so you can see how it works. Scan runs again automatically every 5 min.'
@@ -3287,9 +3298,10 @@ const analyzeArb = async (arb) => {
    !showReview ? e('div', null, '🔍 ' + hiddenReview + ' arb' + (hiddenReview === 1 ? '' : 's') + ' hidden: not enough cross-checks or a flagged price. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(true); } }, 'Show review arbs'))
      : e('div', null, 'Showing review arbs: verify every leg on the book before staking. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(false); } }, 'Hide again'))
  ),
- (hiddenHighProfit > 0 || showHighProfit || hiddenByReports > 0) && e('div', { style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
-   hiddenHighProfit > 0 && !showHighProfit && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden — that size is far more often a bad price than a real edge. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(true); } }, 'Show them')),
-   showHighProfit && e('div', null, 'Showing arbs above +' + DEFAULT_MAX_PROFIT + '% — treat each as unverified until checked on the book. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(false); } }, 'Hide again')),
+ (hiddenHighProfit > 0 || (showHighProfit && !isFreePlan) || hiddenByReports > 0) && e('div', { style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
+   isFreePlan && hiddenHighProfit > 0 && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + FREE_MAX_PROFIT + '% ' + (hiddenHighProfit === 1 ? 'is' : 'are') + ' Premium only. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); startCheckout('prepaid'); } }, 'Go Premium')),
+   !isFreePlan && hiddenHighProfit > 0 && !showHighProfit && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden — that size is far more often a bad price than a real edge. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(true); } }, 'Show them')),
+   !isFreePlan && showHighProfit && e('div', null, 'Showing arbs above +' + DEFAULT_MAX_PROFIT + '% — treat each as unverified until checked on the book. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(false); } }, 'Hide again')),
    hiddenByReports > 0 && e('div', null, '🚩 ' + hiddenByReports + ' arb' + (hiddenByReports === 1 ? '' : 's') + ' hidden because you reported them.')
  ),
  filteredArbs.map(arb => {
