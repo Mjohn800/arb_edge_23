@@ -18,14 +18,14 @@ export default function Document() {
         <meta property="og:site_name" content="ArbEdge" />
         <meta property="og:title" content="ArbEdge" />
         <meta property="og:description" content="Arbitrage finder" />
-        <meta property="og:url" content="https://arb-edge-23-5pi3.vercel.app" />
-        <meta property="og:image" content="https://arb-edge-23-5pi3.vercel.app/icon-512.png" />
+        <meta property="og:url" content="https://arbedges.vercel.app" />
+        <meta property="og:image" content="https://arbedges.vercel.app/icon-512.png" />
         <meta property="og:image:width" content="512" />
         <meta property="og:image:height" content="512" />
         <meta name="twitter:card" content="summary" />
         <meta name="twitter:title" content="ArbEdge" />
         <meta name="twitter:description" content="Arbitrage finder" />
-        <meta name="twitter:image" content="https://arb-edge-23-5pi3.vercel.app/icon-512.png" />
+        <meta name="twitter:image" content="https://arbedges.vercel.app/icon-512.png" />
       </Head>
       <body>
         <Main />
