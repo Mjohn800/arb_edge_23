@@ -2991,7 +2991,7 @@ const analyzeArb = async (arb) => {
         e('div', null, e('div', { style: st.logoTitle }, 'ArbEdge'), e('div', { style: st.logoSub }, '\uD83C\uDF0D Global' + (isWAUserNow ? ' \u00B7 \uD83C\uDDEC\uD83C\uDDED West Africa' : '')))
       ),
       e('div', { style: st.headerRow },
-        e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ Scanning...' : (filteredArbs.length === 0 ? 'No arbs right now' : '● ' + filteredArbs.length + ' arb' + (filteredArbs.length === 1 ? '' : 's'))),
+        e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ ' + scanProgress.sport + '...' : '● ' + filteredArbs.length + ' arbs'),
         lastFetch && e('span', { style: st.badge('#1f2937', '#9ca3af') }, lastFetch.toLocaleTimeString()),
       ),
     ),
@@ -3642,7 +3642,7 @@ const analyzeArb = async (arb) => {
     ),
     tab === 'edge' && e('div', { style: st.section },
       // ── Scan Health Panel ───────────────────────────────────────────────────
-      scanHealth && e('div', { style: { background: '#1f2937', borderRadius: 12, padding: '12px 14px', marginBottom: 14 } },
+      false && scanHealth && e('div', { style: { background: '#1f2937', borderRadius: 12, padding: '12px 14px', marginBottom: 14 } },
         e('div', { style: { fontSize: 13, fontWeight: 700, color: '#f9fafb', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
           e('span', null, '🇬🇭 West Africa Scan Health'),
           e('span', { style: { fontSize: 11, color: '#6b7280' } }, new Date(scanHealth.scannedAt).toLocaleTimeString())
