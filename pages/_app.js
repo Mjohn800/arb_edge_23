@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { Analytics } from '@vercel/analytics/next';
 
 export default function App({ Component, pageProps }) {
   useEffect(() => {
@@ -6,5 +7,10 @@ export default function App({ Component, pageProps }) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
   }, []);
-  return <Component {...pageProps} />;
+  return (
+    <>
+      <Component {...pageProps} />
+      <Analytics />
+    </>
+  );
 }

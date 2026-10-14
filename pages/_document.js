@@ -12,19 +12,19 @@ export default function Document() {
         <meta name="theme-color" content="#0b1220" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-title" content="ArbEdge" />
-        <meta name="description" content="Arbitrage finder" />
+        <meta name="description" content="ArbEdge: live arbitrage and +EV bets for football. Free to start. 18+." />
         {/* Link previews (WhatsApp, Telegram, iMessage, X). Addresses must be absolute https:// URLs. */}
         <meta property="og:type" content="website" />
         <meta property="og:site_name" content="ArbEdge" />
         <meta property="og:title" content="ArbEdge" />
-        <meta property="og:description" content="Arbitrage finder" />
+        <meta property="og:description" content="ArbEdge: live arbitrage and +EV bets for football. Free to start. 18+." />
         <meta property="og:url" content="https://arbedges.vercel.app" />
         <meta property="og:image" content="https://arbedges.vercel.app/icon-512.png" />
         <meta property="og:image:width" content="512" />
         <meta property="og:image:height" content="512" />
         <meta name="twitter:card" content="summary" />
         <meta name="twitter:title" content="ArbEdge" />
-        <meta name="twitter:description" content="Arbitrage finder" />
+        <meta name="twitter:description" content="ArbEdge: live arbitrage and +EV bets for football. Free to start. 18+." />
         <meta name="twitter:image" content="https://arbedges.vercel.app/icon-512.png" />
       </Head>
       <body>
