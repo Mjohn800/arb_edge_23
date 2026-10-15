@@ -869,7 +869,12 @@ function minOddsFor(outs) {
 // Real arbs between books are usually small; a very large one is far more often a
 // bad price than a gift. So arbs above DEFAULT_MAX_PROFIT are hidden by default
 // (one tap shows them) — hidden, not deleted, so a genuine one is never lost.
-const DEFAULT_MAX_PROFIT = 10; // %
+// Three bands by margin: stable (<= STABLE_MAX_PROFIT) is the default list; volatile (above that, up to
+// VOLATILE_MAX_PROFIT) sits behind its own 'Volatile arbs' link; above that stays hidden behind 'Show them'.
+// This is separate from the review tier, which is about failed cross-checks, not margin size.
+const STABLE_MAX_PROFIT = 0.6; // %
+const VOLATILE_MAX_PROFIT = 5; // %
+const DEFAULT_MAX_PROFIT = VOLATILE_MAX_PROFIT; // %
 const FREE_MAX_PROFIT = 0.6; // % - free plan only sees arbs up to this size; bigger ones are Premium
 // Arb age = how long the same arb (same legs, same prices) has been seen in
 // consecutive scans on THIS device. Real edges are usually closed within minutes;
@@ -1656,6 +1661,72 @@ function middleEV(model, o, u) {
   return { ev, windowProb };
 }
 
+// An 'Arb+Middle' (the two prices already beat 100% combined, on different lines) is a guaranteed-profit bet
+// AND has a window where both legs win, so it is listed in the Arbs section as well as Middles. It is built
+// into the normal arb shape so cards, stake calculator, filters, profit cap and expiry all work unchanged.
+// These legs never went through findArbs' consensus/anchor checks (different lines have no same-line price to
+// compare against), so they only reach the default 'clean' view when the margin is small AND every leg's feed
+// is verified; otherwise they sit in the review tier like any other unconfirmed arb.
+function middleArbsAsArbs(middles) {
+  const out = [];
+  for (const m of middles) {
+    if (!m.isArb || !m.legA || !m.legB) continue;
+    const legs = [m.legA, m.legB];
+    const imp = legs.reduce((sum, l) => sum + 1 / l.odds, 0);
+    if (!(imp < 1)) continue;
+    const margin = parseFloat((((1 - imp) / imp) * 100).toFixed(2));
+    const mktKey = m.type === 'Spread' ? 'spreads' : 'totals';
+    const unverified = legs.filter(l => !feedVerified(l.book, l.ownFeed, mktKey));
+    const clean = unverified.length === 0 && margin <= RANK_RULE_MIN_MARGIN;
+    const reasons = ['Arb across two different lines (also a middle): these prices are not cross-checked against other books at the same line, so confirm both on the books'];
+    if (unverified.length) reasons.push('Unverified feed: ' + unverified.map(l => (l.bookName || l.book) + ' ' + mktKey).join(', '));
+    const minOdds = minOddsFor(legs.map(l => ({ price: l.odds })));
+    const pulls = legs.filter(l => typeof l.pulledMs === 'number').map(l => l.pulledMs);
+    const foundAtMs = Date.now();
+    out.push({
+      id: 'mid_' + m.id,
+      foundAtMs,
+      anchorBooks: null,
+      pulledAtMs: pulls.length ? Math.min(...pulls) : foundAtMs,
+      sport: m.sport,
+      match: m.match,
+      commenceTime: m.commenceTime,
+      margin,
+      rule: 'middle',
+      verify: { level: clean ? 'standard' : 'review', reasons },
+      tier: clean ? 'clean' : 'review',
+      isMiddle: true,
+      middleWindowText: m.windowText,
+      middleWindowProb: m.windowProb != null ? m.windowProb : null,
+      home: m.home,
+      away: m.away,
+      outcomes: legs.map((l, i) => ({
+        minOdds: minOdds[i],
+        fairDev: null,
+        updatedKind: typeof l.pulledMs === 'number' ? 'pull' : 'book',
+        side: l.sideKey,
+        label: l.side,
+        marketLabel: m.type === 'Spread' ? 'Spread (full time)' : 'Total (full time)',
+        marketKey: mktKey,
+        point: l.line,
+        book: l.book,
+        bookName: l.bookName,
+        odds: l.odds,
+        rankUsed: 1,
+        agreeBooks: [],
+        feedVerified: feedVerified(l.book, l.ownFeed, mktKey),
+        dup: false,
+        fixtureRef: l.fixtureRef || null,
+        fixtureUrl: l.fixtureUrl || null,
+        updatedAt: l.updatedMs || null,
+        srcLabel: null,
+        srcStart: null,
+      })),
+    });
+  }
+  return out;
+}
+
 const MIN_MIDDLE_EV_PCT = -2; // default view hides middles estimated worse than this (%), unless they are arbs
 const MIN_WINDOW_PROB = 0.10; // a middle must land at least ~1 in 10 by the market's own pricing
 // Arbs first; then by estimated EV (probability-weighted, from the match's own ladder);
@@ -1694,7 +1765,7 @@ function findMiddles(events, mode = 'global', userRegion = null) {
             side = String(o.name || '').trim().toLowerCase();
             if (side !== 'over' && side !== 'under') continue;
           }
-          out.push({ book: bm.key, bookName: bookLabel(bm), side, point: o.point, price: o.price, updatedMs: parseQuoteTime(mkt.last_update || bm.last_update) });
+          out.push({ book: bm.key, bookName: bookLabel(bm), side, point: o.point, price: o.price, updatedMs: parseQuoteTime(mkt.last_update || bm.last_update), ownFeed: bm.feedPipeline === 'wa', fixtureRef: bm.bookmakerFixtureId || bm.eventId || null, fixtureUrl: bm.fixturePath || null, pulledMs: bm.last_update_kind === 'pull' ? parseQuoteTime(bm.last_update) : null });
           const k = bm.key + '|' + side + '|' + o.point;
           (prices[k] = prices[k] || new Set()).add(o.price);
         }
@@ -1721,9 +1792,9 @@ function findMiddles(events, mode = 'global', userRegion = null) {
       const implied = 1 / x.price + 1 / y.price;
       spCands.push({
         id: ev.id + '_sprd_' + x.book + x.point + '_' + y.book + y.point,
-        sport: ev.sport_key, match, commenceTime: ev.commence_time, type: 'Spread', team: 'Handicap',
-        legA: { book: x.book, bookName: x.bookName, line: x.point, odds: x.price, side: ev.home_team + ' ' + fmtLine(x.point) },
-        legB: { book: y.book, bookName: y.bookName, line: y.point, odds: y.price, side: ev.away_team + ' ' + fmtLine(y.point) },
+        sport: ev.sport_key, match, commenceTime: ev.commence_time, type: 'Spread', team: 'Handicap', evId: ev.id, home: ev.home_team, away: ev.away_team,
+        legA: { book: x.book, bookName: x.bookName, line: x.point, odds: x.price, side: ev.home_team + ' ' + fmtLine(x.point), sideKey: x.side, ownFeed: x.ownFeed, fixtureRef: x.fixtureRef, fixtureUrl: x.fixtureUrl, updatedMs: x.updatedMs, pulledMs: x.pulledMs },
+        legB: { book: y.book, bookName: y.bookName, line: y.point, odds: y.price, side: ev.away_team + ' ' + fmtLine(y.point), sideKey: y.side, ownFeed: y.ownFeed, fixtureRef: y.fixtureRef, fixtureUrl: y.fixtureUrl, updatedMs: y.updatedMs, pulledMs: y.pulledMs },
         window: parseFloat((x.point + y.point).toFixed(2)),
         windowText: 'the final goal/point difference (' + ev.home_team + ' minus ' + ev.away_team + ') is ' + (ints.length === 1 ? 'exactly ' + ints[0] : 'one of ' + ints.join(', ')),
         implied: parseFloat(implied.toFixed(4)), isArb: implied < 1,
@@ -1755,9 +1826,9 @@ function findMiddles(events, mode = 'global', userRegion = null) {
       const staleNote = ages.length && Math.max(...ages) > PRE_STALE_MS ? 'A leg was last updated ' + fmtAge(Math.max(...ages)) + ' ago — verify it on the book.' : null;
       totCands.push({
         id: ev.id + '_tot_' + o.book + o.point + '_' + u.book + u.point,
-        sport: ev.sport_key, match, commenceTime: ev.commence_time, type: 'Total', team: 'Goals total',
-        legA: { book: o.book, bookName: o.bookName, line: o.point, odds: o.price, side: 'Over ' + o.point },
-        legB: { book: u.book, bookName: u.bookName, line: u.point, odds: u.price, side: 'Under ' + u.point },
+        sport: ev.sport_key, match, commenceTime: ev.commence_time, type: 'Total', team: 'Goals total', evId: ev.id, home: ev.home_team, away: ev.away_team,
+        legA: { book: o.book, bookName: o.bookName, line: o.point, odds: o.price, side: 'Over ' + o.point, sideKey: 'over', ownFeed: o.ownFeed, fixtureRef: o.fixtureRef, fixtureUrl: o.fixtureUrl, updatedMs: o.updatedMs, pulledMs: o.pulledMs },
+        legB: { book: u.book, bookName: u.bookName, line: u.point, odds: u.price, side: 'Under ' + u.point, sideKey: 'under', ownFeed: u.ownFeed, fixtureRef: u.fixtureRef, fixtureUrl: u.fixtureUrl, updatedMs: u.updatedMs, pulledMs: u.pulledMs },
         window: parseFloat((u.point - o.point).toFixed(2)),
         windowText: 'the total is ' + (ints.length === 1 ? 'exactly ' + ints[0] : 'one of ' + ints.join(', ')),
         implied: parseFloat(implied.toFixed(4)), isArb: implied < 1,
@@ -1993,6 +2064,7 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [showSportPicker, setShowSportPicker] = useState(false);
   const [minMargin, setMinMargin] = useState(0);
   const [showHighProfit, setShowHighProfit] = useState(false);
+  const [showVolatile, setShowVolatile] = useState(false); // false = stable arbs (<= STABLE_MAX_PROFIT), true = volatile band
   const [showReview, setShowReview] = useState(false); // review-tier arbs stay hidden unless opened
   // user's active reports = their personal denylist (table arb_reports, see arb_reports.sql)
   const [reports, setReports] = useState([]);
@@ -2548,8 +2620,12 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
         return { ...a, firstSeenMs: seen[sig] };
       });
     };
-    const foundVerified = stampAge(applyVerification(found));
-    const foundArbsWAVerified = stampAge(applyVerification(foundArbsWA));
+    // Middles are computed here (before the arb lists are set) so Arb+Middle entries can be listed in BOTH sections.
+    const middlesWAResult = findMiddles(all, 'wa', regionNow);
+    const middlesGlobalResult = findMiddles(all, 'global', regionNow);
+    const byMargin = (a, b) => b.margin - a.margin;
+    const foundVerified = stampAge(applyVerification(found).concat(middleArbsAsArbs(middlesGlobalResult))).sort(byMargin);
+    const foundArbsWAVerified = stampAge(applyVerification(foundArbsWA).concat(middleArbsAsArbs(middlesWAResult))).sort(byMargin);
     const foundEV = findEVBets(all, minEV, 'global', userRegion, teamFormRef.current);
     const foundEVWA = findEVBets(all, minEV, 'wa', userRegion, teamFormRef.current);
     setArbs(foundVerified.length > 0 ? foundVerified : []); // no arbs found (or the scan failed: the error banner says so)
@@ -2565,9 +2641,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     setEvWA(foundEVWA);
     setEvDiag(foundEV.diag || null);
     setEvDiagWA(foundEVWA.diag || null);
-    const middlesWAResult = findMiddles(all, 'wa', regionNow);
     const bestOddsWAResult = findBestOdds(all, 'wa', regionNow);
-    const middlesGlobalResult = findMiddles(all, 'global', regionNow);
     const bestOddsGlobalResult = findBestOdds(all, 'global', regionNow);
     const steamResult = findSteam(prevEventsRef.current, all);
     setMiddles(middlesGlobalResult);
@@ -2946,7 +3020,8 @@ const analyzeArb = async (arb) => {
   // Default view: clean arbs, plus any arb whose legs were just re-fetched live and confirmed.
   const recheckFresh = a => recheck[a.id] && recheck[a.id].verdict === 'confirmed' && Date.now() - new Date(recheck[a.id].checkedAt).getTime() < CONFIRMED_FRESH_MS;
   const isShownByDefault = a => recheckFresh(a) || (a.tier !== 'review' && !isArbExpired(a));
-  const hiddenReview = arbsBase.filter(a => !isDenied(a) && !isShownByDefault(a)).length;
+  const inBand = a => showVolatile ? a.margin > STABLE_MAX_PROFIT : a.margin <= STABLE_MAX_PROFIT;
+  const hiddenReview = arbsBase.filter(a => !isDenied(a) && !isShownByDefault(a) && inBand(a)).length;
 
   const isFreePlan = plan.loaded && !plan.isPremium && !plan.isOwner;
   const profitCap = isFreePlan ? FREE_MAX_PROFIT : (showHighProfit ? Infinity : DEFAULT_MAX_PROFIT);
@@ -2957,6 +3032,7 @@ const analyzeArb = async (arb) => {
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
     if (isDenied(a)) return false;
     if (a.margin > profitCap) return false;
+    if (!inBand(a)) return false;
     if (!showReview && !isShownByDefault(a)) return false;
     if (accessOnly && !isFullyAccessible(a.outcomes, userRegion)) return false;
     if (arbSection === 'global' && isFullyAccessible(a.outcomes, userRegion)) return false;
@@ -2968,6 +3044,7 @@ const analyzeArb = async (arb) => {
   const sameFilters = a => {
     if (isDenied(a)) return false;
     if (a.margin > profitCap) return false;
+    if (!inBand(a)) return false;
     if (!showReview && !isShownByDefault(a)) return false;
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
@@ -2979,6 +3056,7 @@ const analyzeArb = async (arb) => {
 
   const hiddenHighProfit = arbsBase.filter(a => !isDenied(a) && a.margin > (isFreePlan ? FREE_MAX_PROFIT : DEFAULT_MAX_PROFIT)).length;
   const hiddenByReports = arbsBase.filter(a => isDenied(a)).length;
+  const volatileCount = isFreePlan ? 0 : arbsBase.filter(a => !isDenied(a) && a.margin > STABLE_MAX_PROFIT && a.margin <= VOLATILE_MAX_PROFIT && (showReview || isShownByDefault(a))).length;
   const calc = sel ? calcStakes(sel.outcomes, stake) : null;
 
   // ── KEY FIX: use named import instead of React.createElement
@@ -3259,14 +3337,19 @@ const analyzeArb = async (arb) => {
         e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No arbitrage opportunities right now'),
         e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, 'We scan again automatically every 5 minutes.')
       ),
+ !isFreePlan && (volatileCount > 0 || showVolatile) && e('div', { style: { fontSize: 11, color: '#9a3412', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
+   showVolatile
+     ? e('div', null, '⚡ Volatile arbs: +' + STABLE_MAX_PROFIT + '% to +' + VOLATILE_MAX_PROFIT + '%. Margins this size close fast and are more often a stale or wrong price than a real edge, so check both legs on the books before staking. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowVolatile(false); } }, 'Back to stable arbs'))
+     : e('div', null, '⚡ ' + volatileCount + ' volatile arb' + (volatileCount === 1 ? '' : 's') + ' between +' + STABLE_MAX_PROFIT + '% and +' + VOLATILE_MAX_PROFIT + '%. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowVolatile(true); } }, 'Show volatile arbs'))
+ ),
  (hiddenReview > 0 || showReview) && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
    !showReview ? e('div', null, '🔍 ' + hiddenReview + ' arb' + (hiddenReview === 1 ? '' : 's') + ' hidden: not enough cross-checks or a flagged price. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(true); } }, 'Show review arbs'))
      : e('div', null, 'Showing review arbs: verify every leg on the book before staking. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(false); } }, 'Hide again'))
  ),
- (hiddenHighProfit > 0 || (showHighProfit && !isFreePlan) || hiddenByReports > 0) && e('div', { style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
+ ((isFreePlan && hiddenHighProfit > 0) || (!isFreePlan && showVolatile && (hiddenHighProfit > 0 || showHighProfit)) || hiddenByReports > 0) && e('div', { style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
    isFreePlan && hiddenHighProfit > 0 && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + FREE_MAX_PROFIT + '% ' + (hiddenHighProfit === 1 ? 'is' : 'are') + ' Premium only. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); startCheckout('prepaid'); } }, 'Go Premium')),
-   !isFreePlan && hiddenHighProfit > 0 && !showHighProfit && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden — that size is far more often a bad price than a real edge. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(true); } }, 'Show them')),
-   !isFreePlan && showHighProfit && e('div', null, 'Showing arbs above +' + DEFAULT_MAX_PROFIT + '% — treat each as unverified until checked on the book. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(false); } }, 'Hide again')),
+   !isFreePlan && showVolatile && hiddenHighProfit > 0 && !showHighProfit && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden — that size is far more often a bad price than a real edge. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(true); } }, 'Show them')),
+   !isFreePlan && showVolatile && showHighProfit && e('div', null, 'Showing arbs above +' + DEFAULT_MAX_PROFIT + '% — treat each as unverified until checked on the book. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(false); } }, 'Hide again')),
    hiddenByReports > 0 && e('div', null, '🚩 ' + hiddenByReports + ' arb' + (hiddenByReports === 1 ? '' : 's') + ' hidden because you reported them.')
  ),
  filteredArbs.map(arb => {
@@ -3297,6 +3380,7 @@ const analyzeArb = async (arb) => {
             isArbExpired(arb)
               ? '⌛ Expired: prices pulled ' + new Date(arb.pulledAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + fmtAgeShort(Date.now() - arb.pulledAtMs) + ' ago). Rescan before using.'
               : '🕒 Prices pulled ' + new Date(arb.pulledAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + fmtAgeShort(Date.now() - arb.pulledAtMs) + ' ago). A bookmaker can change a price after that.'),
+          arb.isMiddle && e('div', { style: { fontSize: 11, color: '#6b21a8', background: '#fdf4ff', border: '1px solid #e9d5ff', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '↔ Arb + Middle: profit is locked in either way, and if ' + arb.middleWindowText + ' both bets win' + (arb.middleWindowProb != null ? ' (about ' + Math.round(arb.middleWindowProb * 100) + '% chance by the market\'s own prices).' : '.')),
           arb.verify && arb.verify.level === 'review' && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '⚠ Verify on the book before staking: ' + arb.verify.reasons.join(' · ')),
           Object.entries(marketGroups).map(([mktLabel, outs]) =>
             e('div', { key: mktLabel },
