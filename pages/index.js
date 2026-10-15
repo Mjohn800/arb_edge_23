@@ -1727,6 +1727,91 @@ function middleArbsAsArbs(middles) {
   return out;
 }
 
+// ── GOALS ACCUMULATOR ───────────────────────────────────────────────────────
+// Suggests a slip of Over 1.5 goals picks from high-scoring leagues. An accumulator must be placed on ONE
+// bookmaker, so each slip is priced at a single book that quotes every leg. Win chances come from the market
+// itself (Over/Under 1.5 de-vigged per book, median across books), never from outside tips. Each extra leg
+// multiplies the bookmaker's margin too, so the expected value is almost always negative: the section shows
+// that cost instead of hiding it.
+const GOALS_LEAGUES = new Set(['soccer_uefa_europa_league', 'soccer_usa_mls', 'soccer_uefa_champs_league', 'soccer_uefa_europa_conference_league', 'soccer_germany_bundesliga', 'soccer_efl_champ']);
+const GOALS_WINDOW_MS = 48 * 3600 * 1000; // games kicking off within the next 48h
+const GOALS_MAX_LEGS = 8;
+function findGoalsPicks(events, mode = 'global', userRegion = null) {
+  const picks = [];
+  const now = Date.now();
+  const med = arr => { const a = [...arr].sort((p, q) => p - q); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+  for (const ev of events) {
+    if (!GOALS_LEAGUES.has(ev.sport_key)) continue;
+    const t = Date.parse(ev.commence_time);
+    if (!(t > now && t - now <= GOALS_WINDOW_MS)) continue;
+    const perBook = {};
+    for (const bm of (ev.bookmakers || [])) {
+      if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
+      for (const mkt of (bm.markets || [])) {
+        if ((mkt.key !== 'totals' && mkt.key !== 'alternate_totals') || totalsVariant(mkt) !== 'fulltime') continue;
+        for (const o of (mkt.outcomes || [])) {
+          if (typeof o.point !== 'number' || Math.abs(o.point - 1.5) > 1e-9 || !(o.price > 1)) continue;
+          const side = String(o.name || '').trim().toLowerCase();
+          if (side !== 'over' && side !== 'under') continue;
+          const b = (perBook[bm.key] = perBook[bm.key] || { book: bm.key, bookName: bookLabel(bm), over: new Set(), under: new Set(), updatedMs: null, fixtureUrl: bm.fixturePath || null });
+          b[side].add(o.price);
+          const ts = parseQuoteTime(mkt.last_update || bm.last_update);
+          if (ts != null) b.updatedMs = Math.max(b.updatedMs || 0, ts);
+        }
+      }
+    }
+    // A book quoting the same side at two prices is ambiguous (feed leaked another market): ignore that side.
+    let rows = Object.values(perBook).map(b => ({ ...b, over: b.over.size === 1 ? [...b.over][0] : null, under: b.under.size === 1 ? [...b.under][0] : null }));
+    rows = rows.filter(r => r.over != null);
+    if (rows.length < 2) continue; // need a second book to cross-check the price
+    // Drop an Over price more than 10% above what the other books offer: far more often a wrong price than a gift.
+    rows = rows.filter(r => { const others = rows.filter(x => x !== r).map(x => x.over); return !(others.length && r.over > med(others) * 1.10); });
+    if (rows.length < 2) continue;
+    const fair = rows.filter(r => r.under != null).map(r => (1 / r.over) / (1 / r.over + 1 / r.under));
+    if (!fair.length) continue; // no book gave both sides, so the margin can't be removed
+    const fairProb = med(fair);
+    picks.push({
+      id: ev.id + '_o15',
+      sport: ev.sport_key,
+      match: ev.home_team + ' vs ' + ev.away_team,
+      commenceTime: ev.commence_time,
+      fairProb: parseFloat(fairProb.toFixed(4)),
+      quotes: rows.map(r => ({ book: r.book, bookName: r.bookName, price: r.over, updatedMs: r.updatedMs, fixtureUrl: r.fixtureUrl })).sort((a, b) => b.price - a.price),
+    });
+  }
+  return picks.sort((a, b) => b.fairProb - a.fairProb);
+}
+
+// One slip per bookmaker: the same likeliest games for every book (at most 2 per league first, so it spreads
+// across leagues), priced at that book. Starts at nGames legs and adds legs (up to GOALS_MAX_LEGS) until the
+// combined odds reach targetOdds. Slips that reach the target rank first, then by estimated EV.
+function buildGoalsSlips(picks, nGames, targetOdds) {
+  const books = {};
+  for (const p of picks) for (const q of p.quotes) books[q.book] = q.bookName;
+  const slips = [];
+  for (const [bk, bookName] of Object.entries(books)) {
+    const avail = picks.filter(p => p.quotes.some(q => q.book === bk)); // already sorted by fairProb desc
+    if (avail.length < 2) continue;
+    const perLeague = {};
+    const ordered = [];
+    for (const p of avail) { perLeague[p.sport] = (perLeague[p.sport] || 0) + 1; if (perLeague[p.sport] <= 2) ordered.push(p); }
+    for (const p of avail) if (!ordered.includes(p)) ordered.push(p);
+    const legs = [];
+    let combined = 1;
+    for (const p of ordered) {
+      if (legs.length >= GOALS_MAX_LEGS) break;
+      if (legs.length >= nGames && combined >= targetOdds) break;
+      const q = p.quotes.find(x => x.book === bk);
+      legs.push({ pick: p, quote: q });
+      combined *= q.price;
+    }
+    if (legs.length < 2) continue;
+    const chance = legs.reduce((sum, l) => sum * l.pick.fairProb, 1);
+    slips.push({ book: bk, bookName, legs, combined: parseFloat(combined.toFixed(2)), chance, evPct: parseFloat(((chance * combined - 1) * 100).toFixed(1)), reachedTarget: combined >= targetOdds });
+  }
+  return slips.sort((a, b) => (b.reachedTarget - a.reachedTarget) || (b.evPct - a.evPct));
+}
+
 const MIN_MIDDLE_EV_PCT = -2; // default view hides middles estimated worse than this (%), unless they are arbs
 const MIN_WINDOW_PROB = 0.10; // a middle must land at least ~1 in 10 by the market's own pricing
 // Arbs first; then by estimated EV (probability-weighted, from the match's own ladder);
@@ -2021,7 +2106,7 @@ function saveSnapshot(uid, snap) {
   const put = s => { try { localStorage.setItem(snapKey(uid), JSON.stringify(s)); return true; } catch { return false; } };
   if (put(snap)) return;
   // Too big for the device's storage: keep the arbs and EV (what matters), drop the bulky lists.
-  put({ ...snap, middles: [], middlesWA: [], bestOdds: [], bestOddsWA: [], steam: [] });
+  put({ ...snap, middles: [], middlesWA: [], goalsPicks: [], goalsPicksWA: [], bestOdds: [], bestOddsWA: [], steam: [] });
 }
 
 function ArbEdgeApp({ session, onLogout }) {
@@ -2181,6 +2266,11 @@ useEffect(() => {
   const [recheckingId, setRecheckingId] = useState(null);
   const [middles, setMiddles] = useState(snap0 ? (snap0.middles || []) : []);
   const [middlesWA, setMiddlesWA] = useState(snap0 ? (snap0.middlesWA || []) : []); // West Africa middles — both legs accessible
+  const [goalsPicks, setGoalsPicks] = useState(snap0 ? (snap0.goalsPicks || []) : []);
+  const [goalsPicksWA, setGoalsPicksWA] = useState(snap0 ? (snap0.goalsPicksWA || []) : []);
+  const [goalsSection, setGoalsSection] = useState('global'); // 'global' | 'wa'
+  const [goalsGames, setGoalsGames] = useState(5);   // how many games the slip starts with
+  const [goalsTarget, setGoalsTarget] = useState(2); // minimum combined odds to reach
   const [middleSection, setMiddleSection] = useState('global'); // 'global' | 'wa'
   const [middleSort, setMiddleSort] = useState('ev'); // 'ev' = best estimated EV first, 'likely' = biggest chance of landing first
   const [showAllMiddles, setShowAllMiddles] = useState(false); // false = hide middles whose estimated EV is clearly negative
@@ -2646,6 +2736,10 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     const steamResult = findSteam(prevEventsRef.current, all);
     setMiddles(middlesGlobalResult);
     setMiddlesWA(middlesWAResult);
+    const goalsPicksGlobalResult = findGoalsPicks(all, 'global', regionNow);
+    const goalsPicksWAResult = findGoalsPicks(all, 'wa', regionNow);
+    setGoalsPicks(goalsPicksGlobalResult);
+    setGoalsPicksWA(goalsPicksWAResult);
     setSteam(steamResult);
     setBestOdds(bestOddsGlobalResult);
     setBestOddsWA(bestOddsWAResult);
@@ -2745,6 +2839,8 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
         evWA: foundEVWA,
         middles: middlesGlobalResult,
         middlesWA: middlesWAResult,
+        goalsPicks: goalsPicksGlobalResult,
+        goalsPicksWA: goalsPicksWAResult,
         steam: steamResult,
         bestOdds: bestOddsGlobalResult,
         bestOddsWA: bestOddsWAResult,
@@ -3769,7 +3865,7 @@ const analyzeArb = async (arb) => {
       ),
       // Sub-tab nav
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
-        [['lineshop', '🛒 Line Shopping'], ['middle', '↔ Middles'], ['steam', '💨 Steam']].map(([k, l]) =>
+        [['lineshop', '🛒 Line Shopping'], ['middle', '↔ Middles'], ['goals', '⚽ Goals Acca'], ['steam', '💨 Steam']].map(([k, l]) =>
           e('button', { key: k, onClick: () => setEdgeTab(k), style: { ...st.btn(edgeTab === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, l)
         )
       ),
@@ -3918,6 +4014,63 @@ const analyzeArb = async (arb) => {
       ),
 
       // ── STEAM CHASING ──
+      // ── GOALS ACCUMULATOR ──
+      edgeTab === 'goals' && e('div', null,
+        e('div', { style: { fontSize: 11, color: C.muted, background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '8px 10px', marginBottom: 10, lineHeight: 1.5 } },
+          '⚽ Over 1.5 goals picks from Champions League, Europa League, Conference League, Bundesliga, Championship and MLS, built into one slip at a single bookmaker. Chances are estimated from the books\' own Over/Under prices. An accumulator multiplies the bookmaker\'s margin as well as the odds, so the estimated EV is usually negative and no slip is a sure thing. Only stake what you can afford to lose.'),
+        e('div', { style: { display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' } },
+          [['global', '🌍 All books'], ['wa', isWAUserNow ? '🇬🇭 My books' : '📍 My region']].map(([k, l]) =>
+            e('button', { key: k, onClick: () => setGoalsSection(k), style: { ...st.btn(goalsSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, l)),
+          e('span', { style: { fontSize: 11, color: C.muted, marginLeft: 4 } }, 'Games'),
+          [3, 4, 5, 6].map(n => e('button', { key: 'g' + n, onClick: () => setGoalsGames(n), style: { ...st.btn(goalsGames === n ? 'primary' : 'outline'), fontSize: 11, padding: '5px 9px' } }, String(n))),
+          e('span', { style: { fontSize: 11, color: C.muted, marginLeft: 4 } }, 'Odds ≥'),
+          [2, 3, 5].map(n => e('button', { key: 't' + n, onClick: () => setGoalsTarget(n), style: { ...st.btn(goalsTarget === n ? 'primary' : 'outline'), fontSize: 11, padding: '5px 9px' } }, n + '.0'))
+        ),
+        (() => {
+          const pool = goalsSection === 'wa' ? goalsPicksWA : goalsPicks;
+          const slips = buildGoalsSlips(pool, goalsGames, goalsTarget);
+          if (slips.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
+            e('div', { style: { fontSize: 28, marginBottom: 8 } }, '⚽'),
+            e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No Over 1.5 slip available yet'),
+            e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, 'A pick needs Over 1.5 prices from at least two books, with both Over and Under, for a game starting in the next 48 hours. Select these leagues in ⚙ Sports and run a scan. Over 1.5 is only fed for some games, so few slips may appear.'));
+          const best = slips[0];
+          const others = slips.slice(1, 4);
+          return [
+            e('div', { key: 'best', style: { background: C.white, border: '1px solid ' + (best.reachedTarget ? C.green : '#fde68a'), borderRadius: 12, padding: '13px 14px', marginBottom: 10 } },
+              e('div', { style: st.cardRow },
+                e('div', null,
+                  e('div', { style: st.sportLabel }, '🏦 Best slip at ' + best.bookName),
+                  e('div', { style: st.matchTitle }, best.legs.length + ' games · Over 1.5 goals')
+                ),
+                e('div', { style: { textAlign: 'right' } },
+                  e('div', { style: { fontSize: 20, fontWeight: 800, color: best.reachedTarget ? C.greenDark : '#92400e' } }, best.combined.toFixed(2)),
+                  e('div', { style: { fontSize: 10, color: C.muted } }, 'combined odds')
+                )
+              ),
+              !best.reachedTarget && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 8 } }, 'Even with ' + best.legs.length + ' games the odds stay below ' + goalsTarget + '.0 at this book. Over 1.5 prices are short, so more games or a lower target is needed.'),
+              best.legs.map((l, i) => {
+                const info = getSportInfo(l.pick.sport);
+                return e('div', { key: l.pick.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 0', borderTop: i === 0 ? '1px solid #f1f5f9' : '1px solid #f1f5f9', marginTop: i === 0 ? 8 : 0 } },
+                  e('div', { style: { minWidth: 0 } },
+                    e('div', { style: { fontSize: 13, fontWeight: 600, color: C.text } }, l.pick.match),
+                    e('div', { style: { fontSize: 11, color: C.muted } }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(l.pick.commenceTime) + ' · ~' + Math.round(l.pick.fairProb * 100) + '% Over 1.5')
+                  ),
+                  e('div', { style: { fontSize: 14, fontWeight: 700, color: C.text, whiteSpace: 'nowrap' } }, 'Over 1.5 @ ' + l.quote.price.toFixed(2))
+                );
+              }),
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', fontSize: 12, marginTop: 8, paddingTop: 8, borderTop: '1px solid #f1f5f9' } },
+                e('span', { style: { fontWeight: 600 } }, 'All legs land: about ' + (best.chance * 100).toFixed(0) + '%'),
+                e('span', { style: { color: best.evPct >= 0 ? C.greenDark : '#b45309', fontWeight: 600 } }, 'Est. EV ' + (best.evPct > 0 ? '+' : '') + best.evPct + '%')
+              ),
+              e('div', { style: { fontSize: 10, color: C.muted, marginTop: 6, lineHeight: 1.5 } }, 'Prices were pulled at the last scan and can change. Check each Over 1.5 price on ' + best.bookName + ' before adding it to your slip.')
+            ),
+            others.length > 0 && e('div', { key: 'others', style: { fontSize: 12, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px', marginBottom: 10, lineHeight: 1.6 } },
+              e('div', { style: { fontWeight: 700, color: C.text, marginBottom: 2 } }, 'Same picks at other books'),
+              others.map(o => e('div', { key: o.book }, o.bookName + ': ' + o.legs.length + ' games, ' + o.combined.toFixed(2) + ' combined' + (o.reachedTarget ? '' : ' (below ' + goalsTarget + '.0)'))))
+          ];
+        })()
+      ),
+
       edgeTab === 'steam' && e('div', null,
         e('div', { style: { background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#92400e', lineHeight: 1.6 } },
           '💨 Steam moves are when sharp books (Pinnacle/Betfair) sharply shorten a line — indicating professional money has come in. Soft books that haven\'t updated yet represent the value. Steam is detected by comparing each scan to the previous one.'
