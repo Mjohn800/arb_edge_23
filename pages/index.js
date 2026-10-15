@@ -721,7 +721,7 @@ const ANCHOR_MAX_DEV = 0.05;
 const RANK_DEPTH = 3;
 const AGREE_TOL = 0.07;                // 7%: two books "agree" if their prices are within this of each other
 const DUP_RANK = 1;
-const FLAGGED_KEEP_MARGIN = 1;         // % — a flagged arb under this margin is kept as a hidden, viewable 'review' arb instead of being dropped
+const FLAGGED_KEEP_MARGIN = 4;         // % — a flagged arb up to this margin is kept (hidden but viewable, in the review or volatile band) instead of being dropped. Keep equal to VOLATILE_MAX_PROFIT
 const RANK_RULE_MIN_MARGIN = 0.6;     // % — arbs whose plain-best margin is <= this keep their plain best prices; the rank rule only applies above it
 const CLEAN_MIN_AGREE_NO_ANCHOR = 1;  // with no Pinnacle/Betfair price, every leg needs this many agreeing books to stay out of 'review'
 const MISLABEL_MARGIN = 2;             // % — a consensus-matching set that arbs by MORE than this is suspected of a mislabelled market
@@ -869,11 +869,12 @@ function minOddsFor(outs) {
 // Real arbs between books are usually small; a very large one is far more often a
 // bad price than a gift. So arbs above DEFAULT_MAX_PROFIT are hidden by default
 // (one tap shows them) — hidden, not deleted, so a genuine one is never lost.
-// Three bands by margin: stable (<= STABLE_MAX_PROFIT) is the default list; volatile (above that, up to
-// VOLATILE_MAX_PROFIT) sits behind its own 'Volatile arbs' link; above that stays hidden behind 'Show them'.
-// This is separate from the review tier, which is about failed cross-checks, not margin size.
+// Bands by margin: stable (<= STABLE_MAX_PROFIT) is the default list; review (above that, up to REVIEW_MAX_PROFIT) sits behind
+// 'Show review arbs'; volatile (above that, up to VOLATILE_MAX_PROFIT) sits behind 'Show volatile arbs', flagged prices
+// included; above that stays hidden behind 'Show them'. A smaller arb with a flagged or out-of-date price also goes to review.
 const STABLE_MAX_PROFIT = 0.6; // %
-const VOLATILE_MAX_PROFIT = 5; // %
+const REVIEW_MAX_PROFIT = 1; // %
+const VOLATILE_MAX_PROFIT = 4; // %
 const DEFAULT_MAX_PROFIT = VOLATILE_MAX_PROFIT; // %
 const FREE_MAX_PROFIT = 0.6; // % - free plan only sees arbs up to this size; bigger ones are Premium
 // Arb age = how long the same arb (same legs, same prices) has been seen in
@@ -1025,7 +1026,7 @@ function assessArb(slot, outs, margin, ev) {
     if (ratios.length >= MULTI_OUTLIER_MIN_LEGS) {
       return {
         level: 'excluded',
-        kind: 'multi-outlier',   // findArbs keeps these as 'review' (hidden, viewable) when the margin is under FLAGGED_KEEP_MARGIN
+        kind: 'multi-outlier',   // findArbs keeps these as 'review' (hidden, viewable) when the margin is within FLAGGED_KEEP_MARGIN
         reasons: [book + ' prices ' + ratios.length + ' legs of this market simultaneously at ' +
           ratios.map(r => '+' + Math.round((r - 1) * 100) + '%').join(' and ') +
           ' above consensus — a real repricing moves one side, not several unrelated outcomes at once; looks like broken data for this match on ' + book + ', not a real price'],
@@ -1322,10 +1323,10 @@ function findArbs(events, mode = 'global', userRegion = null) {
       if (imp < 1) {
         const margin = parseFloat((((1 - imp) / imp) * 100).toFixed(2));
         let verify = assessArb(slot, outs, margin, ev);
-        // Flagged arbs under FLAGGED_KEEP_MARGIN are never thrown away: a multi-outlier flag at this size stays in
-        // the hidden 'review' tier (viewable with "Show review arbs"). In-play stale-leg exclusions still drop, because
+        // Flagged arbs up to FLAGGED_KEEP_MARGIN (4%) are never thrown away: a multi-outlier flag at this size stays
+        // hidden but viewable, in the review band (0.6-1%) or the volatile band (1-4%) by margin. In-play stale-leg exclusions still drop, because
         // those prices genuinely cannot be bet together.
-        if (verify.level === 'excluded' && verify.kind === 'multi-outlier' && margin < FLAGGED_KEEP_MARGIN) verify = { level: 'review', reasons: verify.reasons };
+        if (verify.level === 'excluded' && verify.kind === 'multi-outlier' && margin <= FLAGGED_KEEP_MARGIN) verify = { level: 'review', reasons: verify.reasons };
         if (verify.level === 'excluded') { console.warn('[findArbs] excluded (multi-outlier)', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons); continue; }
         if (verify.level === 'review') console.warn('[findArbs] review flag', margin + '%', ev.home_team, 'vs', ev.away_team, slot.mktKey, slot.line, verify.reasons);
         // Per-book trust: a leg from a feed not yet verified for this market keeps the arb visible but moves it to 'review'.
@@ -1732,7 +1733,8 @@ function middleArbsAsArbs(middles) {
 // bookmaker, so each slip is priced at a single book that quotes every leg. Win chances come from the market
 // itself (Over/Under 1.5 de-vigged per book, median across books), never from outside tips. Each extra leg
 // multiplies the bookmaker's margin too, so the expected value is almost always negative: the section shows
-// that cost instead of hiding it.
+// that cost instead of hiding it. These are suggestions, not a price comparison, so ONE bookmaker quoting both sides
+// of the line is enough to suggest a game (SportyBet covers these lines when the odds-API free tier does not).
 const GOALS_LEAGUES = new Set(['soccer_uefa_europa_league', 'soccer_usa_mls', 'soccer_uefa_champs_league', 'soccer_uefa_europa_conference_league', 'soccer_germany_bundesliga', 'soccer_efl_champ']);
 const GOALS_WINDOW_MS = 48 * 3600 * 1000; // games kicking off within the next 48h
 const GOALS_MAX_LEGS = 8;
@@ -1765,10 +1767,11 @@ function findGoalsPicks(events, mode = 'global', userRegion = null, line = 1.5) 
     // A book quoting the same side at two prices is ambiguous (feed leaked another market): ignore that side.
     let rows = Object.values(perBook).map(b => ({ ...b, over: b.over.size === 1 ? [...b.over][0] : null, under: b.under.size === 1 ? [...b.under][0] : null }));
     rows = rows.filter(r => r.over != null);
-    if (rows.length < 2) continue; // need a second book to cross-check the price
-    // Drop an Over price more than 10% above what the other books offer: far more often a wrong price than a gift.
+    if (rows.length < 1) continue; // one book quoting the line is enough; there is nothing to compare
+    // Where several books quote the line, drop an Over price more than 10% above the rest: far more often a wrong price than a gift.
+    // With a single book there is nothing to compare against, so its price stands.
     rows = rows.filter(r => { const others = rows.filter(x => x !== r).map(x => x.over); return !(others.length && r.over > med(others) * 1.10); });
-    if (rows.length < 2) continue;
+    if (rows.length < 1) continue;
     const fair = rows.filter(r => r.under != null).map(r => (1 / r.over) / (1 / r.over + 1 / r.under));
     if (!fair.length) continue; // no book gave both sides, so the margin can't be removed
     const fairProb = med(fair);
@@ -2154,8 +2157,7 @@ const [selectedSports, setSelectedSports] = useState(() => {
   const [showSportPicker, setShowSportPicker] = useState(false);
   const [minMargin, setMinMargin] = useState(0);
   const [showHighProfit, setShowHighProfit] = useState(false);
-  const [showVolatile, setShowVolatile] = useState(false); // false = stable arbs (<= STABLE_MAX_PROFIT), true = volatile band
-  const [showReview, setShowReview] = useState(false); // review-tier arbs stay hidden unless opened
+  const [arbBand, setArbBand] = useState('stable'); // which band the list shows: 'stable' | 'review' | 'volatile'
   // user's active reports = their personal denylist (table arb_reports, see arb_reports.sql)
   const [reports, setReports] = useState([]);
   const [reportOpenId, setReportOpenId] = useState(null);
@@ -3120,9 +3122,14 @@ const analyzeArb = async (arb) => {
   // Default view: clean arbs, plus any arb whose legs were just re-fetched live and confirmed.
   const recheckFresh = a => recheck[a.id] && recheck[a.id].verdict === 'confirmed' && Date.now() - new Date(recheck[a.id].checkedAt).getTime() < CONFIRMED_FRESH_MS;
   const isShownByDefault = a => recheckFresh(a) || (a.tier !== 'review' && !isArbExpired(a));
-  const inBand = a => showVolatile ? a.margin > STABLE_MAX_PROFIT : a.margin <= STABLE_MAX_PROFIT;
-  const hiddenReview = arbsBase.filter(a => !isDenied(a) && !isShownByDefault(a) && inBand(a)).length;
-
+  // Band by margin: stable <= 0.6%; review 0.6-1% (plus any smaller arb that is flagged or out of date); volatile 1-4%; high above that.
+  const bandOf = a => {
+    if (a.margin > VOLATILE_MAX_PROFIT) return 'high';
+    if (a.margin > REVIEW_MAX_PROFIT) return 'volatile';
+    if (a.margin > STABLE_MAX_PROFIT || !isShownByDefault(a)) return 'review';
+    return 'stable';
+  };
+  const inView = a => { const b = bandOf(a); return b === arbBand || (arbBand === 'volatile' && showHighProfit && b === 'high'); };
   const isFreePlan = plan.loaded && !plan.isPremium && !plan.isOwner;
   const profitCap = isFreePlan ? FREE_MAX_PROFIT : (showHighProfit ? Infinity : DEFAULT_MAX_PROFIT);
 
@@ -3132,8 +3139,7 @@ const analyzeArb = async (arb) => {
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
     if (isDenied(a)) return false;
     if (a.margin > profitCap) return false;
-    if (!inBand(a)) return false;
-    if (!showReview && !isShownByDefault(a)) return false;
+    if (!inView(a)) return false;
     if (accessOnly && !isFullyAccessible(a.outcomes, userRegion)) return false;
     if (arbSection === 'global' && isFullyAccessible(a.outcomes, userRegion)) return false;
     return a.margin >= minMargin;
@@ -3144,8 +3150,7 @@ const analyzeArb = async (arb) => {
   const sameFilters = a => {
     if (isDenied(a)) return false;
     if (a.margin > profitCap) return false;
-    if (!inBand(a)) return false;
-    if (!showReview && !isShownByDefault(a)) return false;
+    if (!inView(a)) return false;
     if (groupFilter !== 'all') { const g = SPORT_GROUPS.find(g => g.group === groupFilter); if (g && !g.sports.some(s => s.key === a.sport)) return false; }
     if (wayFilter === '2' && a.outcomes.length !== 2) return false;
     if (wayFilter === '3' && a.outcomes.length !== 3) return false;
@@ -3156,23 +3161,25 @@ const analyzeArb = async (arb) => {
 
   const hiddenHighProfit = arbsBase.filter(a => !isDenied(a) && a.margin > (isFreePlan ? FREE_MAX_PROFIT : DEFAULT_MAX_PROFIT)).length;
   const hiddenByReports = arbsBase.filter(a => isDenied(a)).length;
-  const volatileCount = isFreePlan ? 0 : arbsBase.filter(a => !isDenied(a) && a.margin > STABLE_MAX_PROFIT && a.margin <= VOLATILE_MAX_PROFIT && (showReview || isShownByDefault(a))).length;
+  // How many arbs sit in each band (every filter except the band itself), so each link shows what is behind it.
+  const bandCount = { stable: 0, review: 0, volatile: 0, high: 0 };
+  arbsBase.forEach(a => { if (!isDenied(a) && a.margin <= (isFreePlan ? FREE_MAX_PROFIT : Infinity)) bandCount[bandOf(a)]++; });
+  const arbWord = n => n + ' arb' + (n === 1 ? '' : 's');
   const calc = sel ? calcStakes(sel.outcomes, stake) : null;
 
   // ── KEY FIX: use named import instead of React.createElement
   const e = createElement;
   // One quiet notes box for everything that is hidden or filtered, instead of a stack of coloured banners.
-  const noteLink = (label, fn) => e('a', { key: label, href: '#', style: { fontWeight: 700, color: C.text }, onClick: ev => { ev.preventDefault(); fn(); } }, label);
+  const noteLink = (label, fn) => e('a', { key: label, href: '#', style: { fontWeight: 700, color: '#b45309', textDecoration: 'underline' }, onClick: ev => { ev.preventDefault(); fn(); } }, label);
   const noteRows = [];
-  if (!isFreePlan && (volatileCount > 0 || showVolatile)) noteRows.push(showVolatile
-    ? ['Volatile arbs: +' + STABLE_MAX_PROFIT + '% to +' + VOLATILE_MAX_PROFIT + '%. Margins this size close fast and are more often a stale or wrong price than a real edge, so check both legs on the books before staking. ', noteLink('Back to stable arbs', () => setShowVolatile(false))]
-    : [volatileCount + ' volatile arb' + (volatileCount === 1 ? '' : 's') + ' between +' + STABLE_MAX_PROFIT + '% and +' + VOLATILE_MAX_PROFIT + '%. ', noteLink('Show volatile arbs', () => setShowVolatile(true))]);
-  if (hiddenReview > 0 || showReview) noteRows.push(!showReview
-    ? [hiddenReview + ' arb' + (hiddenReview === 1 ? '' : 's') + ' hidden: not enough cross-checks or a flagged price. ', noteLink('Show review arbs', () => setShowReview(true))]
-    : ['Showing review arbs: verify every leg on the book before staking. ', noteLink('Hide again', () => setShowReview(false))]);
+  const backToStable = noteLink('Back to stable arbs', () => setArbBand('stable'));
+  if (arbBand === 'review') noteRows.push(['Review arbs: +' + STABLE_MAX_PROFIT + '% to +' + REVIEW_MAX_PROFIT + '%, plus any smaller arb with a flagged or out-of-date price. Check both legs on the books before staking. ', backToStable]);
+  if (arbBand === 'volatile') noteRows.push(['Volatile arbs: +' + REVIEW_MAX_PROFIT + '% to +' + VOLATILE_MAX_PROFIT + '%, flagged prices included. Margins this size close fast and are more often a stale or wrong price than a real edge, so check both legs on the books before staking. ', backToStable]);
+  if (arbBand !== 'review' && bandCount.review > 0) noteRows.push([arbWord(bandCount.review) + ' to review: +' + STABLE_MAX_PROFIT + '% to +' + REVIEW_MAX_PROFIT + '%, or a flagged price. ', noteLink('Show review arbs', () => setArbBand('review'))]);
+  if (!isFreePlan && arbBand !== 'volatile' && bandCount.volatile > 0) noteRows.push([arbWord(bandCount.volatile) + ' volatile: +' + REVIEW_MAX_PROFIT + '% to +' + VOLATILE_MAX_PROFIT + '%. ', noteLink('Show volatile arbs', () => setArbBand('volatile'))]);
   if (isFreePlan && hiddenHighProfit > 0) noteRows.push([hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + FREE_MAX_PROFIT + '% ' + (hiddenHighProfit === 1 ? 'is' : 'are') + ' Premium only. ', noteLink('Go Premium', () => startCheckout('prepaid'))]);
-  if (!isFreePlan && showVolatile && hiddenHighProfit > 0 && !showHighProfit) noteRows.push([hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden: that size is far more often a bad price than a real edge. ', noteLink('Show them', () => setShowHighProfit(true))]);
-  if (!isFreePlan && showVolatile && showHighProfit) noteRows.push(['Showing arbs above +' + DEFAULT_MAX_PROFIT + '%: treat each as unverified until checked on the book. ', noteLink('Hide again', () => setShowHighProfit(false))]);
+  if (!isFreePlan && arbBand === 'volatile' && hiddenHighProfit > 0 && !showHighProfit) noteRows.push([hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden: that size is far more often a bad price than a real edge. ', noteLink('Show them', () => setShowHighProfit(true))]);
+  if (!isFreePlan && arbBand === 'volatile' && showHighProfit) noteRows.push(['Showing arbs above +' + DEFAULT_MAX_PROFIT + '%: treat each as unverified until checked on the book. ', noteLink('Hide again', () => setShowHighProfit(false))]);
   if (hiddenByReports > 0) noteRows.push([hiddenByReports + ' arb' + (hiddenByReports === 1 ? '' : 's') + ' hidden because you reported them.']);
   const arbNotes = noteRows.length > 0 && e('div', { style: { fontSize: 12, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '2px 12px', marginBottom: 10, lineHeight: 1.5 } },
     noteRows.map((r, i) => e('div', { key: i, style: { padding: '8px 0', borderTop: i ? '1px solid #e2e8f0' : 'none' } }, ...r)));
@@ -3448,8 +3455,8 @@ const analyzeArb = async (arb) => {
       selectedSports.length === 0 && e('div', { style: { background: '#fefce8', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
         'No sports selected yet. Tap Sports above and pick the leagues you want to scan' + (isFreePlan ? ' (the free plan includes EPL, La Liga, Bundesliga and Serie A).' : '.')),
       filteredArbs.length === 0 && !loading && !error && selectedSports.length > 0 && e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
-        e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No arbitrage opportunities right now'),
-        e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, 'We scan again automatically every 5 minutes.')
+        e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, noteRows.length > 0 ? 'No stable arbitrage opportunities right now' : 'No arbitrage opportunities right now'),
+        e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, noteRows.length > 0 ? 'Riskier arbs may be listed below. We scan again automatically every 5 minutes.' : 'We scan again automatically every 5 minutes.')
       ),
  arbNotes,
  filteredArbs.map(arb => {
@@ -4035,13 +4042,13 @@ const analyzeArb = async (arb) => {
           const fmtT = ms => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           const coverage = e('div', { key: 'cov', style: { fontSize: 11, color: C.muted, marginBottom: 10, lineHeight: 1.5 } },
             cov
-              ? 'Scanned ' + cov.games + ' upcoming game' + (cov.games === 1 ? '' : 's') + ' in these leagues; ' + cov.withLine + ' ha' + (cov.withLine === 1 ? 's' : 've') + ' Over ' + goalsLine + ' prices from at least two books.' + (goalsData && goalsData.at ? ' Last scan ' + fmtT(goalsData.at) + '.' : '')
+              ? 'Scanned ' + cov.games + ' upcoming game' + (cov.games === 1 ? '' : 's') + ' in these leagues; ' + cov.withLine + ' ha' + (cov.withLine === 1 ? 's' : 've') + ' Over ' + goalsLine + ' prices from at least one bookmaker.' + (goalsData && goalsData.at ? ' Last scan ' + fmtT(goalsData.at) + '.' : '')
               : 'Run a scan to load picks.');
           const slips = buildGoalsSlips(pool, goalsGames, goalsTarget);
           if (slips.length === 0) return [coverage, e('div', { key: 'empty', style: { textAlign: 'center', padding: '28px 16px', color: C.muted } },
             e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No Over ' + goalsLine + ' slip available yet'),
             e('div', { style: { fontSize: 12, lineHeight: 1.6 } },
-              'A slip needs at least two games in these leagues, in the next 48 hours, each with Over ' + goalsLine + ' and Under ' + goalsLine + ' prices from two or more books at one bookmaker.' + (goalsLine === '1.5' ? ' Over 1.5 prices come from a limited feed, so Over 2.5, which uses the main totals line, often has more games.' : ' Add these leagues under Sports and run a scan.')))];
+              'A slip needs at least two games in these leagues, in the next 48 hours, each with Over ' + goalsLine + ' and Under ' + goalsLine + ' prices from the same bookmaker.' + (goalsLine === '1.5' ? ' Try Over 2.5, which uses the main totals line and often has more games.' : ' Add these leagues under Sports and run a scan.')))];
           const best = slips[0];
           const others = slips.slice(1, 4);
           return [
@@ -4616,7 +4623,7 @@ const analyzeArb = async (arb) => {
           e('span', { style: { fontSize: 13, color: C.muted, lineHeight: 1.4 } }, item)
         )
       ),
-      e('div', { style: { background: C.amberLight, borderRadius: 10, padding: '11px 14px', marginTop: 16, fontSize: 12, color: '#78350f', lineHeight: 1.6 } },
+      e('div', { style: { background: C.amberLight, borderRadius: 10, padding: '11px 14px', marginTop: 40, fontSize: 12, color: '#78350f', lineHeight: 1.6 } },
         e('div', { style: { fontWeight: 700, marginBottom: 4 } }, 'Gamble Responsibly. Only 18+ Years. Gambling is Addictive.'),
         'ArbEdge is an odds-comparison tool — it does not accept bets or hold funds. All wagers are placed directly with licensed third-party sportsbooks. ',
         e('a', { href: '/terms', target: '_blank', style: { color: '#78350f', fontWeight: 700, textDecoration: 'underline' } }, 'Terms'),
@@ -4624,7 +4631,7 @@ const analyzeArb = async (arb) => {
         e('a', { href: '/privacy', target: '_blank', style: { color: '#78350f', fontWeight: 700, textDecoration: 'underline' } }, 'Privacy')
       )
     ),
-    e('div', { style: { marginTop: 24, padding: '16px 4px 28px', borderTop: '1px solid #e2e8f0', fontSize: 11, color: C.muted, lineHeight: 1.7, textAlign: 'center' } },
+    e('div', { style: { marginTop: 72, padding: '20px 4px 44px', borderTop: '1px solid #e2e8f0', fontSize: 11, color: C.muted, lineHeight: 1.7, textAlign: 'center' } },
       e('div', null, 'ArbEdge compares odds from bookmakers. It does not take bets or hold funds, and prices are refreshed about every 5 minutes, so they can change before you bet.'),
       e('div', null, '18+ only. Gamble responsibly.'),
       e('div', { style: { marginTop: 4 } },
