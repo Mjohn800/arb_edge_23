@@ -261,7 +261,7 @@ const ALL_SPORTS = SPORT_GROUPS.flatMap(g => g.sports);
 // it does not by itself decide value. A team drawing a lot historically only
 // matters if the market is currently pricing the draw below that tendency.
 //
-// ⚠️ Only soccer_epl is populated with verified 2025-26 W-D-L data right now.
+// Only soccer_epl is populated with verified 2025-26 W-D-L data right now.
 // La Liga / Bundesliga / Serie A / Ligue 1 are stubbed out below — add their
 // final W-D-L rows the same way (see EPL block) before relying on draw
 // context badges for those leagues. Until then getDrawStat() returns null
@@ -1736,21 +1736,23 @@ function middleArbsAsArbs(middles) {
 const GOALS_LEAGUES = new Set(['soccer_uefa_europa_league', 'soccer_usa_mls', 'soccer_uefa_champs_league', 'soccer_uefa_europa_conference_league', 'soccer_germany_bundesliga', 'soccer_efl_champ']);
 const GOALS_WINDOW_MS = 48 * 3600 * 1000; // games kicking off within the next 48h
 const GOALS_MAX_LEGS = 8;
-function findGoalsPicks(events, mode = 'global', userRegion = null) {
+function findGoalsPicks(events, mode = 'global', userRegion = null, line = 1.5) {
   const picks = [];
+  let gamesSeen = 0; // upcoming games in these leagues, with or without a usable price (shown as coverage)
   const now = Date.now();
   const med = arr => { const a = [...arr].sort((p, q) => p - q); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
   for (const ev of events) {
     if (!GOALS_LEAGUES.has(ev.sport_key)) continue;
     const t = Date.parse(ev.commence_time);
     if (!(t > now && t - now <= GOALS_WINDOW_MS)) continue;
+    gamesSeen++;
     const perBook = {};
     for (const bm of (ev.bookmakers || [])) {
       if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
       for (const mkt of (bm.markets || [])) {
         if ((mkt.key !== 'totals' && mkt.key !== 'alternate_totals') || totalsVariant(mkt) !== 'fulltime') continue;
         for (const o of (mkt.outcomes || [])) {
-          if (typeof o.point !== 'number' || Math.abs(o.point - 1.5) > 1e-9 || !(o.price > 1)) continue;
+          if (typeof o.point !== 'number' || Math.abs(o.point - line) > 1e-9 || !(o.price > 1)) continue;
           const side = String(o.name || '').trim().toLowerCase();
           if (side !== 'over' && side !== 'under') continue;
           const b = (perBook[bm.key] = perBook[bm.key] || { book: bm.key, bookName: bookLabel(bm), over: new Set(), under: new Set(), updatedMs: null, fixtureUrl: bm.fixturePath || null });
@@ -1771,7 +1773,8 @@ function findGoalsPicks(events, mode = 'global', userRegion = null) {
     if (!fair.length) continue; // no book gave both sides, so the margin can't be removed
     const fairProb = med(fair);
     picks.push({
-      id: ev.id + '_o15',
+      id: ev.id + '_o' + String(line).replace('.', ''),
+      line,
       sport: ev.sport_key,
       match: ev.home_team + ' vs ' + ev.away_team,
       commenceTime: ev.commence_time,
@@ -1779,7 +1782,9 @@ function findGoalsPicks(events, mode = 'global', userRegion = null) {
       quotes: rows.map(r => ({ book: r.book, bookName: r.bookName, price: r.over, updatedMs: r.updatedMs, fixtureUrl: r.fixtureUrl })).sort((a, b) => b.price - a.price),
     });
   }
-  return picks.sort((a, b) => b.fairProb - a.fairProb);
+  const sorted = picks.sort((a, b) => b.fairProb - a.fairProb);
+  sorted.cov = { games: gamesSeen, withLine: sorted.length };
+  return sorted;
 }
 
 // One slip per bookmaker: the same likeliest games for every book (at most 2 per league first, so it spreads
@@ -2106,7 +2111,7 @@ function saveSnapshot(uid, snap) {
   const put = s => { try { localStorage.setItem(snapKey(uid), JSON.stringify(s)); return true; } catch { return false; } };
   if (put(snap)) return;
   // Too big for the device's storage: keep the arbs and EV (what matters), drop the bulky lists.
-  put({ ...snap, middles: [], middlesWA: [], goalsPicks: [], goalsPicksWA: [], bestOdds: [], bestOddsWA: [], steam: [] });
+  put({ ...snap, middles: [], middlesWA: [], goalsData: null, bestOdds: [], bestOddsWA: [], steam: [] });
 }
 
 function ArbEdgeApp({ session, onLogout }) {
@@ -2246,8 +2251,8 @@ useEffect(() => {
   const [minEV, setMinEV] = useState(2);
   const [evStake, setEvStake] = useState(500);
   const [evFilter, setEvFilter] = useState('all');
-  const [drawOnly, setDrawOnly] = useState(false); // 🎯 Draw Value filter — +EV tab
-  const [reboundOnly, setReboundOnly] = useState(false); // 🔄 Form rebound filter — +EV tab
+  const [drawOnly, setDrawOnly] = useState(false); // Draw Value filter — +EV tab
+  const [reboundOnly, setReboundOnly] = useState(false); // Form rebound filter — +EV tab
   const [analyzerGames, setAnalyzerGames] = useState([]);
   const [analyzerLoading, setAnalyzerLoading] = useState(false);
   const [analyzerSportFilter, setAnalyzerSportFilter] = useState('all');
@@ -2266,8 +2271,8 @@ useEffect(() => {
   const [recheckingId, setRecheckingId] = useState(null);
   const [middles, setMiddles] = useState(snap0 ? (snap0.middles || []) : []);
   const [middlesWA, setMiddlesWA] = useState(snap0 ? (snap0.middlesWA || []) : []); // West Africa middles — both legs accessible
-  const [goalsPicks, setGoalsPicks] = useState(snap0 ? (snap0.goalsPicks || []) : []);
-  const [goalsPicksWA, setGoalsPicksWA] = useState(snap0 ? (snap0.goalsPicksWA || []) : []);
+  const [goalsData, setGoalsData] = useState(snap0 ? (snap0.goalsData || null) : null); // { global, wa, cov, at } keyed by line ('1.5' | '2.5')
+  const [goalsLine, setGoalsLine] = useState('1.5');
   const [goalsSection, setGoalsSection] = useState('global'); // 'global' | 'wa'
   const [goalsGames, setGoalsGames] = useState(5);   // how many games the slip starts with
   const [goalsTarget, setGoalsTarget] = useState(2); // minimum combined odds to reach
@@ -2736,10 +2741,10 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     const steamResult = findSteam(prevEventsRef.current, all);
     setMiddles(middlesGlobalResult);
     setMiddlesWA(middlesWAResult);
-    const goalsPicksGlobalResult = findGoalsPicks(all, 'global', regionNow);
-    const goalsPicksWAResult = findGoalsPicks(all, 'wa', regionNow);
-    setGoalsPicks(goalsPicksGlobalResult);
-    setGoalsPicksWA(goalsPicksWAResult);
+    const mkGoals = mode => { const o = {}, c = {}; for (const ln of [1.5, 2.5]) { const r = findGoalsPicks(all, mode, regionNow, ln); o[ln] = r; c[ln] = r.cov; } return { o, c }; };
+    const goalsG = mkGoals('global'), goalsW = mkGoals('wa');
+    const goalsDataResult = { global: goalsG.o, wa: goalsW.o, cov: { global: goalsG.c, wa: goalsW.c }, at: Date.now() };
+    setGoalsData(goalsDataResult);
     setSteam(steamResult);
     setBestOdds(bestOddsGlobalResult);
     setBestOddsWA(bestOddsWAResult);
@@ -2839,8 +2844,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
         evWA: foundEVWA,
         middles: middlesGlobalResult,
         middlesWA: middlesWAResult,
-        goalsPicks: goalsPicksGlobalResult,
-        goalsPicksWA: goalsPicksWAResult,
+        goalsData: goalsDataResult,
         steam: steamResult,
         bestOdds: bestOddsGlobalResult,
         bestOddsWA: bestOddsWAResult,
@@ -3157,12 +3161,27 @@ const analyzeArb = async (arb) => {
 
   // ── KEY FIX: use named import instead of React.createElement
   const e = createElement;
+  // One quiet notes box for everything that is hidden or filtered, instead of a stack of coloured banners.
+  const noteLink = (label, fn) => e('a', { key: label, href: '#', style: { fontWeight: 700, color: C.text }, onClick: ev => { ev.preventDefault(); fn(); } }, label);
+  const noteRows = [];
+  if (!isFreePlan && (volatileCount > 0 || showVolatile)) noteRows.push(showVolatile
+    ? ['Volatile arbs: +' + STABLE_MAX_PROFIT + '% to +' + VOLATILE_MAX_PROFIT + '%. Margins this size close fast and are more often a stale or wrong price than a real edge, so check both legs on the books before staking. ', noteLink('Back to stable arbs', () => setShowVolatile(false))]
+    : [volatileCount + ' volatile arb' + (volatileCount === 1 ? '' : 's') + ' between +' + STABLE_MAX_PROFIT + '% and +' + VOLATILE_MAX_PROFIT + '%. ', noteLink('Show volatile arbs', () => setShowVolatile(true))]);
+  if (hiddenReview > 0 || showReview) noteRows.push(!showReview
+    ? [hiddenReview + ' arb' + (hiddenReview === 1 ? '' : 's') + ' hidden: not enough cross-checks or a flagged price. ', noteLink('Show review arbs', () => setShowReview(true))]
+    : ['Showing review arbs: verify every leg on the book before staking. ', noteLink('Hide again', () => setShowReview(false))]);
+  if (isFreePlan && hiddenHighProfit > 0) noteRows.push([hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + FREE_MAX_PROFIT + '% ' + (hiddenHighProfit === 1 ? 'is' : 'are') + ' Premium only. ', noteLink('Go Premium', () => startCheckout('prepaid'))]);
+  if (!isFreePlan && showVolatile && hiddenHighProfit > 0 && !showHighProfit) noteRows.push([hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden: that size is far more often a bad price than a real edge. ', noteLink('Show them', () => setShowHighProfit(true))]);
+  if (!isFreePlan && showVolatile && showHighProfit) noteRows.push(['Showing arbs above +' + DEFAULT_MAX_PROFIT + '%: treat each as unverified until checked on the book. ', noteLink('Hide again', () => setShowHighProfit(false))]);
+  if (hiddenByReports > 0) noteRows.push([hiddenByReports + ' arb' + (hiddenByReports === 1 ? '' : 's') + ' hidden because you reported them.']);
+  const arbNotes = noteRows.length > 0 && e('div', { style: { fontSize: 12, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '2px 12px', marginBottom: 10, lineHeight: 1.5 } },
+    noteRows.map((r, i) => e('div', { key: i, style: { padding: '8px 0', borderTop: i ? '1px solid #e2e8f0' : 'none' } }, ...r)));
 
   return e('div', { style: st.app },
     e('div', { style: st.header },
       e('div', { style: st.logoRow },
         e('img', { src: '/favicon.svg', alt: 'ArbEdge', width: 36, height: 36, style: { width: 36, height: 36, borderRadius: 8, display: 'block', flexShrink: 0 } }),
-        e('div', null, e('div', { style: st.logoTitle }, 'ArbEdge'), e('div', { style: st.logoSub }, '\uD83C\uDF0D Global' + (isWAUserNow ? ' \u00B7 \uD83C\uDDEC\uD83C\uDDED West Africa' : '')))
+        e('div', null, e('div', { style: st.logoTitle }, 'ArbEdge'), e('div', { style: st.logoSub }, 'Global' + (isWAUserNow ? ' \u00B7 West Africa' : '')))
       ),
       e('div', { style: st.headerRow },
         e('span', { style: st.badge('#052e16', '#6ee7b7') }, loading ? '⟳ ' + scanProgress.sport + '...' : '● ' + filteredArbs.length + ' arbs'),
@@ -3191,7 +3210,7 @@ const analyzeArb = async (arb) => {
           )
     ),
     e('div', { style: st.tabs },
-      [['scanner','🔍 Scanner'], ['calculator','🧮 Calculator'], ['manual','✏️ Manual Arb'], ['ev','📈 +EV Bets'], ['edge','⚡ Edge Tools'], ['analyzer','🧠 Bet Analyzer'], ['tracker','📒 Bets (' + bets.length + ')'], ['cashout','💸 Cash Out'], ['earn','💰 Earn'], ['guide','📚 Guide']].map(([k, l]) =>
+      [['scanner','Scanner'], ['calculator','Calculator'], ['manual','Manual Arb'], ['ev','+EV Bets'], ['edge','Edge Tools'], ['analyzer','Bet Analyzer'], ['tracker','Bets (' + bets.length + ')'], ['cashout','Cash Out'], ['earn','Earn'], ['guide','Guide']].map(([k, l]) =>
         e('button', { key: k, style: st.tab(tab === k), onClick: () => setTab(k) }, l)
       )
     ),
@@ -3217,7 +3236,7 @@ const analyzeArb = async (arb) => {
 
       return [
         e('div', { key: 'intro', style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1e3a8a', lineHeight: 1.6 } },
-          '💸 A cash-out offer locks in a result early instead of waiting for the bet to settle. This compares the offer against the bet\u2019s actual expected value right now — bookmakers typically build in extra margin on top of the normal vig, so cash-out offers are very often below fair value. Holding is the higher-EV move on average, but it carries variance that cashing out removes entirely — that trade-off is a real, personal risk-tolerance call, not just a math answer.'
+          'A cash-out offer locks in a result early instead of waiting for the bet to settle. This compares the offer against the bet\u2019s actual expected value right now — bookmakers typically build in extra margin on top of the normal vig, so cash-out offers are very often below fair value. Holding is the higher-EV move on average, but it carries variance that cashing out removes entirely — that trade-off is a real, personal risk-tolerance call, not just a math answer.'
         ),
 
         pendingBets.length > 0 && e('div', { key: 'loader', style: { marginBottom: 14 } },
@@ -3266,8 +3285,8 @@ const analyzeArb = async (arb) => {
           offerN > 0 && margin !== null && e('div', { style: { background: margin > 0 ? '#fff7ed' : C.greenLight, border: '1px solid ' + (margin > 0 ? '#fed7aa' : C.green), borderRadius: 10, padding: '12px 14px' } },
             e('div', { style: { fontSize: 14, fontWeight: 700, color: margin > 0 ? '#9a3412' : C.greenDark, marginBottom: 4 } },
               margin > 0
-                ? '📉 Offer is ' + Math.abs(margin).toFixed(1) + '% below fair value — the book is keeping a cut to cash you out'
-                : '📈 Offer is ' + Math.abs(margin).toFixed(1) + '% above fair value — better than holding, in EV terms'
+                ? 'Offer is ' + Math.abs(margin).toFixed(1) + '% below fair value — the book is keeping a cut to cash you out'
+                : 'Offer is ' + Math.abs(margin).toFixed(1) + '% above fair value — better than holding, in EV terms'
             ),
             e('div', { style: { fontSize: 12, color: margin > 0 ? '#9a3412' : C.greenDark, lineHeight: 1.5 } },
               margin > 0
@@ -3278,7 +3297,7 @@ const analyzeArb = async (arb) => {
 
           // ── PARTIAL CASH OUT BREAKDOWN ────────────────────────────────────
           offerN > 0 && e('div', { key: 'partial', style: { background: '#1f2937', borderRadius: 12, padding: '14px', marginTop: 4 } },
-            e('div', { style: { fontSize: 13, fontWeight: 700, color: '#f9fafb', marginBottom: 4 } }, '⚖️ Partial Cash Out'),
+            e('div', { style: { fontSize: 13, fontWeight: 700, color: '#f9fafb', marginBottom: 4 } }, 'Partial Cash Out'),
             e('div', { style: { fontSize: 11, color: '#6b7280', marginBottom: 12, lineHeight: 1.5 } },
               'Cash out a portion now, let the rest ride. Drag to find your risk/reward sweet spot.'
             ),
@@ -3306,10 +3325,10 @@ const analyzeArb = async (arb) => {
             ),
             e('div', { style: { background: '#111827', borderRadius: 8, padding: '10px 12px', fontSize: 12, color: '#9ca3af', lineHeight: 1.6 } },
               partialPct === 0
-                ? '🎯 Holding everything. Full ' + currency + potentialPayout.toFixed(2) + ' payout if it wins, full ' + currency + stakeN.toFixed(2) + ' lost if not.'
+                ? 'Holding everything. Full ' + currency + potentialPayout.toFixed(2) + ' payout if it wins, full ' + currency + stakeN.toFixed(2) + ' lost if not.'
                 : partialPct === 100
-                ? '🔒 Full cash out. ' + currency + offerN.toFixed(2) + ' locked in, no further exposure.'
-                : '🔀 Cashing ' + partialPct + '% locks in ' + currency + partialCashNow.toFixed(2) + ' now. The remaining ' + (100 - partialPct) + '% of your stake (' + currency + partialStakeRiding.toFixed(2) + ') stays in play — if it wins you collect an extra ' + currency + partialWinPayout.toFixed(2) + ', if it loses you keep only the ' + currency + partialCashNow.toFixed(2) + ' you already took. Your worst-case is ' + currency + (partialCashNow - stakeN).toFixed(2) + ' vs a full loss of -' + currency + stakeN.toFixed(2) + ' holding.'
+                ? 'Full cash out. ' + currency + offerN.toFixed(2) + ' locked in, no further exposure.'
+                : 'Cashing ' + partialPct + '% locks in ' + currency + partialCashNow.toFixed(2) + ' now. The remaining ' + (100 - partialPct) + '% of your stake (' + currency + partialStakeRiding.toFixed(2) + ') stays in play — if it wins you collect an extra ' + currency + partialWinPayout.toFixed(2) + ', if it loses you keep only the ' + currency + partialCashNow.toFixed(2) + ' you already took. Your worst-case is ' + currency + (partialCashNow - stakeN).toFixed(2) + ' vs a full loss of -' + currency + stakeN.toFixed(2) + ' holding.'
             )
           )
         )
@@ -3319,10 +3338,10 @@ const analyzeArb = async (arb) => {
     // ── EARN: affiliate referral program manager ──
     tab === 'earn' && e('div', { style: st.section },
       e('div', { style: { background: '#fdf4ff', border: '1px solid #e9d5ff', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#6b21a8', lineHeight: 1.6 } },
-        '💰 Each book below runs its own official affiliate program — you earn a cut of what referred players generate, paid by the book itself, not through this app. Sign up directly with each program, then paste your personal link/code here just to keep them organized and easy to share.'
+        'Each book below runs its own official affiliate program — you earn a cut of what referred players generate, paid by the book itself, not through this app. Sign up directly with each program, then paste your personal link/code here just to keep them organized and easy to share.'
       ),
       e('div', { style: { background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#9a3412', lineHeight: 1.6 } },
-        '⚠️ Revenue-share commissions are a cut of what referred players lose, not just sign-ups — that\u2019s how every one of these programs works, not a quirk of one book. Every program also requires you to promote responsibly (no targeting minors, no exaggerated claims, no incentivizing problem gambling) — that\u2019s a condition of staying enrolled, not just good practice.'
+        'Revenue-share commissions are a cut of what referred players lose, not just sign-ups — that\u2019s how every one of these programs works, not a quirk of one book. Every program also requires you to promote responsibly (no targeting minors, no exaggerated claims, no incentivizing problem gambling) — that\u2019s a condition of staying enrolled, not just good practice.'
       ),
       EARN_PROGRAMS.map(p => {
         const ref = referrals[p.key] || { link: '', code: '' };
@@ -3351,11 +3370,11 @@ const analyzeArb = async (arb) => {
             ref.link && e('button', {
               onClick: () => navigator.clipboard && navigator.clipboard.writeText(ref.link),
               style: { ...st.btn('outline'), fontSize: 11, padding: '5px 10px' }
-            }, '📋 Copy link'),
+            }, 'Copy link'),
             e('a', {
               href: 'https://wa.me/?text=' + shareText, target: '_blank', rel: 'noopener noreferrer',
               style: { ...st.btn('success'), fontSize: 11, padding: '5px 10px', textDecoration: 'none' }
-            }, '📲 Share via WhatsApp')
+            }, 'Share via WhatsApp')
           )
         );
       })
@@ -3364,7 +3383,7 @@ const analyzeArb = async (arb) => {
       e('div', { style: st.metricsGrid },
         [
           ['All Arbs', filteredArbs.length, null],
-          ['🌍 Global', arbsGlobal.length, C.blue],
+          ['Global', arbsGlobal.length, C.blue],
           [myLabel, arbsWA.length, C.green],
           ['Next Scan', loading ? '...' : (nextScanAt && !loading ? (countdown > 0 ? Math.floor(countdown / 60) + ':' + String(countdown % 60).padStart(2, '0') : '0:00') : '—'), loading ? C.muted : countdown < 30 && countdown > 0 && !loading ? C.amber : C.text]
         ].map(([l, v, c]) =>
@@ -3373,13 +3392,13 @@ const analyzeArb = async (arb) => {
       ),
       // Region toggle
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 12 } },
-        [['all','🔍 All'], ['global','🌍 Global only'], ['wa',myLabelOnly]].map(([k,l]) =>
+        [['all','All'], ['global','Global only'], ['wa',myLabelOnly]].map(([k,l]) =>
           e('button', { key: k, onClick: () => setArbSection(k), style: { ...st.btn(arbSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, l)
         )
       ),
       isWAUserNow && (arbSection === 'wa' || arbSection === 'all') && e('div', {
         style: { background: '#dcfce7', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: C.greenDark }
-      }, '🇬🇭 Scanning 3 West Africa-accessible sportsbooks: SportyBet, Betway, 1xBet. More being added.'),
+      }, 'Scanning 3 West Africa-accessible sportsbooks: SportyBet, Betway, 1xBet. More being added.'),
       e('div', { style: { display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' } },
         e('select', { value: groupFilter, onChange: ev => setGroupFilter(ev.target.value), style: { ...st.input, width: 'auto', fontSize: 12, padding: '6px 10px' } },
           e('option', { value: 'all' }, 'All sports'),
@@ -3397,8 +3416,8 @@ const analyzeArb = async (arb) => {
     )
   )
 ),
-        e('button', { onClick: () => setAccessOnly(v => !v), style: { ...st.btn(accessOnly ? 'success' : 'outline'), fontSize: 12, padding: '6px 10px' } }, accessOnly ? '✓ Accessible only' : '🌍 All books'),
-        e('button', { onClick: () => setShowSportPicker(v => !v), style: { ...st.btn('outline'), fontSize: 12, padding: '6px 10px' } }, '⚙ Sports (' + selectedSports.length + ')')
+        e('button', { onClick: () => setAccessOnly(v => !v), style: { ...st.btn(accessOnly ? 'success' : 'outline'), fontSize: 12, padding: '6px 10px' } }, accessOnly ? '✓ Accessible only' : 'All books'),
+        e('button', { onClick: () => setShowSportPicker(v => !v), style: { ...st.btn('outline'), fontSize: 12, padding: '6px 10px' } }, 'Sports (' + selectedSports.length + ')')
       ),
       showSportPicker && e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 12, padding: 14, marginBottom: 14, maxHeight: 300, overflowY: 'auto' } },
         e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 10 } },
@@ -3427,27 +3446,12 @@ const analyzeArb = async (arb) => {
       error && e('div', { style: { background: '#fef3c7', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 } }, error),
         quota.remaining !== null && e('div', { style: { background: parseInt(quota.remaining) < 50 ? '#fef3c7' : '#f0fdf4', color: parseInt(quota.remaining) < 50 ? '#92400e' : '#14532d', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10, display: 'flex', justifyContent: 'space-between' } }, e('span', null, 'Key ' + (quota.keyIndex || 1) + ' | Used: ' + quota.used), e('span', { style: { fontWeight: 700 } }, quota.remaining + ' remaining')),
       selectedSports.length === 0 && e('div', { style: { background: '#fefce8', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
-        '👉 No sports selected yet. Tap ⚙ Sports above and pick the leagues you want to scan' + (isFreePlan ? ' (the free plan includes EPL, La Liga, Bundesliga and Serie A).' : '.')),
+        'No sports selected yet. Tap Sports above and pick the leagues you want to scan' + (isFreePlan ? ' (the free plan includes EPL, La Liga, Bundesliga and Serie A).' : '.')),
       filteredArbs.length === 0 && !loading && !error && selectedSports.length > 0 && e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
-        e('div', { style: { fontSize: 28, marginBottom: 10 } }, '✅'),
         e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No arbitrage opportunities right now'),
         e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, 'We scan again automatically every 5 minutes.')
       ),
- !isFreePlan && (volatileCount > 0 || showVolatile) && e('div', { style: { fontSize: 11, color: '#9a3412', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
-   showVolatile
-     ? e('div', null, '⚡ Volatile arbs: +' + STABLE_MAX_PROFIT + '% to +' + VOLATILE_MAX_PROFIT + '%. Margins this size close fast and are more often a stale or wrong price than a real edge, so check both legs on the books before staking. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowVolatile(false); } }, 'Back to stable arbs'))
-     : e('div', null, '⚡ ' + volatileCount + ' volatile arb' + (volatileCount === 1 ? '' : 's') + ' between +' + STABLE_MAX_PROFIT + '% and +' + VOLATILE_MAX_PROFIT + '%. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowVolatile(true); } }, 'Show volatile arbs'))
- ),
- (hiddenReview > 0 || showReview) && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
-   !showReview ? e('div', null, '🔍 ' + hiddenReview + ' arb' + (hiddenReview === 1 ? '' : 's') + ' hidden: not enough cross-checks or a flagged price. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(true); } }, 'Show review arbs'))
-     : e('div', null, 'Showing review arbs: verify every leg on the book before staking. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowReview(false); } }, 'Hide again'))
- ),
- ((isFreePlan && hiddenHighProfit > 0) || (!isFreePlan && showVolatile && (hiddenHighProfit > 0 || showHighProfit)) || hiddenByReports > 0) && e('div', { style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
-   isFreePlan && hiddenHighProfit > 0 && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + FREE_MAX_PROFIT + '% ' + (hiddenHighProfit === 1 ? 'is' : 'are') + ' Premium only. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); startCheckout('prepaid'); } }, 'Go Premium')),
-   !isFreePlan && showVolatile && hiddenHighProfit > 0 && !showHighProfit && e('div', null, '🔒 ' + hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden — that size is far more often a bad price than a real edge. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(true); } }, 'Show them')),
-   !isFreePlan && showVolatile && showHighProfit && e('div', null, 'Showing arbs above +' + DEFAULT_MAX_PROFIT + '% — treat each as unverified until checked on the book. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowHighProfit(false); } }, 'Hide again')),
-   hiddenByReports > 0 && e('div', null, '🚩 ' + hiddenByReports + ' arb' + (hiddenByReports === 1 ? '' : 's') + ' hidden because you reported them.')
- ),
+ arbNotes,
  filteredArbs.map(arb => {
         const info = getSportInfo(arb.sport);
         // Group outcomes by market so mixed-market arbs are easy to read
@@ -3461,23 +3465,23 @@ const analyzeArb = async (arb) => {
           e('div', { style: st.cardRow },
             e('div', null, e('div', { style: st.sportLabel }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(arb.commenceTime)), e('div', { style: st.matchTitle }, arb.match)),
             e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
-              !isFullyAccessible(arb.outcomes, userRegion) && e('span', { style: st.badge('#7f1d1d', '#fecaca') }, '🚫 Not all books accessible'),
+              !isFullyAccessible(arb.outcomes, userRegion) && e('span', { style: st.badge('#7f1d1d', '#fecaca') }, 'Not all books accessible'),
               e('span', { style: st.profitBadge(arb.margin) }, '+' + arb.margin.toFixed(1) + '%')
             )
           ),
-          arb.firstSeenMs && e('div', { style: { fontSize: 10, color: C.muted, marginTop: 4 } }, '⏳ Seen for ' + fmtAgeShort(Date.now() - arb.firstSeenMs)),
-          arb.firstSeenMs && arb.margin >= HIGH_MARGIN_REVIEW && (Date.now() - arb.firstSeenMs) >= PERSIST_SUSPICIOUS_MS && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '⚠ This arb has stayed open for ' + fmtAgeShort(Date.now() - arb.firstSeenMs) + '. Real edges of this size are usually closed within minutes — a price that never moves is more likely stale.'),
+          arb.firstSeenMs && e('div', { style: { fontSize: 10, color: C.muted, marginTop: 4 } }, 'Seen for ' + fmtAgeShort(Date.now() - arb.firstSeenMs)),
+          arb.firstSeenMs && arb.margin >= HIGH_MARGIN_REVIEW && (Date.now() - arb.firstSeenMs) >= PERSIST_SUSPICIOUS_MS && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, 'This arb has stayed open for ' + fmtAgeShort(Date.now() - arb.firstSeenMs) + '. Real edges of this size are usually closed within minutes — a price that never moves is more likely stale.'),
           e('div', { style: { fontSize: 11, marginTop: 6, fontWeight: 600, color: (recheck[arb.id] && recheck[arb.id].verdict === 'confirmed') ? C.greenDark : (arb.liveVerify ? '#1e3a8a' : '#92400e') } },
-            recheck[arb.id] && recheck[arb.id].verdict === 'confirmed' ? '✅ Verified live · ' + fmtAgeShort(Date.now() - new Date(recheck[arb.id].checkedAt).getTime()) + ' ago'
-            : recheck[arb.id] && recheck[arb.id].verdict ? '⚠️ Re-checked: see result below'
-            : arb.liveVerify ? '🔎 Live-checked at scan: ' + String(arb.liveVerify.status || 'checked').replace(/_/g, ' ')
-            : '⏳ Confirm each bookmaker before betting'),
+            recheck[arb.id] && recheck[arb.id].verdict === 'confirmed' ? 'Verified live · ' + fmtAgeShort(Date.now() - new Date(recheck[arb.id].checkedAt).getTime()) + ' ago'
+            : recheck[arb.id] && recheck[arb.id].verdict ? 'Re-checked: see result below'
+            : arb.liveVerify ? 'Live-checked at scan: ' + String(arb.liveVerify.status || 'checked').replace(/_/g, ' ')
+            : 'Confirm each bookmaker before betting'),
           arb.pulledAtMs && e('div', { style: { fontSize: 10, marginTop: 3, color: isArbExpired(arb) ? '#b91c1c' : C.muted, fontWeight: isArbExpired(arb) ? 700 : 400 } },
             isArbExpired(arb)
-              ? '⌛ Expired: prices pulled ' + new Date(arb.pulledAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + fmtAgeShort(Date.now() - arb.pulledAtMs) + ' ago). Rescan before using.'
-              : '🕒 Prices pulled ' + new Date(arb.pulledAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + fmtAgeShort(Date.now() - arb.pulledAtMs) + ' ago). A bookmaker can change a price after that.'),
-          arb.isMiddle && e('div', { style: { fontSize: 11, color: '#6b21a8', background: '#fdf4ff', border: '1px solid #e9d5ff', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '↔ Arb + Middle: profit is locked in either way, and if ' + arb.middleWindowText + ' both bets win' + (arb.middleWindowProb != null ? ' (about ' + Math.round(arb.middleWindowProb * 100) + '% chance by the market\'s own prices).' : '.')),
-          arb.verify && arb.verify.level === 'review' && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '⚠ Verify on the book before staking: ' + arb.verify.reasons.join(' · ')),
+              ? 'Expired: prices pulled ' + new Date(arb.pulledAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + fmtAgeShort(Date.now() - arb.pulledAtMs) + ' ago). Rescan before using.'
+              : 'Prices pulled ' + new Date(arb.pulledAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + fmtAgeShort(Date.now() - arb.pulledAtMs) + ' ago). A bookmaker can change a price after that.'),
+          arb.isMiddle && e('div', { style: { fontSize: 11, color: '#6b21a8', background: '#fdf4ff', border: '1px solid #e9d5ff', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, 'Arb + Middle: profit is locked in either way, and if ' + arb.middleWindowText + ' both bets win' + (arb.middleWindowProb != null ? ' (about ' + Math.round(arb.middleWindowProb * 100) + '% chance by the market\'s own prices).' : '.')),
+          arb.verify && arb.verify.level === 'review' && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, 'Verify on the book before staking: ' + arb.verify.reasons.join(' · ')),
           Object.entries(marketGroups).map(([mktLabel, outs]) =>
             e('div', { key: mktLabel },
               multiMarket && e('div', { style: { fontSize: 10, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginTop: 8, marginBottom: 4 } }, mktLabel),
@@ -3487,11 +3491,11 @@ const analyzeArb = async (arb) => {
                   e('div', { style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 1 } }, o.label),
                   e('div', { style: { fontSize: 12, color: C.muted, marginBottom: 1 } }, o.bookName),
                   o.srcLabel && e('div', { style: { fontSize: 9, lineHeight: 1.3, marginBottom: 1, color: (o.srcStart && Math.abs(new Date(o.srcStart) - new Date(arb.commenceTime)) > KICKOFF_DIFF_MS) ? '#b45309' : C.muted } },
-                    '📄 ' + o.srcLabel + ((o.srcStart && Math.abs(new Date(o.srcStart) - new Date(arb.commenceTime)) > KICKOFF_DIFF_MS) ? ' · kickoff ' + new Date(o.srcStart).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' ≠ other books' : '')),
-                  !isBookAccessible(o.book, userRegion) && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b91c1c', marginBottom: 1 } }, '🚫 Not accessible'),
+                    '' + o.srcLabel + ((o.srcStart && Math.abs(new Date(o.srcStart) - new Date(arb.commenceTime)) > KICKOFF_DIFF_MS) ? ' · kickoff ' + new Date(o.srcStart).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' ≠ other books' : '')),
+                  !isBookAccessible(o.book, userRegion) && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b91c1c', marginBottom: 1 } }, 'Not accessible'),
                   e('div', { style: { fontSize: 16, fontWeight: 700, color: C.green } }, o.odds.toFixed(2)),
                   o.minOdds && e('div', { style: { fontSize: 9, color: '#92400e', marginTop: 1 } }, 'bet only at ≥ ' + o.minOdds.toFixed(2)),
-                  o.feedVerified === false && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b45309', marginTop: 1 } }, '⚠ unverified feed'),
+                  o.feedVerified === false && e('div', { style: { fontSize: 9, fontWeight: 700, color: '#b45309', marginTop: 1 } }, 'unverified feed'),
                   typeof o.fairDev === 'number' && e('div', { style: { fontSize: 9, color: C.muted } }, (o.fairDev >= 0 ? '+' : '') + (o.fairDev * 100).toFixed(1) + '% vs sharp fair price'),
                   typeof o.updatedAt === 'number' && e('div', { style: { fontSize: 9, color: C.muted } }, (o.updatedKind === 'pull' ? 'fetched ' : 'price last changed ') + new Date(o.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
                   legManualLink(o, recheck[arb.id]) && e('a', { href: legManualLink(o, recheck[arb.id]), target: '_blank', rel: 'noopener noreferrer', onClick: ev => ev.stopPropagation(), style: { display: 'block', marginTop: 4, fontSize: 10, fontWeight: 700, color: '#1e3a8a', background: C.blueLight, border: '1px solid #bfdbfe', borderRadius: 6, padding: '3px 6px', textDecoration: 'none', textAlign: 'center' } }, 'Check price on ' + (o.bookName || '22Bet') + ' ↗'),
@@ -3502,26 +3506,26 @@ const analyzeArb = async (arb) => {
           ),
           sel && sel.id === arb.id && e('div', { style: { marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' } },
             e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →'),
-            e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); setReportOpenId(reportOpenId === arb.id ? null : arb.id); setReportStatus('idle'); } }, '🚩 Report'),
+            e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); setReportOpenId(reportOpenId === arb.id ? null : arb.id); setReportStatus('idle'); } }, 'Report'),
             e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis'),
-            arb.home && e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); recheckArb(arb); } }, recheckingId === arb.id ? 'Checking...' : '🔄 Re-check (uses API quota)')
+            arb.home && e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); recheckArb(arb); } }, recheckingId === arb.id ? 'Checking...' : 'Re-check (uses API quota)')
           ),
           recheck[arb.id] && e('div', { style: { marginTop: 10, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', fontSize: 12, lineHeight: 1.6 } },
             recheck[arb.id].error
-              ? e('div', { style: { color: '#dc2626' } }, '⚠️ ' + recheck[arb.id].error)
+              ? e('div', { style: { color: '#dc2626' } }, '' + recheck[arb.id].error)
               : e('div', null,
                   e('div', { style: { fontWeight: 700, marginBottom: 4 } },
-                    recheck[arb.id].verdict === 'confirmed' ? '✅ Confirmed live: +' + recheck[arb.id].freshMargin.toFixed(2) + '%'
-                    : recheck[arb.id].verdict === 'partial' ? '⚠️ Partly re-checked: +' + recheck[arb.id].freshMargin.toFixed(2) + '% (some legs could not be re-checked)'
-                    : recheck[arb.id].verdict === 'gone' ? '❌ Arb is gone at current prices (' + recheck[arb.id].freshMargin.toFixed(2) + '%)'
-                    : '❌ A leg is no longer offered or could not be fetched'),
+                    recheck[arb.id].verdict === 'confirmed' ? 'Confirmed live: +' + recheck[arb.id].freshMargin.toFixed(2) + '%'
+                    : recheck[arb.id].verdict === 'partial' ? 'Partly re-checked: +' + recheck[arb.id].freshMargin.toFixed(2) + '% (some legs could not be re-checked)'
+                    : recheck[arb.id].verdict === 'gone' ? 'Arb is gone at current prices (' + recheck[arb.id].freshMargin.toFixed(2) + '%)'
+                    : 'A leg is no longer offered or could not be fetched'),
                   recheck[arb.id].legs.map((l, li) => e('div', { key: li, style: { color: C.muted } },
                     l.label + ' · ' + l.book + ': ' + l.was.toFixed(2) + (l.now != null ? ' → ' + l.now.toFixed(2) : '') + ' (' + l.status.replace(/_/g, ' ') + ')')),
                   e('div', { style: { fontSize: 10, color: C.muted, marginTop: 4 } }, 'Checked ' + new Date(recheck[arb.id].checkedAt).toLocaleTimeString())
                 )
           ),
           reportOpenId === arb.id && e('div', { onClick: ev => ev.stopPropagation(), style: { marginTop: 10, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '10px 12px', fontSize: 12, lineHeight: 1.6 } },
-            e('div', { style: { fontWeight: 700, marginBottom: 6 } }, '🚩 What is wrong with this arb?'),
+            e('div', { style: { fontWeight: 700, marginBottom: 6 } }, 'What is wrong with this arb?'),
             e('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
               REPORT_REASONS.map(r => e('button', { key: r.key, style: { ...st.btn(reportReason === r.key ? 'primary' : 'outline'), fontSize: 11 }, onClick: () => { setReportReason(r.key); setReportStatus('idle'); } }, r.label))
             ),
@@ -3539,9 +3543,9 @@ const analyzeArb = async (arb) => {
           ),
           cardAnalysis[arb.id] && e('div', { style: { marginTop: 10, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 14px', fontSize: 12, lineHeight: 1.6 } },
             cardAnalysis[arb.id].error
-              ? e('div', { style: { color: '#dc2626' } }, '⚠️ ' + cardAnalysis[arb.id].error)
+              ? e('div', { style: { color: '#dc2626' } }, '' + cardAnalysis[arb.id].error)
               : e('div', null,
-                  e('div', { style: { fontWeight: 700, fontSize: 13, color: C.greenDark, marginBottom: 8 } }, '🤖 AI Analysis'),
+                  e('div', { style: { fontWeight: 700, fontSize: 13, color: C.greenDark, marginBottom: 8 } }, 'AI Analysis'),
                   (() => {
                     const ca = cardAnalysis[arb.id];
                     const cell = (kk, label, val, color) => val ? e('div', { key: kk, style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, label), e('div', { style: { fontWeight: 700, color } }, val)) : null;
@@ -3554,11 +3558,11 @@ const analyzeArb = async (arb) => {
                     return cells.length ? e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 } }, cells) : null;
                   })(),
                   cardAnalysis[arb.id].valueAssessment && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8, fontSize: 12, lineHeight: 1.5 } },
-                    e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, '⚖️ VALUE ASSESSMENT'),
+                    e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, 'VALUE ASSESSMENT'),
                     e('div', { style: { color: C.text } }, cardAnalysis[arb.id].valueAssessment)
                   ),
                   cardAnalysis[arb.id].form && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8 } },
-                    e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '📊 RECENT FORM'),
+                    e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, 'RECENT FORM'),
                     e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 4 } },
                       e('span', { style: { fontSize: 11, color: C.muted } }, 'Home:'),
                       e('span', { style: { fontWeight: 700, letterSpacing: 2 } }, cardAnalysis[arb.id].form.home)
@@ -3569,7 +3573,7 @@ const analyzeArb = async (arb) => {
                     )
                   ),
                   cardAnalysis[arb.id].goalsAvg && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8 } },
-                    e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '⚽ GOALS STATS (per 90)'),
+                    e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, 'GOALS STATS (per 90)'),
                     e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 } },
                       e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Home scored'), e('div', { style: { fontWeight: 700, color: C.green } }, cardAnalysis[arb.id].goalsAvg.homeScoredPer90)),
                       e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Home conceded'), e('div', { style: { fontWeight: 700, color: '#dc2626' } }, cardAnalysis[arb.id].goalsAvg.homeConceededPer90)),
@@ -3578,11 +3582,11 @@ const analyzeArb = async (arb) => {
                     )
                   ),
                   cardAnalysis[arb.id].h2h && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8, fontSize: 12, color: C.text } },
-                    e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, '🔁 HEAD TO HEAD'),
+                    e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, 'HEAD TO HEAD'),
                     e('div', null, cardAnalysis[arb.id].h2h)
                   ),
                   cardAnalysis[arb.id].additionalBets && e('div', { style: { marginBottom: 8 } },
-                    e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '💡 ADDITIONAL MARKETS'),
+                    e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, 'ADDITIONAL MARKETS'),
                     cardAnalysis[arb.id].additionalBets.map((bet, i) =>
                       e('div', { key: i, style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 6 } },
                         e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 3 } },
@@ -3594,7 +3598,7 @@ const analyzeArb = async (arb) => {
                     )
                   ),
                   e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '8px 10px', fontSize: 11, color: '#78350f' } },
-                    e('div', { style: { fontWeight: 700, marginBottom: 2 } }, '💬 ' + cardAnalysis[arb.id].tip),
+                    e('div', { style: { fontWeight: 700, marginBottom: 2 } }, '' + cardAnalysis[arb.id].tip),
                     e('div', null, cardAnalysis[arb.id].reasoning)
                   )
                 )
@@ -3604,7 +3608,6 @@ const analyzeArb = async (arb) => {
     ),
     tab === 'calculator' && e('div', { style: st.section },
       !sel ? e('div', { style: { textAlign: 'center', padding: '40px 0' } },
-        e('div', { style: { fontSize: 36, marginBottom: 10 } }, '📊'),
         e('div', { style: { fontSize: 14, fontWeight: 600, marginBottom: 6 } }, 'No opportunity selected'),
         e('div', { style: { fontSize: 13, color: C.muted, marginBottom: 16 } }, 'Go to Scanner and tap an arb first.'),
         e('button', { style: st.btn('primary'), onClick: () => setTab('scanner') }, '← Scanner')
@@ -3627,7 +3630,7 @@ const analyzeArb = async (arb) => {
             e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 3 } }, o.bookName + ' @ ' + o.odds.toFixed(2)),
             e('div', { style: { fontSize: 18, fontWeight: 700, color: C.text } }, currency + ' ' + calc.stakes[i].toFixed(2)),
             e('div', { style: { fontSize: 11, color: C.green } }, 'Returns ' + currency + ' ' + calc.returns[i].toFixed(2)),
-            BOOKS[o.book] && BOOKS[o.book].momo && e('div', { style: { fontSize: 10, color: C.amber, marginTop: 3 } }, '📱 MoMo'),
+            BOOKS[o.book] && BOOKS[o.book].momo && e('div', { style: { fontSize: 10, color: C.amber, marginTop: 3 } }, 'MoMo'),
             BOOKS[o.book] && BOOKS[o.book].licensed && e('div', { style: { fontSize: 10, color: C.green } }, '✓ GGC Licensed')
           ))
         ),
@@ -3636,13 +3639,13 @@ const analyzeArb = async (arb) => {
             e('div', { key: l, style: { textAlign: 'center' } }, e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 4 } }, l), e('div', { style: { fontSize: 16, fontWeight: 700, color: c } }, v))
           )
         ),
-        e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '10px 12px', marginTop: 12, fontSize: 12, color: '#78350f', lineHeight: 1.5 } }, '⚡ Place highest-odds leg first. You have seconds before odds change.'),
-        e('button', { style: { ...st.btn('primary'), marginTop: 12 }, onClick: () => logBet(sel.outcomes) }, '📒 Log this bet')
+        e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '10px 12px', marginTop: 12, fontSize: 12, color: '#78350f', lineHeight: 1.5 } }, 'Place highest-odds leg first. You have seconds before odds change.'),
+        e('button', { style: { ...st.btn('primary'), marginTop: 12 }, onClick: () => logBet(sel.outcomes) }, 'Log this bet')
       )
     ),
     tab === 'manual' && e('div', { style: st.section },
       e('div', { style: { background: C.purpleLight, border: '1px solid #c4b5fd', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: C.purple, lineHeight: 1.5 } },
-        '✏️ Use this tab to manually enter odds from Betano, MSport, SportyBet or any book not in the scanner. Enter the best odds you see on each book and the app will calculate if there is an arb and exactly how much to stake.'
+        'Use this tab to manually enter odds from Betano, MSport, SportyBet or any book not in the scanner. Enter the best odds you see on each book and the app will calculate if there is an arb and exactly how much to stake.'
       ),
       e('div', { style: { display: 'flex', gap: 8, marginBottom: 12 } },
         e('input', { value: manualMeta.match, onChange: ev => setManualMeta(p => ({ ...p, match: ev.target.value })), placeholder: 'Match name (e.g. Man Utd vs Liverpool)', style: { ...st.input, flex: 1 } })
@@ -3669,8 +3672,8 @@ const analyzeArb = async (arb) => {
       ),
       manualResult && e('div', { style: { background: C.white, border: '2px solid ' + (manualResult.margin > 0 ? '#00d4aa' : C.border), borderRadius: 12, padding: 14 } },
         manualResult.margin > 0
-          ? e('div', { style: { background: C.greenLight, color: C.greenDark, fontWeight: 700, fontSize: 14, padding: '8px 12px', borderRadius: 8, marginBottom: 12, textAlign: 'center' } }, '✅ ARB FOUND! +' + manualResult.margin.toFixed(2) + '% guaranteed profit')
-          : e('div', { style: { background: '#fef2f2', color: '#dc2626', fontWeight: 700, fontSize: 14, padding: '8px 12px', borderRadius: 8, marginBottom: 12, textAlign: 'center' } }, '❌ No arb — bookmaker margin is ' + Math.abs(manualResult.margin).toFixed(2) + '% against you'),
+          ? e('div', { style: { background: C.greenLight, color: C.greenDark, fontWeight: 700, fontSize: 14, padding: '8px 12px', borderRadius: 8, marginBottom: 12, textAlign: 'center' } }, 'ARB FOUND! +' + manualResult.margin.toFixed(2) + '% guaranteed profit')
+          : e('div', { style: { background: '#fef2f2', color: '#dc2626', fontWeight: 700, fontSize: 14, padding: '8px 12px', borderRadius: 8, marginBottom: 12, textAlign: 'center' } }, 'No arb — bookmaker margin is ' + Math.abs(manualResult.margin).toFixed(2) + '% against you'),
         e('div', { style: st.oddsGrid(manualResult.outcomes.length) },
           manualResult.outcomes.map((o, i) => e('div', { key: i, style: { ...st.oddsCell, border: '1px solid ' + C.border } },
             e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 2 } }, o.label),
@@ -3678,7 +3681,7 @@ const analyzeArb = async (arb) => {
             e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 4 } }, 'Odds: ' + o.odds.toFixed(2)),
             e('div', { style: { fontSize: 17, fontWeight: 700, color: C.text } }, currency + ' ' + manualResult.stakes[i].toFixed(2)),
             e('div', { style: { fontSize: 11, color: C.green } }, 'Returns ' + currency + ' ' + manualResult.returns[i].toFixed(2)),
-            BOOKS[o.book]?.momo && e('div', { style: { fontSize: 10, color: C.amber, marginTop: 3 } }, '📱 MoMo'),
+            BOOKS[o.book]?.momo && e('div', { style: { fontSize: 10, color: C.amber, marginTop: 3 } }, 'MoMo'),
             BOOKS[o.book]?.licensed && e('div', { style: { fontSize: 10, color: C.green } }, '✓ GGC Licensed')
           ))
         ),
@@ -3687,24 +3690,24 @@ const analyzeArb = async (arb) => {
             e('div', { key: l, style: { textAlign: 'center' } }, e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 4 } }, l), e('div', { style: { fontSize: 16, fontWeight: 700, color: c } }, v))
           )
         ),
-        manualResult.margin > 0 && e('button', { style: { ...st.btn('primary'), marginTop: 12, width: '100%' }, onClick: () => { setSel({ id: 'manual_' + Date.now(), match: manualMeta.match || 'Manual Arb', sport: manualMeta.sport, margin: manualResult.margin, outcomes: manualResult.outcomes }); logBet(manualResult.outcomes, manualMeta.match || 'Manual Arb', manualMeta.sport, parseFloat(manualResult.profit.toFixed(2))); } }, '📒 Log this bet')
+        manualResult.margin > 0 && e('button', { style: { ...st.btn('primary'), marginTop: 12, width: '100%' }, onClick: () => { setSel({ id: 'manual_' + Date.now(), match: manualMeta.match || 'Manual Arb', sport: manualMeta.sport, margin: manualResult.margin, outcomes: manualResult.outcomes }); logBet(manualResult.outcomes, manualMeta.match || 'Manual Arb', manualMeta.sport, parseFloat(manualResult.profit.toFixed(2))); } }, 'Log this bet')
       )
     ),
     tab === 'ev' && e('div', { style: st.section },
       e('div', { style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1e3a8a', lineHeight: 1.6 } },
-        '📈 +EV bets are NOT guaranteed profit. They are bets where the bookmaker\'s odds exceed the true probability — profitable long-term over hundreds of bets. 🌍 Global uses Pinnacle/Betfair as reference. 🇬🇭 West Africa uses Pinnacle/Betfair as reference too — but only shows bets on WA-accessible books. 🎯 Draw Value shows only +EV Draw bets, badged with trailing draw rate (EPL, La Liga, Bundesliga, Serie A verified; Ligue 1 pending). 🔄 Rebounds flags teams whose longer-run form is stronger than their last 10 games — needs match-history data not yet wired in, so it will show nothing until that\'s populated.'
+        '+EV bets are NOT guaranteed profit. They are bets where the bookmaker\'s odds exceed the true probability — profitable long-term over hundreds of bets. Global uses Pinnacle/Betfair as reference. West Africa uses Pinnacle/Betfair as reference too — but only shows bets on WA-accessible books. Draw Value shows only +EV Draw bets, badged with trailing draw rate (EPL, La Liga, Bundesliga, Serie A verified; Ligue 1 pending). Rebounds flags teams whose longer-run form is stronger than their last 10 games — needs match-history data not yet wired in, so it will show nothing until that\'s populated.'
       ),
       // Region section toggle
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
-        [['global','🌍 Global'], ['wa',myLabel]].map(([k,l]) =>
+        [['global','Global'], ['wa',myLabel]].map(([k,l]) =>
           e('button', { key: k, onClick: () => setEvSection(k), style: { ...st.btn(evSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '7px 14px' } }, l)
         )
       ),
       // Reference book info banner
       e('div', { style: { background: evSection === 'wa' ? '#dcfce7' : '#eff6ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: evSection === 'wa' ? C.greenDark : '#1e3a8a' } },
         (evSection === 'wa'
-          ? (isWAUserNow ? '🇬🇭 Using Pinnacle / Betfair as sharp reference — showing only WA-accessible books (Betway, SportyBet, Betano, MSport, 1xBet)' : 'Using Pinnacle / Betfair as sharp reference \u2014 showing only books available in your region.')
-          : '🌍 Using Pinnacle / Betfair as sharp reference — showing all books globally') + evDiagLine(evSection === 'wa' ? evDiagWA : evDiag)
+          ? (isWAUserNow ? 'Using Pinnacle / Betfair as sharp reference — showing only WA-accessible books (Betway, SportyBet, Betano, MSport, 1xBet)' : 'Using Pinnacle / Betfair as sharp reference \u2014 showing only books available in your region.')
+          : 'Using Pinnacle / Betfair as sharp reference — showing all books globally') + evDiagLine(evSection === 'wa' ? evDiagWA : evDiag)
       ),
       e('div', { style: st.metricsGrid },
         [
@@ -3730,11 +3733,11 @@ const analyzeArb = async (arb) => {
         e('button', {
           onClick: () => setDrawOnly(d => !d),
           style: { ...st.btn(drawOnly ? 'primary' : 'outline'), fontSize: 12, padding: '7px 12px' }
-        }, '🎯 Draw Value'),
+        }, 'Draw Value'),
         e('button', {
           onClick: () => setReboundOnly(r => !r),
           style: { ...st.btn(reboundOnly ? 'primary' : 'outline'), fontSize: 12, padding: '7px 12px' }
-        }, '🔄 Rebounds'),
+        }, 'Rebounds'),
       ),
       (() => {
         const activeBets = (evSection === 'wa' ? evWA : evBets)
@@ -3742,7 +3745,6 @@ const analyzeArb = async (arb) => {
           .filter(b => !drawOnly || b.isDraw)
           .filter(b => !reboundOnly || (b.formContext && b.formContext.isRebound));
         if (activeBets.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
-          e('div', { style: { fontSize: 28, marginBottom: 10 } }, drawOnly ? '🎯' : reboundOnly ? '🔄' : '✅'),
           e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } },
             drawOnly ? 'No +EV draws right now' : reboundOnly ? 'No rebound-signal bets right now' : 'No +EV opportunities right now'
           ),
@@ -3769,24 +3771,24 @@ const analyzeArb = async (arb) => {
                 e('div', { style: { fontSize: 13, color: C.text, marginTop: 3 } },
                   e('span', { style: { fontWeight: 700 } }, bet.outcome),
                   e('span', { style: { color: C.muted } }, ' · ' + bet.bookName),
-                  bet._wa && e('span', { style: { marginLeft: 6, fontSize: 11, background: C.greenLight, color: C.greenDark, padding: '1px 6px', borderRadius: 10 } }, '🇬🇭 WA'),
-                  bet.sharpBookCount > 1 && e('span', { style: { marginLeft: 6, fontSize: 11, background: '#ede9fe', color: '#6d28d9', padding: '1px 6px', borderRadius: 10 } }, '🎯 ' + bet.sharpBookCount + '-book consensus'),
+                  bet._wa && e('span', { style: { marginLeft: 6, fontSize: 11, background: C.greenLight, color: C.greenDark, padding: '1px 6px', borderRadius: 10 } }, 'WA'),
+                  bet.sharpBookCount > 1 && e('span', { style: { marginLeft: 6, fontSize: 11, background: '#ede9fe', color: '#6d28d9', padding: '1px 6px', borderRadius: 10 } }, '' + bet.sharpBookCount + '-book consensus'),
                   bet.isDraw && bet.drawContext && e('span', {
                     style: { marginLeft: 6, fontSize: 11, background: '#fef3c7', color: '#78350f', padding: '1px 6px', borderRadius: 10 },
                     title: (bet.drawContext.home ? bet.drawContext.home.draws + '/' + bet.drawContext.home.played + ' home team draws' : '') +
                            (bet.drawContext.away ? ' · ' + bet.drawContext.away.draws + '/' + bet.drawContext.away.played + ' away team draws' : '')
-                  }, '🤝 ' + (bet.drawContext.avgRate * 100).toFixed(0) + '% draw rate (' + bet.drawContext.season + ')'),
+                  }, '' + (bet.drawContext.avgRate * 100).toFixed(0) + '% draw rate (' + bet.drawContext.season + ')'),
                   bet.formContext && bet.formContext.isRebound && e('span', {
                     style: { marginLeft: 6, fontSize: 11, background: '#dbeafe', color: '#1e3a8a', padding: '1px 6px', borderRadius: 10 },
                     title: 'Baseline ' + bet.formContext.baselinePPG + ' PPG vs recent ' + bet.formContext.recentPPG + ' PPG over last ' + FORM_RECENT_WINDOW + ' games — market may still be pricing off the slump'
-                  }, '🔄 rebound signal (+' + bet.formContext.divergence + ' PPG)')
+                  }, 'rebound signal (+' + bet.formContext.divergence + ' PPG)')
                 )
               ),
               e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
                 e('span', { style: { background: '#eff6ff', color: '#1e40af', fontSize: 13, fontWeight: 700, padding: '4px 11px', borderRadius: 20 } }, '+' + bet.ev_pct.toFixed(1) + '% EV')
               )
             ),
-            bet.flag && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '⚠ ' + bet.flag),
+            bet.flag && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, '' + bet.flag),
             e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginTop: 4 } },
               [
                 ['Your odds', bet.odds.toFixed(2), C.green],
@@ -3813,9 +3815,9 @@ const analyzeArb = async (arb) => {
               )
             ),
           e('div', { style: { fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.4 } },
-            '⚠️ +EV is a long-run strategy. Any single bet can lose. The edge only shows over 100s of bets.'
+            '+EV is a long-run strategy. Any single bet can lose. The edge only shows over 100s of bets.'
           ),
-          e('button', { onClick: () => logEVBet(bet, kellyStake, expectedProfit), style: { ...st.btn('success'), marginTop: 8, width: '100%', fontSize: 12 } }, '📒 Log This Bet')
+          e('button', { onClick: () => logEVBet(bet, kellyStake, expectedProfit), style: { ...st.btn('success'), marginTop: 8, width: '100%', fontSize: 12 } }, 'Log This Bet')
         );
       }));
     })()
@@ -3824,7 +3826,7 @@ const analyzeArb = async (arb) => {
       // ── Scan Health Panel ───────────────────────────────────────────────────
       false && scanHealth && e('div', { style: { background: '#1f2937', borderRadius: 12, padding: '12px 14px', marginBottom: 14 } },
         e('div', { style: { fontSize: 13, fontWeight: 700, color: '#f9fafb', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
-          e('span', null, '🇬🇭 West Africa Scan Health'),
+          e('span', null, 'West Africa Scan Health'),
           e('span', { style: { fontSize: 11, color: '#6b7280' } }, new Date(scanHealth.scannedAt).toLocaleTimeString())
         ),
         e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 } },
@@ -3849,7 +3851,7 @@ const analyzeArb = async (arb) => {
           )
         ),
         scanHealth.arbDiag && e('div', { style: { marginTop: 10, background: '#111827', borderRadius: 8, padding: '8px 10px' } },
-          e('div', { style: { fontSize: 12, fontWeight: 700, color: '#f9fafb', marginBottom: 4 } }, '🔁 Duplicate odds'),
+          e('div', { style: { fontSize: 12, fontWeight: 700, color: '#f9fafb', marginBottom: 4 } }, 'Duplicate odds'),
           Object.keys(scanHealth.arbDiag.dups || {}).length === 0
             ? e('div', { style: { fontSize: 11, color: '#6ee7b7' } }, 'None in this scan: no book listed the same selection at several prices.')
             : Object.entries(scanHealth.arbDiag.dups).map(([k, d]) =>
@@ -3857,15 +3859,15 @@ const analyzeArb = async (arb) => {
                   e('div', { style: { fontWeight: 600 } }, ((BOOKS[k] && BOOKS[k].name) || k) + ': ' + d.groups + ' group' + (d.groups === 1 ? '' : 's') + ' (' + Object.entries(d.byMarket || {}).map(([m, n]) => m + ' ' + n).join(', ') + ')'),
                   (d.examples || []).map((x, i) => e('div', { key: i, style: { fontSize: 10, color: '#9ca3af', fontFamily: 'monospace', marginTop: 2, wordBreak: 'break-word' } }, x)))),
           Object.keys(scanHealth.arbDiag.unresolved || {}).length > 0 && e('div', { style: { marginTop: 8, fontSize: 11, color: '#f59e0b' } },
-            '⚠ Team names not resolved: ' + Object.entries(scanHealth.arbDiag.unresolved).map(([k, u]) => ((BOOKS[k] && BOOKS[k].name) || k) + ' ' + u.unresolved + (u.rescuedByOwnNames ? ' (' + u.rescuedByOwnNames + ' rescued)' : '')).join(', '))
+            'Team names not resolved: ' + Object.entries(scanHealth.arbDiag.unresolved).map(([k, u]) => ((BOOKS[k] && BOOKS[k].name) || k) + ' ' + u.unresolved + (u.rescuedByOwnNames ? ' (' + u.rescuedByOwnNames + ' rescued)' : '')).join(', '))
         ),
         scanHealth.eventsWithWACoverage === 0 && e('div', { style: { marginTop: 10, fontSize: 12, color: '#f59e0b', background: '#451a03', borderRadius: 8, padding: '8px 10px' } },
-          '⚠ No events had 2+ WA books priced. This means Betway/1xBet aren\'t appearing in the Odds API feed for your selected sports right now — likely off-season or those books aren\'t covered for the current leagues.'
+          'No events had 2+ WA books priced. This means Betway/1xBet aren\'t appearing in the Odds API feed for your selected sports right now — likely off-season or those books aren\'t covered for the current leagues.'
         )
       ),
       // Sub-tab nav
       e('div', { style: { display: 'flex', gap: 6, marginBottom: 14 } },
-        [['lineshop', '🛒 Line Shopping'], ['middle', '↔ Middles'], ['goals', '⚽ Goals Acca'], ['steam', '💨 Steam']].map(([k, l]) =>
+        [['lineshop', 'Line Shopping'], ['middle', 'Middles'], ['goals', 'Goals Acca'], ['steam', 'Steam']].map(([k, l]) =>
           e('button', { key: k, onClick: () => setEdgeTab(k), style: { ...st.btn(edgeTab === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, l)
         )
       ),
@@ -3873,23 +3875,22 @@ const analyzeArb = async (arb) => {
       // ── LINE SHOPPING ──
       edgeTab === 'lineshop' && e('div', null,
         e('div', { style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1e3a8a', lineHeight: 1.6 } },
-          '🛒 Line shopping shows the best available price for every outcome across all scanned bookmakers. Always bet at the highest odds available — even a 5% improvement in odds over hundreds of bets is the difference between losing and profiting.'
+          'Line shopping shows the best available price for every outcome across all scanned bookmakers. Always bet at the highest odds available — even a 5% improvement in odds over hundreds of bets is the difference between losing and profiting.'
         ),
         // Region section toggle
         e('div', { style: { display: 'flex', gap: 6, marginBottom: 10 } },
-          [['global','🌍 Global'], ['wa',myLabel]].map(([k,l]) =>
+          [['global','Global'], ['wa',myLabel]].map(([k,l]) =>
             e('button', { key: k, onClick: () => setLineshopSection(k), style: { ...st.btn(lineshopSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '7px 14px' } }, l)
           )
         ),
         e('div', { style: { background: lineshopSection === 'wa' ? '#dcfce7' : '#eff6ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: lineshopSection === 'wa' ? C.greenDark : '#1e3a8a' } },
           lineshopSection === 'wa'
-            ? (isWAUserNow ? '🇬🇭 Comparing only books accessible in West Africa (Betway, SportyBet, Betano, MSport, 1xBet) — gaps shown are bets you can actually place.' : regionFallbackText)
-            : '🌍 Comparing all scanned books worldwide, including books not accessible from West Africa.'
+            ? (isWAUserNow ? 'Comparing only books accessible in West Africa (Betway, SportyBet, Betano, MSport, 1xBet) — gaps shown are bets you can actually place.' : regionFallbackText)
+            : 'Comparing all scanned books worldwide, including books not accessible from West Africa.'
         ),
         (() => {
           const activeOdds = lineshopSection === 'wa' ? bestOddsWA : bestOdds;
           if (activeOdds.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
-            e('div', { style: { fontSize: 32, marginBottom: 8 } }, '🛒'),
             e('div', { style: { fontSize: 14 } },
               lineshopSection === 'wa'
                 ? (isWAUserNow ? 'No West Africa price gaps found yet. Run a scan, or odds may be aligned across WA books right now.' : 'No price gaps found yet among books available in your region. Run a scan.')
@@ -3914,7 +3915,7 @@ const analyzeArb = async (arb) => {
                   o.all.map((bk, idx) => {
                     const accessible = isBookAccessible(bk.book, userRegion);
                     return e('div', { key: bk.book, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', borderRadius: 8, background: idx === 0 ? C.greenLight : C.grayLight, opacity: accessible ? 1 : 0.55 } },
-                      e('span', { style: { fontSize: 12, color: idx === 0 ? C.greenDark : C.muted } }, bk.bookName + (accessible ? '' : ' 🚫')),
+                      e('span', { style: { fontSize: 12, color: idx === 0 ? C.greenDark : C.muted } }, bk.bookName + (accessible ? '' : ' ')),
                       e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                         e('span', { style: { fontSize: 14, fontWeight: 700, color: idx === 0 ? C.green : C.text } }, bk.odds.toFixed(2)),
                         idx === 0 && o.gap > 0 && e('span', { style: { fontSize: 11, fontWeight: 700, color: C.greenDark, background: C.greenLight, padding: '1px 6px', borderRadius: 10 } }, '★ Best'),
@@ -3933,23 +3934,22 @@ const analyzeArb = async (arb) => {
       // ── MIDDLE BETTING ──
       edgeTab === 'middle' && e('div', null,
         e('div', { style: { background: '#fdf4ff', border: '1px solid #e9d5ff', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#6b21a8', lineHeight: 1.6 } },
-          '↔ A middle is when two books offer different spread/total lines on the same game, creating a window of results where BOTH bets win. Outside the window one bet wins and one loses, and unless the prices are unusually good that is a small net loss. "Lands" is an estimate from the market\'s own prices, not a promise. Only bet what you can afford to lose.'
+          'A middle is when two books offer different spread/total lines on the same game, creating a window of results where BOTH bets win. Outside the window one bet wins and one loses, and unless the prices are unusually good that is a small net loss. "Lands" is an estimate from the market\'s own prices, not a promise. Only bet what you can afford to lose.'
         ),
         // Region section toggle
         e('div', { style: { display: 'flex', gap: 6, marginBottom: 10 } },
-          [['global','🌍 Global'], ['wa',myLabel]].map(([k,l]) =>
+          [['global','Global'], ['wa',myLabel]].map(([k,l]) =>
             e('button', { key: k, onClick: () => setMiddleSection(k), style: { ...st.btn(middleSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '7px 14px' } }, l)
           )
         ),
         e('div', { style: { background: middleSection === 'wa' ? '#dcfce7' : '#fdf4ff', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: middleSection === 'wa' ? C.greenDark : '#6b21a8' } },
           middleSection === 'wa'
-            ? (isWAUserNow ? '🇬🇭 Both legs must be on books accessible in West Africa (Betway, SportyBet, Betano, MSport, 1xBet) — every middle shown here is placeable.' : 'Both legs must be on books available in your region, so every middle shown here is placeable.')
-            : '🌍 Showing middles across all scanned books worldwide, including books not accessible from West Africa.'
+            ? (isWAUserNow ? 'Both legs must be on books accessible in West Africa (Betway, SportyBet, Betano, MSport, 1xBet) — every middle shown here is placeable.' : 'Both legs must be on books available in your region, so every middle shown here is placeable.')
+            : 'Showing middles across all scanned books worldwide, including books not accessible from West Africa.'
         ),
         (() => {
           const activeMiddles = middleSection === 'wa' ? middlesWA : middles;
           if (activeMiddles.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
-            e('div', { style: { fontSize: 32, marginBottom: 8 } }, '↔'),
             e('div', { style: { fontSize: 14 } },
               middleSection === 'wa'
                 ? (isWAUserNow ? 'No West Africa middles found yet. Run a scan — these need a price gap between two WA-accessible books.' : 'No middles found yet between books available in your region. Run a scan.')
@@ -3965,15 +3965,14 @@ const analyzeArb = async (arb) => {
             ? filteredMiddles.slice().sort((a, b) => (b.windowProb ?? -1) - (a.windowProb ?? -1))
             : filteredMiddles;
           const sortBar = e('div', { key: '__sort', style: { display: 'flex', gap: 6, marginBottom: 8 } },
-            [['ev', 'Best EV'], ['likely', '🎯 Most likely to land']].map(([k, l]) =>
+            [['ev', 'Best EV'], ['likely', 'Most likely to land']].map(([k, l]) =>
               e('button', { key: k, onClick: () => setMiddleSort(k), style: { ...st.btn(middleSort === k ? 'primary' : 'outline'), fontSize: 11, padding: '5px 10px' } }, l)));
           const banner = (hiddenWeak > 0 || showAllMiddles) && e('div', { key: '__weak', style: { fontSize: 11, color: '#334155', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginBottom: 8, lineHeight: 1.5 } },
             showAllMiddles
               ? e('span', null, 'Showing all middles, including ones with negative estimated EV. ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowAllMiddles(false); } }, 'Hide weak ones'))
-              : e('span', null, '🔒 ' + hiddenWeak + ' middle' + (hiddenWeak === 1 ? '' : 's') + ' hidden: estimated EV below ' + MIN_MIDDLE_EV_PCT + '% (the books\' margins cost more than the window can win back). ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowAllMiddles(true); } }, 'Show all')));
+              : e('span', null, '' + hiddenWeak + ' middle' + (hiddenWeak === 1 ? '' : 's') + ' hidden: estimated EV below ' + MIN_MIDDLE_EV_PCT + '% (the books\' margins cost more than the window can win back). ', e('a', { href: '#', style: { fontWeight: 700 }, onClick: ev => { ev.preventDefault(); setShowAllMiddles(true); } }, 'Show all')));
           if (shownMiddles.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
             banner,
-            e('div', { style: { fontSize: 32, marginBottom: 8 } }, '↔'),
             e('div', { style: { fontSize: 14 } }, 'No middles worth taking in this scan.')
           );
           return [sortBar, banner].concat(shownMiddles.map(m => {
@@ -3987,7 +3986,7 @@ const analyzeArb = async (arb) => {
                 e('div', { style: { fontSize: 12, color: C.muted, marginTop: 2 } }, m.type + ' · ' + m.team)
               ),
               e('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 } },
-                e('span', { style: { background: m.isArb ? C.greenLight : '#fdf4ff', color: m.isArb ? C.greenDark : '#7c3aed', fontSize: 13, fontWeight: 700, padding: '3px 10px', borderRadius: 16 } }, m.isArb ? '⚡ Arb+Middle' : (m.windowProb != null ? '🎯 ~' + Math.round(m.windowProb * 100) + '% lands' : '↔ ' + m.window + ' pt window')),
+                e('span', { style: { background: m.isArb ? C.greenLight : '#fdf4ff', color: m.isArb ? C.greenDark : '#7c3aed', fontSize: 13, fontWeight: 700, padding: '3px 10px', borderRadius: 16 } }, m.isArb ? 'Arb+Middle' : (m.windowProb != null ? '~' + Math.round(m.windowProb * 100) + '% lands' : '' + m.window + ' pt window')),
                 e('span', { style: { fontSize: 11, color: C.muted } }, m.isArb ? 'Guaranteed profit + middle chance' : (m.evPct != null ? 'Est. EV ' + (m.evPct > 0 ? '+' : '') + m.evPct + '%' : (parseFloat(overround) > 0 ? 'Cost: ' + overround + '% overround' : 'Near break-even')))
               )
             ),
@@ -3996,7 +3995,7 @@ const analyzeArb = async (arb) => {
                 const accessible = isBookAccessible(leg.book, userRegion);
                 return e('div', { key: i, style: { background: C.grayLight, borderRadius: 8, padding: '8px 10px', opacity: accessible ? 1 : 0.55 } },
                   e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 3 } }, 'Leg ' + (i + 1)),
-                  e('div', { style: { fontSize: 13, fontWeight: 700 } }, leg.bookName + (accessible ? '' : ' 🚫')),
+                  e('div', { style: { fontSize: 13, fontWeight: 700 } }, leg.bookName + (accessible ? '' : ' ')),
                   !accessible && e('div', { style: { fontSize: 10, fontWeight: 700, color: '#b91c1c' } }, 'Not accessible'),
                   e('div', { style: { fontSize: 12, color: C.muted } }, leg.side),
                   e('div', { style: { fontSize: 15, fontWeight: 700, color: C.green, marginTop: 2 } }, leg.odds.toFixed(2))
@@ -4004,9 +4003,9 @@ const analyzeArb = async (arb) => {
               })
             ),
             e('div', { style: { background: '#fdf4ff', borderRadius: 8, padding: '8px 10px', marginTop: 8, fontSize: 12, color: '#6b21a8' } },
-              (m.windowText ? '💡 If ' + m.windowText + ', both legs win. Otherwise one wins and the other loses (or pushes on a whole-number line).' : '💡 If the final margin falls between ' + Math.abs(m.legA.line) + ' and ' + Math.abs(m.legB.line) + ', both legs win. Otherwise one leg wins, one loses.'),
+              (m.windowText ? 'If ' + m.windowText + ', both legs win. Otherwise one wins and the other loses (or pushes on a whole-number line).' : 'If the final margin falls between ' + Math.abs(m.legA.line) + ' and ' + Math.abs(m.legB.line) + ', both legs win. Otherwise one leg wins, one loses.'),
               m.marketMedian != null && e('div', { style: { marginTop: 4, fontSize: 11, color: C.muted } }, 'The books price this match at about ' + m.marketMedian + ' total goals.'),
-              m.staleNote && e('div', { style: { marginTop: 4, fontSize: 11, color: '#92400e' } }, '⚠ ' + m.staleNote)
+              m.staleNote && e('div', { style: { marginTop: 4, fontSize: 11, color: '#92400e' } }, '' + m.staleNote)
             )
           );
         }));
@@ -4016,55 +4015,67 @@ const analyzeArb = async (arb) => {
       // ── STEAM CHASING ──
       // ── GOALS ACCUMULATOR ──
       edgeTab === 'goals' && e('div', null,
-        e('div', { style: { fontSize: 11, color: C.muted, background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '8px 10px', marginBottom: 10, lineHeight: 1.5 } },
-          '⚽ Over 1.5 goals picks from Champions League, Europa League, Conference League, Bundesliga, Championship and MLS, built into one slip at a single bookmaker. Chances are estimated from the books\' own Over/Under prices. An accumulator multiplies the bookmaker\'s margin as well as the odds, so the estimated EV is usually negative and no slip is a sure thing. Only stake what you can afford to lose.'),
-        e('div', { style: { display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' } },
-          [['global', '🌍 All books'], ['wa', isWAUserNow ? '🇬🇭 My books' : '📍 My region']].map(([k, l]) =>
+        e('div', { style: { fontSize: 12, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', marginBottom: 10, lineHeight: 1.55 } },
+          'Over goals picks from the Champions League, Europa League, Conference League, Bundesliga, Championship and MLS, built into one slip at a single bookmaker. Chances are worked out from the books\' own Over/Under prices. A slip multiplies the bookmaker\'s margin along with the odds, so the estimated EV is usually negative and no slip is a sure thing. Only stake what you can afford to lose.'),
+        e('div', { style: { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' } },
+          [['global', 'All books'], ['wa', isWAUserNow ? 'My books' : 'My region']].map(([k, l]) =>
             e('button', { key: k, onClick: () => setGoalsSection(k), style: { ...st.btn(goalsSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, l)),
-          e('span', { style: { fontSize: 11, color: C.muted, marginLeft: 4 } }, 'Games'),
-          [3, 4, 5, 6].map(n => e('button', { key: 'g' + n, onClick: () => setGoalsGames(n), style: { ...st.btn(goalsGames === n ? 'primary' : 'outline'), fontSize: 11, padding: '5px 9px' } }, String(n))),
-          e('span', { style: { fontSize: 11, color: C.muted, marginLeft: 4 } }, 'Odds ≥'),
+          [['1.5', 'Over 1.5'], ['2.5', 'Over 2.5']].map(([k, l]) =>
+            e('button', { key: 'l' + k, onClick: () => setGoalsLine(k), style: { ...st.btn(goalsLine === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, l))
+        ),
+        e('div', { style: { display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' } },
+          e('span', { style: { fontSize: 11, color: C.muted } }, 'Games'),
+          [2, 3, 4, 5, 6].map(n => e('button', { key: 'g' + n, onClick: () => setGoalsGames(n), style: { ...st.btn(goalsGames === n ? 'primary' : 'outline'), fontSize: 11, padding: '5px 9px' } }, String(n))),
+          e('span', { style: { fontSize: 11, color: C.muted, marginLeft: 6 } }, 'Odds at least'),
           [2, 3, 5].map(n => e('button', { key: 't' + n, onClick: () => setGoalsTarget(n), style: { ...st.btn(goalsTarget === n ? 'primary' : 'outline'), fontSize: 11, padding: '5px 9px' } }, n + '.0'))
         ),
         (() => {
-          const pool = goalsSection === 'wa' ? goalsPicksWA : goalsPicks;
+          const pool = (goalsData && goalsData[goalsSection] && goalsData[goalsSection][goalsLine]) || [];
+          const cov = goalsData && goalsData.cov && goalsData.cov[goalsSection] && goalsData.cov[goalsSection][goalsLine];
+          const fmtT = ms => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const coverage = e('div', { key: 'cov', style: { fontSize: 11, color: C.muted, marginBottom: 10, lineHeight: 1.5 } },
+            cov
+              ? 'Scanned ' + cov.games + ' upcoming game' + (cov.games === 1 ? '' : 's') + ' in these leagues; ' + cov.withLine + ' ha' + (cov.withLine === 1 ? 's' : 've') + ' Over ' + goalsLine + ' prices from at least two books.' + (goalsData && goalsData.at ? ' Last scan ' + fmtT(goalsData.at) + '.' : '')
+              : 'Run a scan to load picks.');
           const slips = buildGoalsSlips(pool, goalsGames, goalsTarget);
-          if (slips.length === 0) return e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
-            e('div', { style: { fontSize: 28, marginBottom: 8 } }, '⚽'),
-            e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No Over 1.5 slip available yet'),
-            e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, 'A pick needs Over 1.5 prices from at least two books, with both Over and Under, for a game starting in the next 48 hours. Select these leagues in ⚙ Sports and run a scan. Over 1.5 is only fed for some games, so few slips may appear.'));
+          if (slips.length === 0) return [coverage, e('div', { key: 'empty', style: { textAlign: 'center', padding: '28px 16px', color: C.muted } },
+            e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No Over ' + goalsLine + ' slip available yet'),
+            e('div', { style: { fontSize: 12, lineHeight: 1.6 } },
+              'A slip needs at least two games in these leagues, in the next 48 hours, each with Over ' + goalsLine + ' and Under ' + goalsLine + ' prices from two or more books at one bookmaker.' + (goalsLine === '1.5' ? ' Over 1.5 prices come from a limited feed, so Over 2.5, which uses the main totals line, often has more games.' : ' Add these leagues under Sports and run a scan.')))];
           const best = slips[0];
           const others = slips.slice(1, 4);
           return [
-            e('div', { key: 'best', style: { background: C.white, border: '1px solid ' + (best.reachedTarget ? C.green : '#fde68a'), borderRadius: 12, padding: '13px 14px', marginBottom: 10 } },
+            coverage,
+            e('div', { key: 'best', style: { background: C.white, border: '1px solid ' + (best.reachedTarget ? C.green : '#e2e8f0'), borderRadius: 12, padding: '13px 14px', marginBottom: 10 } },
               e('div', { style: st.cardRow },
                 e('div', null,
-                  e('div', { style: st.sportLabel }, '🏦 Best slip at ' + best.bookName),
-                  e('div', { style: st.matchTitle }, best.legs.length + ' games · Over 1.5 goals')
+                  e('div', { style: st.sportLabel }, 'Best slip · ' + best.bookName),
+                  e('div', { style: st.matchTitle }, best.legs.length + ' games · Over ' + goalsLine + ' goals')
                 ),
                 e('div', { style: { textAlign: 'right' } },
-                  e('div', { style: { fontSize: 20, fontWeight: 800, color: best.reachedTarget ? C.greenDark : '#92400e' } }, best.combined.toFixed(2)),
+                  e('div', { style: { fontSize: 20, fontWeight: 800, color: best.reachedTarget ? C.greenDark : C.text } }, best.combined.toFixed(2)),
                   e('div', { style: { fontSize: 10, color: C.muted } }, 'combined odds')
                 )
               ),
-              !best.reachedTarget && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 8 } }, 'Even with ' + best.legs.length + ' games the odds stay below ' + goalsTarget + '.0 at this book. Over 1.5 prices are short, so more games or a lower target is needed.'),
+              !best.reachedTarget && e('div', { style: { fontSize: 11, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginTop: 8 } }, 'Even with ' + best.legs.length + ' games the odds stay below ' + goalsTarget + '.0 at this book. Try more games or a lower target.'),
               best.legs.map((l, i) => {
                 const info = getSportInfo(l.pick.sport);
-                return e('div', { key: l.pick.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 0', borderTop: i === 0 ? '1px solid #f1f5f9' : '1px solid #f1f5f9', marginTop: i === 0 ? 8 : 0 } },
+                return e('div', { key: l.pick.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 0', borderTop: '1px solid #f1f5f9', marginTop: i === 0 ? 8 : 0 } },
                   e('div', { style: { minWidth: 0 } },
                     e('div', { style: { fontSize: 13, fontWeight: 600, color: C.text } }, l.pick.match),
-                    e('div', { style: { fontSize: 11, color: C.muted } }, info.emoji + ' ' + info.label + ' · ⏱ ' + timeUntil(l.pick.commenceTime) + ' · ~' + Math.round(l.pick.fairProb * 100) + '% Over 1.5')
+                    e('div', { style: { fontSize: 11, color: C.muted } }, info.label + ' · starts in ' + timeUntil(l.pick.commenceTime) + ' · about ' + Math.round(l.pick.fairProb * 100) + '% to go Over'),
+                    e('div', { style: { fontSize: 10, color: C.muted } }, l.quote.bookName + ' · price as of ' + fmtT(l.quote.updatedMs || (goalsData && goalsData.at) || Date.now()))
                   ),
-                  e('div', { style: { fontSize: 14, fontWeight: 700, color: C.text, whiteSpace: 'nowrap' } }, 'Over 1.5 @ ' + l.quote.price.toFixed(2))
+                  e('div', { style: { fontSize: 14, fontWeight: 700, color: C.text, whiteSpace: 'nowrap' } }, l.quote.price.toFixed(2))
                 );
               }),
               e('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', fontSize: 12, marginTop: 8, paddingTop: 8, borderTop: '1px solid #f1f5f9' } },
                 e('span', { style: { fontWeight: 600 } }, 'All legs land: about ' + (best.chance * 100).toFixed(0) + '%'),
-                e('span', { style: { color: best.evPct >= 0 ? C.greenDark : '#b45309', fontWeight: 600 } }, 'Est. EV ' + (best.evPct > 0 ? '+' : '') + best.evPct + '%')
+                e('span', { style: { color: best.evPct >= 0 ? C.greenDark : C.muted, fontWeight: 600 } }, 'Estimated EV ' + (best.evPct > 0 ? '+' : '') + best.evPct + '%')
               ),
-              e('div', { style: { fontSize: 10, color: C.muted, marginTop: 6, lineHeight: 1.5 } }, 'Prices were pulled at the last scan and can change. Check each Over 1.5 price on ' + best.bookName + ' before adding it to your slip.')
+              e('div', { style: { fontSize: 10, color: C.muted, marginTop: 6, lineHeight: 1.5 } }, 'Prices can change after the last scan. Check each Over ' + goalsLine + ' price on ' + best.bookName + ' before adding it to your slip.')
             ),
-            others.length > 0 && e('div', { key: 'others', style: { fontSize: 12, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px', marginBottom: 10, lineHeight: 1.6 } },
+            others.length > 0 && e('div', { key: 'others', style: { fontSize: 12, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '8px 12px', marginBottom: 10, lineHeight: 1.6 } },
               e('div', { style: { fontWeight: 700, color: C.text, marginBottom: 2 } }, 'Same picks at other books'),
               others.map(o => e('div', { key: o.book }, o.bookName + ': ' + o.legs.length + ' games, ' + o.combined.toFixed(2) + ' combined' + (o.reachedTarget ? '' : ' (below ' + goalsTarget + '.0)'))))
           ];
@@ -4073,10 +4084,9 @@ const analyzeArb = async (arb) => {
 
       edgeTab === 'steam' && e('div', null,
         e('div', { style: { background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#92400e', lineHeight: 1.6 } },
-          '💨 Steam moves are when sharp books (Pinnacle/Betfair) sharply shorten a line — indicating professional money has come in. Soft books that haven\'t updated yet represent the value. Steam is detected by comparing each scan to the previous one.'
+          'Steam moves are when sharp books (Pinnacle/Betfair) sharply shorten a line — indicating professional money has come in. Soft books that haven\'t updated yet represent the value. Steam is detected by comparing each scan to the previous one.'
         ),
         steam.length === 0 && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
-          e('div', { style: { fontSize: 32, marginBottom: 8 } }, '💨'),
           e('div', { style: { fontSize: 14 } }, steam.length === 0 && prevEventsRef.current.length === 0 ? 'Steam needs two scans to compare. Run a second scan after 5 minutes.' : 'No significant line moves detected in the last scan.')
         ),
         steam.map(s => {
@@ -4091,7 +4101,7 @@ const analyzeArb = async (arb) => {
               ),
               e('div', { style: { textAlign: 'right', flexShrink: 0 } },
                 e('div', { style: { fontSize: 14, fontWeight: 700, color: isShortening ? '#dc2626' : C.green } }, (s.move > 0 ? '+' : '') + s.move + '%'),
-                e('div', { style: { fontSize: 11, color: C.muted } }, isShortening ? '🔴 Sharp money in' : '🟢 Drifting out')
+                e('div', { style: { fontSize: 11, color: C.muted } }, isShortening ? 'Sharp money in' : '🟢 Drifting out')
               )
             ),
             e('div', { style: { display: 'flex', gap: 8, marginTop: 8, marginBottom: 8, alignItems: 'center' } },
@@ -4109,7 +4119,7 @@ const analyzeArb = async (arb) => {
             s.laggingBooks.map(bk => {
               const accessible = isBookAccessible(bk.book, userRegion);
               return e('div', { key: bk.book, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff7ed', borderRadius: 8, padding: '6px 10px', marginBottom: 4, opacity: accessible ? 1 : 0.55 } },
-                e('span', { style: { fontSize: 13, fontWeight: 600 } }, bk.bookName + (accessible ? '' : ' 🚫')),
+                e('span', { style: { fontSize: 13, fontWeight: 600 } }, bk.bookName + (accessible ? '' : ' ')),
                 e('div', { style: { display: 'flex', gap: 10, alignItems: 'center' } },
                   e('span', { style: { fontSize: 14, fontWeight: 700, color: C.green } }, bk.odds.toFixed(2)),
                   e('span', { style: { fontSize: 11, color: C.muted } }, 'was ' + bk.prevOdds.toFixed(2))
@@ -4117,7 +4127,7 @@ const analyzeArb = async (arb) => {
               );
             }),
             e('div', { style: { background: '#fff7ed', borderRadius: 8, padding: '6px 10px', marginTop: 6, fontSize: 11, color: '#92400e' } },
-              '⚡ Place this bet before ' + s.laggingBooks.map(b => b.bookName).join('/') + ' update their lines.'
+              'Place this bet before ' + s.laggingBooks.map(b => b.bookName).join('/') + ' update their lines.'
             )
           );
         })
@@ -4125,7 +4135,7 @@ const analyzeArb = async (arb) => {
     ),
     tab === 'analyzer' && e('div', { style: st.section },
       e('div', { style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1e3a8a', lineHeight: 1.6 } },
-        '🧠 Select any upcoming game from your scanned sports and get a deep AI analysis — form, H2H, goals stats, player availability, news, and a betting prediction.'
+        'Select any upcoming game from your scanned sports and get a deep AI analysis — form, H2H, goals stats, player availability, news, and a betting prediction.'
       ),
       e('div', { style: { display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' } },
         e('select', { value: analyzerSportFilter, onChange: ev => setAnalyzerSportFilter(ev.target.value), style: { ...st.input, width: 'auto', fontSize: 12, padding: '6px 10px' } },
@@ -4156,15 +4166,13 @@ const analyzeArb = async (arb) => {
           },
           disabled: analyzerLoading,
           style: { ...st.btn('primary'), fontSize: 12 }
-        }, analyzerLoading ? '⟳ Loading...' : '🔍 Load Games')
+        }, analyzerLoading ? '⟳ Loading...' : 'Load Games')
       ),
       !analyzerLoaded && !analyzerLoading && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
-        e('div', { style: { fontSize: 36, marginBottom: 8 } }, '🧠'),
         e('div', { style: { fontSize: 14, fontWeight: 600, marginBottom: 4 } }, 'Bet Analyzer'),
         e('div', { style: { fontSize: 13 } }, 'Tap Load Games to fetch upcoming matches from your selected sports.')
       ),
       analyzerLoading && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
-        e('div', { style: { fontSize: 36, marginBottom: 8 } }, '⟳'),
         e('div', { style: { fontSize: 14 } }, 'Loading games...')
       ),
       analyzerLoaded && analyzerGames.length === 0 && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
@@ -4184,7 +4192,7 @@ const analyzeArb = async (arb) => {
               e('div', null,
                 e('div', { style: st.sportLabel }, info.emoji + ' ' + (game.league || info.label) + ' · ⏱ ' + timeUntil(game.commenceTime)),
                 e('div', { style: st.matchTitle }, game.match),
-                game.venue && e('div', { style: { fontSize: 11, color: C.muted, marginTop: 2 } }, '📍 ' + game.venue)
+                game.venue && e('div', { style: { fontSize: 11, color: C.muted, marginTop: 2 } }, '' + game.venue)
               ),
               e('button', {
                 onClick: async () => {
@@ -4219,13 +4227,13 @@ const analyzeArb = async (arb) => {
                 },
                 disabled: analyzingGameId === game.id,
                 style: { ...st.btn('primary'), fontSize: 12, padding: '7px 12px' }
-              }, analyzingGameId === game.id ? '⟳ Analyzing...' : '🧠 Analyze')
+              }, analyzingGameId === game.id ? '⟳ Analyzing...' : 'Analyze')
             ),
             analysis && e('div', { style: { marginTop: 10 } },
               analysis.error
-                ? e('div', { style: { color: '#dc2626', fontSize: 12 } }, '⚠️ ' + analysis.error)
+                ? e('div', { style: { color: '#dc2626', fontSize: 12 } }, '' + analysis.error)
                 : e('div', { style: { background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 14px', fontSize: 12 } },
-                    e('div', { style: { fontWeight: 700, fontSize: 13, color: C.greenDark, marginBottom: 10 } }, '🤖 AI Analysis — ' + game.match),
+                    e('div', { style: { fontWeight: 700, fontSize: 13, color: C.greenDark, marginBottom: 10 } }, 'AI Analysis — ' + game.match),
                     analysis._priced === false && e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '6px 10px', marginBottom: 8, fontSize: 11, color: '#78350f' } },
                       'This match is not in your latest scan, so there is no price data: form and context only, no value pricing. Scan this sport first for price-based analysis.'),
                     (() => {
@@ -4241,11 +4249,11 @@ const analyzeArb = async (arb) => {
                     })(),
                     analysis.dataQuality && analysis.dataQuality.note && e('div', { style: { fontSize: 10, color: C.muted, marginBottom: 8, lineHeight: 1.4 } }, '📎 Data used: ' + (analysis.dataQuality.level || 'None') + ' — ' + analysis.dataQuality.note + (analysis.priced === false ? ' · Prices: none in your latest scan for this match.' : '')),
                     analysis.valueAssessment && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8, fontSize: 12, lineHeight: 1.5 } },
-                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, '⚖️ VALUE ASSESSMENT'),
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, 'VALUE ASSESSMENT'),
                       e('div', { style: { color: C.text } }, analysis.valueAssessment)
                     ),
                     analysis.form && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8 } },
-                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '📊 RECENT FORM'),
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, 'RECENT FORM'),
                       e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 4 } },
                         e('span', { style: { fontSize: 11, color: C.muted } }, game.homeTeam + ':'),
                         e('span', { style: { fontWeight: 700, letterSpacing: 2 } }, analysis.form.home)
@@ -4256,7 +4264,7 @@ const analyzeArb = async (arb) => {
                       )
                     ),
                     analysis.goalsAvg && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8 } },
-                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '⚽ GOALS STATS (per 90)'),
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, 'GOALS STATS (per 90)'),
                       e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 } },
                         e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Home scored'), e('div', { style: { fontWeight: 700, color: C.green } }, analysis.goalsAvg.homeScoredPer90)),
                         e('div', { style: st.oddsCell }, e('div', { style: { fontSize: 10, color: C.muted } }, 'Home conceded'), e('div', { style: { fontWeight: 700, color: '#dc2626' } }, analysis.goalsAvg.homeConceededPer90)),
@@ -4265,11 +4273,11 @@ const analyzeArb = async (arb) => {
                       )
                     ),
                     analysis.h2h && e('div', { style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8, fontSize: 12, color: C.text } },
-                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, '🔁 HEAD TO HEAD'),
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 4 } }, 'HEAD TO HEAD'),
                       e('div', null, analysis.h2h)
                     ),
                     analysis.additionalBets && e('div', { style: { marginBottom: 8 } },
-                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, '💡 ADDITIONAL MARKETS'),
+                      e('div', { style: { fontWeight: 700, fontSize: 11, color: C.muted, marginBottom: 6 } }, 'ADDITIONAL MARKETS'),
                       analysis.additionalBets.map((bet, i) =>
                         e('div', { key: i, style: { background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 6 } },
                           e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 3 } },
@@ -4289,7 +4297,7 @@ const analyzeArb = async (arb) => {
                       e('div', { style: { color: C.text, lineHeight: 1.5 } }, analysis.keyInsight)
                     ),
                     analysis.tip && e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '8px 10px', fontSize: 11, color: '#78350f' } },
-                      e('div', { style: { fontWeight: 700, marginBottom: 2 } }, '💬 ' + analysis.tip),
+                      e('div', { style: { fontWeight: 700, marginBottom: 2 } }, '' + analysis.tip),
                       analysis.reasoning && e('div', null, analysis.reasoning)
                     )
                   )
@@ -4368,8 +4376,8 @@ const analyzeArb = async (arb) => {
         // Header with view toggle + export
         e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 } },
           e('div', { style: { display: 'flex', gap: 6 } },
-            e('button', { onClick: () => setTrackerView('bets'), style: { ...st.btn(trackerView === 'bets' ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, '📋 Bets'),
-            e('button', { onClick: () => setTrackerView('dashboard'), style: { ...st.btn(trackerView === 'dashboard' ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, '📊 Dashboard')
+            e('button', { onClick: () => setTrackerView('bets'), style: { ...st.btn(trackerView === 'bets' ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, 'Bets'),
+            e('button', { onClick: () => setTrackerView('dashboard'), style: { ...st.btn(trackerView === 'dashboard' ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, 'Dashboard')
           ),
           e('div', { style: { display: 'flex', gap: 6 } },
             bets.length > 0 && e('button', { onClick: exportCSV, style: { ...st.btn('outline'), fontSize: 11, padding: '5px 10px' } }, '⬇ CSV'),
@@ -4390,7 +4398,6 @@ const analyzeArb = async (arb) => {
 
         // ── DASHBOARD VIEW ──
         trackerView === 'dashboard' && bets.length === 0 && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
-          e('div', { style: { fontSize: 36, marginBottom: 8 } }, '📊'),
           e('div', { style: { fontSize: 14 } }, 'Log some bets first to see your analytics.')
         ),
 
@@ -4418,7 +4425,7 @@ const analyzeArb = async (arb) => {
 
           // Bankroll curve (mini SVG)
           e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
-            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 8 } }, '📈 Bankroll curve'),
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 8 } }, 'Bankroll curve'),
             (() => {
               if (curve.length < 2) return e('div', { style: { color: C.muted, fontSize: 12 } }, 'Not enough settled bets yet.');
               const W = 300, H = 80;
@@ -4436,11 +4443,11 @@ const analyzeArb = async (arb) => {
 
           // By bet type
           e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
-            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, '🎯 By bet type'),
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, 'By bet type'),
             Object.entries(byType).filter(([, v]) => v.count > 0).map(([type, v]) =>
               e('div', { key: type, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
                 e('div', null,
-                  e('div', { style: { fontSize: 13, fontWeight: 600 } }, type === 'ev' ? '📈 +EV' : type === 'arb' ? '⚡ Arb' : '✏️ Manual'),
+                  e('div', { style: { fontSize: 13, fontWeight: 600 } }, type === 'ev' ? '+EV' : type === 'arb' ? 'Arb' : 'Manual'),
                   e('div', { style: { fontSize: 11, color: C.muted } }, v.count + ' bets · ' + currency + ' ' + v.staked.toFixed(2) + ' staked')
                 ),
                 e('div', { style: { fontSize: 14, fontWeight: 700, color: v.profit >= 0 ? C.green : '#dc2626', textAlign: 'right' } },
@@ -4453,7 +4460,7 @@ const analyzeArb = async (arb) => {
 
           // By sport
           e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
-            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, '🌍 By sport'),
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, 'By sport'),
             Object.entries(bySport).sort((a, b) => b[1].profit - a[1].profit).map(([sport, v]) => {
               const info = getSportInfo(sport);
               const pct = Math.abs(v.profit) / Math.max(Math.abs(Math.min(...Object.values(bySport).map(x=>x.profit))), Math.max(...Object.values(bySport).map(x=>x.profit)), 1);
@@ -4471,7 +4478,7 @@ const analyzeArb = async (arb) => {
 
           // By bookmaker — diversification at a glance
           Object.keys(byBook).length > 0 && e('div', { style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', marginBottom: 12 } },
-            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, '🏦 By bookmaker'),
+            e('div', { style: { fontSize: 12, fontWeight: 700, color: C.muted, marginBottom: 10 } }, 'By bookmaker'),
             Object.entries(byBook).sort((a, b) => b[1].count - a[1].count).map(([book, v]) => {
               const sharePct = bets.length > 0 ? ((v.count / bets.length) * 100).toFixed(0) : 0;
               return e('div', { key: book, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
@@ -4483,7 +4490,7 @@ const analyzeArb = async (arb) => {
               );
             }),
             Object.keys(byBook).length === 1 && e('div', { style: { fontSize: 11, color: '#9a3412', background: '#fff7ed', borderRadius: 6, padding: '6px 8px', marginTop: 4 } },
-              '⚠️ Every bet is on a single book — if it limits or restricts your account, you have no fallback. Spreading action across 2+ books protects you from that.'
+              'Every bet is on a single book — if it limits or restricts your account, you have no fallback. Spreading action across 2+ books protects you from that.'
             )
           ),
 
@@ -4509,7 +4516,6 @@ const analyzeArb = async (arb) => {
         // ── BETS LIST VIEW ──
         trackerView === 'bets' && bets.length === 0 &&
           e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
-            e('div', { style: { fontSize: 36, marginBottom: 8 } }, '📒'),
             e('div', { style: { fontSize: 14 } }, 'No bets logged yet. Hit "Log Bet" on any arb or +EV card.')
           ),
 
@@ -4527,7 +4533,7 @@ const analyzeArb = async (arb) => {
               ),
               e('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 } },
                 e('select', { value: bet.status, onChange: ev => setBets(p => p.map(b => b.id === bet.id ? { ...b, status: ev.target.value } : b)), style: { fontSize: 11, padding: '3px 6px', borderRadius: 6, border: '1px solid ' + C.border, background: C.white } },
-                  e('option', { value: 'pending' }, '⏳ Pending'), e('option', { value: 'won' }, '✅ Won'), e('option', { value: 'lost' }, '❌ Lost')
+                  e('option', { value: 'pending' }, 'Pending'), e('option', { value: 'won' }, 'Won'), e('option', { value: 'lost' }, 'Lost')
                 ),
                 e('button', { onClick: () => setBets(p => p.filter(b => b.id !== bet.id)), style: { ...st.btn('danger'), padding: '3px 8px', fontSize: 11 } }, '✕')
               )
@@ -4546,7 +4552,7 @@ const analyzeArb = async (arb) => {
             e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTop: '1px solid ' + C.border } },
               e('div', { style: { fontSize: 12, color: C.muted } },
                 'Staked: ' + (bet.currency || currency) + ' ' + (bet.stake || 0).toFixed(2) +
-                (bet.status !== 'pending' ? ' · ' + (bet.status === 'won' ? '✅ Won ' + (bet.currency || currency) + ' ' + bet.profit.toFixed(2) : '❌ Lost ' + (bet.currency || currency) + ' ' + (bet.stake || 0).toFixed(2)) : ' · ⏳ Pending')
+                (bet.status !== 'pending' ? ' · ' + (bet.status === 'won' ? 'Won ' + (bet.currency || currency) + ' ' + bet.profit.toFixed(2) : 'Lost ' + (bet.currency || currency) + ' ' + (bet.stake || 0).toFixed(2)) : ' · Pending')
               ),
               clv !== null && e('span', { style: { fontSize: 11, fontWeight: 700, color: parseFloat(clv) >= 0 ? C.green : '#dc2626', background: parseFloat(clv) >= 0 ? C.greenLight : '#fef2f2', padding: '2px 8px', borderRadius: 10 } }, 'CLV ' + (parseFloat(clv) >= 0 ? '+' : '') + clv + '%')
             ),
@@ -4579,17 +4585,17 @@ const analyzeArb = async (arb) => {
       );
     })()),
     tab === 'guide' && e('div', { style: st.section },
-      e('div', { style: st.guideH }, '🇬🇭 All Bookmakers in Ghana'),
+      e('div', { style: st.guideH }, 'All Bookmakers in Ghana'),
       e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 } },
         Object.entries(BOOKS).map(([k, b]) =>
           e('div', { key: k, style: { background: b.manual ? C.purpleLight : C.grayLight, borderRadius: 10, padding: '11px 14px' } },
             e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
               e('a', { href: b.url, target: '_blank', rel: 'noreferrer', style: { fontSize: 14, fontWeight: 700, color: C.text, textDecoration: 'none' } }, b.name),
               e('div', { style: { display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' } },
-                b.manual && e('span', { style: { background: C.purpleLight, color: C.purple, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12, border: '1px solid #c4b5fd' } }, '✏️ Manual entry'),
-                !b.manual && e('span', { style: { background: '#e0f2fe', color: '#0369a1', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '🔄 Auto-scanned'),
+                b.manual && e('span', { style: { background: C.purpleLight, color: C.purple, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12, border: '1px solid #c4b5fd' } }, 'Manual entry'),
+                !b.manual && e('span', { style: { background: '#e0f2fe', color: '#0369a1', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, 'Auto-scanned'),
                 b.licensed && e('span', { style: { background: C.greenLight, color: C.greenDark, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '✓ GGC Licensed'),
-                b.momo && e('span', { style: { background: C.amberLight, color: '#78350f', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, '📱 MoMo')
+                b.momo && e('span', { style: { background: C.amberLight, color: '#78350f', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12 } }, 'MoMo')
               )
             ),
             e('div', { style: { fontSize: 12, color: C.muted } }, b.note)
@@ -4597,13 +4603,13 @@ const analyzeArb = async (arb) => {
         )
       ),
       e('div', { style: { background: C.purpleLight, border: '1px solid #c4b5fd', borderRadius: 10, padding: '11px 14px', marginBottom: 16, fontSize: 12, color: C.purple, lineHeight: 1.6 } },
-        '✅ SportyBet, Betano and MSport are now auto-scanned via the West Africa scraper. Their odds feed directly into the 🇬🇭 West Africa section of the Scanner and +EV tabs. Manual entry is still available if the scraper misses a market.'
+        'SportyBet, Betano and MSport are now auto-scanned via the West Africa scraper. Their odds feed directly into the West Africa section of the Scanner and +EV tabs. Manual entry is still available if the scraper misses a market.'
       ),
-      e('div', { style: st.guideH }, '🌍 Sports coverage'),
+      e('div', { style: st.guideH }, 'Sports coverage'),
       e('div', { style: st.guideP }, 'ArbEdge scans 20 top football competitions, including the Premier League, Champions League, La Liga, Bundesliga, Serie A, Ligue 1, AFCON, the World Cup, Europa League, Copa Libertadores, MLS and Brazil Serie A.'),
-      e('div', { style: st.guideH }, '⚠️ Key risks'),
+      e('div', { style: st.guideH }, 'Key risks'),
       e('div', { style: st.guideP }, 'Account limits: bookmakers detect arbers. Use round stakes and place occasional recreational bets. Odds movement: place the better-odds leg first — you have 30 seconds to 3 minutes. For Betano and MSport you need to check odds manually and move fast.'),
-      e('div', { style: st.guideH }, '📋 Quick checklist'),
+      e('div', { style: st.guideH }, 'Quick checklist'),
       ['Margin at least 1.5% (covers drift)', 'Same event start time on both books', 'Funds pre-loaded — no deposits mid-arb', 'Higher-odds leg placed first', 'Screenshot betslips after placement', 'Log bet in Tracker tab', 'Withdraw profits regularly'].map((item, i) =>
        e('div', { key: i, style: { display: 'flex', gap: 8, marginBottom: 6 } },
           e('span', { style: { color: C.green, flexShrink: 0 } }, '✓'),
@@ -4611,12 +4617,22 @@ const analyzeArb = async (arb) => {
         )
       ),
       e('div', { style: { background: C.amberLight, borderRadius: 10, padding: '11px 14px', marginTop: 16, fontSize: 12, color: '#78350f', lineHeight: 1.6 } },
-        e('div', { style: { fontWeight: 700, marginBottom: 4 } }, '⚖️ Gamble Responsibly. Only 18+ Years. Gambling is Addictive.'),
+        e('div', { style: { fontWeight: 700, marginBottom: 4 } }, 'Gamble Responsibly. Only 18+ Years. Gambling is Addictive.'),
         'ArbEdge is an odds-comparison tool — it does not accept bets or hold funds. All wagers are placed directly with licensed third-party sportsbooks. ',
         e('a', { href: '/terms', target: '_blank', style: { color: '#78350f', fontWeight: 700, textDecoration: 'underline' } }, 'Terms'),
         ' · ',
         e('a', { href: '/privacy', target: '_blank', style: { color: '#78350f', fontWeight: 700, textDecoration: 'underline' } }, 'Privacy')
       )
+    ),
+    e('div', { style: { marginTop: 24, padding: '16px 4px 28px', borderTop: '1px solid #e2e8f0', fontSize: 11, color: C.muted, lineHeight: 1.7, textAlign: 'center' } },
+      e('div', null, 'ArbEdge compares odds from bookmakers. It does not take bets or hold funds, and prices are refreshed about every 5 minutes, so they can change before you bet.'),
+      e('div', null, '18+ only. Gamble responsibly.'),
+      e('div', { style: { marginTop: 4 } },
+        e('a', { href: '/terms', target: '_blank', rel: 'noreferrer', style: { color: C.muted } }, 'Terms'), '  ·  ',
+        e('a', { href: '/privacy', target: '_blank', rel: 'noreferrer', style: { color: C.muted } }, 'Privacy'), '  ·  ',
+        e('a', { href: mailto('ArbEdge support', ''), style: { color: C.muted } }, 'Contact support')
+      ),
+      e('div', null, 'Built in Accra, Ghana')
     )
   );
 }
