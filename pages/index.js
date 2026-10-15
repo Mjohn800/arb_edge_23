@@ -1735,7 +1735,9 @@ function middleArbsAsArbs(middles) {
 // multiplies the bookmaker's margin too, so the expected value is almost always negative: the section shows
 // that cost instead of hiding it. These are suggestions, not a price comparison, so ONE bookmaker quoting both sides
 // of the line is enough to suggest a game (SportyBet covers these lines when the odds-API free tier does not).
-const GOALS_LEAGUES = new Set(['soccer_uefa_europa_league', 'soccer_usa_mls', 'soccer_uefa_champs_league', 'soccer_uefa_europa_conference_league', 'soccer_germany_bundesliga', 'soccer_efl_champ']);
+// Any soccer league that was scanned qualifies (the league list is whatever the person has selected under Sports); only totals from
+// feeds verified for totals count (feedVerified), so an unchecked scraper feed never drives a suggestion.
+const isGoalsLeague = key => /^soccer_/.test(key) && !key.endsWith('_winner');
 const GOALS_WINDOW_MS = 48 * 3600 * 1000; // games kicking off within the next 48h
 const GOALS_MAX_LEGS = 8;
 function findGoalsPicks(events, mode = 'global', userRegion = null, line = 1.5) {
@@ -1744,13 +1746,14 @@ function findGoalsPicks(events, mode = 'global', userRegion = null, line = 1.5) 
   const now = Date.now();
   const med = arr => { const a = [...arr].sort((p, q) => p - q); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
   for (const ev of events) {
-    if (!GOALS_LEAGUES.has(ev.sport_key)) continue;
+    if (!isGoalsLeague(ev.sport_key)) continue;
     const t = Date.parse(ev.commence_time);
     if (!(t > now && t - now <= GOALS_WINDOW_MS)) continue;
     gamesSeen++;
     const perBook = {};
     for (const bm of (ev.bookmakers || [])) {
       if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
+      if (!feedVerified(bm.key, bm.feedPipeline === 'wa', 'totals')) continue; // totals not yet checked against the book's own site
       for (const mkt of (bm.markets || [])) {
         if ((mkt.key !== 'totals' && mkt.key !== 'alternate_totals') || totalsVariant(mkt) !== 'fulltime') continue;
         for (const o of (mkt.outcomes || [])) {
@@ -2270,7 +2273,6 @@ useEffect(() => {
   const [cardAnalysis, setCardAnalysis] = useState({});
   const [analyzingId, setAnalyzingId] = useState(null);
   const [recheck, setRecheck] = useState({});
-  const [recheckingId, setRecheckingId] = useState(null);
   const [middles, setMiddles] = useState(snap0 ? (snap0.middles || []) : []);
   const [middlesWA, setMiddlesWA] = useState(snap0 ? (snap0.middlesWA || []) : []); // West Africa middles — both legs accessible
   const [goalsData, setGoalsData] = useState(snap0 ? (snap0.goalsData || null) : null); // { global, wa, cov, at } keyed by line ('1.5' | '2.5')
@@ -3062,22 +3064,6 @@ const verifyTopCandidates = async (candidates) => {
   }
 };
 
-const recheckArb = async (arb) => {
-  if (recheckingId === arb.id) return;
-  setRecheckingId(arb.id);
-  try {
-    const res = await fetch('/api/verify-arb', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + await getToken() },
-      body: JSON.stringify({ sport: arb.sport, home: arb.home, away: arb.away, commenceTime: arb.commenceTime, outcomes: arb.outcomes })
-    });
-    const data = await res.json();
-    setRecheck(p => ({ ...p, [arb.id]: res.ok ? data : { error: data.error || 'Re-check failed' } }));
-  } catch (err) {
-    setRecheck(p => ({ ...p, [arb.id]: { error: 'Re-check failed' } }));
-  }
-  setRecheckingId(null);
-};
 
 const analyzeArb = async (arb) => {  
   if (analyzingId === arb.id) return;
@@ -3172,15 +3158,19 @@ const analyzeArb = async (arb) => {
   // One quiet notes box for everything that is hidden or filtered, instead of a stack of coloured banners.
   const noteLink = (label, fn) => e('a', { key: label, href: '#', style: { fontWeight: 700, color: '#b45309', textDecoration: 'underline' }, onClick: ev => { ev.preventDefault(); fn(); } }, label);
   const noteRows = [];
-  const backToStable = noteLink('Back to stable arbs', () => setArbBand('stable'));
-  if (arbBand === 'review') noteRows.push(['Review arbs: +' + STABLE_MAX_PROFIT + '% to +' + REVIEW_MAX_PROFIT + '%, plus any smaller arb with a flagged or out-of-date price. Check both legs on the books before staking. ', backToStable]);
-  if (arbBand === 'volatile') noteRows.push(['Volatile arbs: +' + REVIEW_MAX_PROFIT + '% to +' + VOLATILE_MAX_PROFIT + '%, flagged prices included. Margins this size close fast and are more often a stale or wrong price than a real edge, so check both legs on the books before staking. ', backToStable]);
-  if (arbBand !== 'review' && bandCount.review > 0) noteRows.push([arbWord(bandCount.review) + ' to review: +' + STABLE_MAX_PROFIT + '% to +' + REVIEW_MAX_PROFIT + '%, or a flagged price. ', noteLink('Show review arbs', () => setArbBand('review'))]);
-  if (!isFreePlan && arbBand !== 'volatile' && bandCount.volatile > 0) noteRows.push([arbWord(bandCount.volatile) + ' volatile: +' + REVIEW_MAX_PROFIT + '% to +' + VOLATILE_MAX_PROFIT + '%. ', noteLink('Show volatile arbs', () => setArbBand('volatile'))]);
+  if (arbBand === 'review') noteRows.push(['Review arbs: +' + STABLE_MAX_PROFIT + '% to +' + REVIEW_MAX_PROFIT + '%, plus any smaller arb with a flagged or out-of-date price. Check both legs on the books before staking.']);
+  if (arbBand === 'volatile') noteRows.push(['Volatile arbs: +' + REVIEW_MAX_PROFIT + '% to +' + VOLATILE_MAX_PROFIT + '%, flagged prices included. Margins this size close fast and are more often a stale or wrong price than a real edge, so check both legs on the books before staking.']);
   if (isFreePlan && hiddenHighProfit > 0) noteRows.push([hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + FREE_MAX_PROFIT + '% ' + (hiddenHighProfit === 1 ? 'is' : 'are') + ' Premium only. ', noteLink('Go Premium', () => startCheckout('prepaid'))]);
   if (!isFreePlan && arbBand === 'volatile' && hiddenHighProfit > 0 && !showHighProfit) noteRows.push([hiddenHighProfit + ' arb' + (hiddenHighProfit === 1 ? '' : 's') + ' above +' + DEFAULT_MAX_PROFIT + '% hidden: that size is far more often a bad price than a real edge. ', noteLink('Show them', () => setShowHighProfit(true))]);
   if (!isFreePlan && arbBand === 'volatile' && showHighProfit) noteRows.push(['Showing arbs above +' + DEFAULT_MAX_PROFIT + '%: treat each as unverified until checked on the book. ', noteLink('Hide again', () => setShowHighProfit(false))]);
   if (hiddenByReports > 0) noteRows.push([hiddenByReports + ' arb' + (hiddenByReports === 1 ? '' : 's') + ' hidden because you reported them.']);
+  // Always-visible band selector: shows every band with its count (0 included), so the links never vanish when a band is empty.
+  const bandBar = e('div', { style: { display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' } },
+    [['stable', 'Stable', '\u2264' + STABLE_MAX_PROFIT + '%'], ['review', 'Review', STABLE_MAX_PROFIT + '\u2013' + REVIEW_MAX_PROFIT + '%'], ['volatile', 'Volatile', REVIEW_MAX_PROFIT + '\u2013' + VOLATILE_MAX_PROFIT + '%']].map(([k, l, range]) => {
+      const locked = isFreePlan && k === 'volatile';
+      return e('button', { key: k, onClick: () => locked ? startCheckout('prepaid') : setArbBand(k), style: { ...st.btn(arbBand === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 10px' } },
+        l + ' ' + range + (locked ? ' \uD83D\uDD12' : ' (' + bandCount[k] + ')'));
+    }));
   const arbNotes = noteRows.length > 0 && e('div', { style: { fontSize: 12, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '2px 12px', marginBottom: 10, lineHeight: 1.5 } },
     noteRows.map((r, i) => e('div', { key: i, style: { padding: '8px 0', borderTop: i ? '1px solid #e2e8f0' : 'none' } }, ...r)));
 
@@ -3455,9 +3445,10 @@ const analyzeArb = async (arb) => {
       selectedSports.length === 0 && e('div', { style: { background: '#fefce8', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 } },
         'No sports selected yet. Tap Sports above and pick the leagues you want to scan' + (isFreePlan ? ' (the free plan includes EPL, La Liga, Bundesliga and Serie A).' : '.')),
       filteredArbs.length === 0 && !loading && !error && selectedSports.length > 0 && e('div', { style: { textAlign: 'center', padding: '40px 16px', color: C.muted } },
-        e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, noteRows.length > 0 ? 'No stable arbitrage opportunities right now' : 'No arbitrage opportunities right now'),
-        e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, noteRows.length > 0 ? 'Riskier arbs may be listed below. We scan again automatically every 5 minutes.' : 'We scan again automatically every 5 minutes.')
+        e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, arbBand === 'stable' && (bandCount.review + bandCount.volatile) > 0 ? 'No stable arbitrage opportunities right now' : 'No arbitrage opportunities in this band right now'),
+        e('div', { style: { fontSize: 12, lineHeight: 1.6 } }, arbBand === 'stable' && (bandCount.review + bandCount.volatile) > 0 ? 'Riskier arbs are available under Review and Volatile. We scan again automatically every 5 minutes.' : 'We scan again automatically every 5 minutes.')
       ),
+ bandBar,
  arbNotes,
  filteredArbs.map(arb => {
         const info = getSportInfo(arb.sport);
@@ -3479,9 +3470,7 @@ const analyzeArb = async (arb) => {
           arb.firstSeenMs && e('div', { style: { fontSize: 10, color: C.muted, marginTop: 4 } }, 'Seen for ' + fmtAgeShort(Date.now() - arb.firstSeenMs)),
           arb.firstSeenMs && arb.margin >= HIGH_MARGIN_REVIEW && (Date.now() - arb.firstSeenMs) >= PERSIST_SUSPICIOUS_MS && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, 'This arb has stayed open for ' + fmtAgeShort(Date.now() - arb.firstSeenMs) + '. Real edges of this size are usually closed within minutes — a price that never moves is more likely stale.'),
           e('div', { style: { fontSize: 11, marginTop: 6, fontWeight: 600, color: (recheck[arb.id] && recheck[arb.id].verdict === 'confirmed') ? C.greenDark : (arb.liveVerify ? '#1e3a8a' : '#92400e') } },
-            recheck[arb.id] && recheck[arb.id].verdict === 'confirmed' ? 'Verified live · ' + fmtAgeShort(Date.now() - new Date(recheck[arb.id].checkedAt).getTime()) + ' ago'
-            : recheck[arb.id] && recheck[arb.id].verdict ? 'Re-checked: see result below'
-            : arb.liveVerify ? 'Live-checked at scan: ' + String(arb.liveVerify.status || 'checked').replace(/_/g, ' ')
+            arb.liveVerify ? 'Live-checked at scan: ' + String(arb.liveVerify.status || 'checked').replace(/_/g, ' ')
             : 'Confirm each bookmaker before betting'),
           arb.pulledAtMs && e('div', { style: { fontSize: 10, marginTop: 3, color: isArbExpired(arb) ? '#b91c1c' : C.muted, fontWeight: isArbExpired(arb) ? 700 : 400 } },
             isArbExpired(arb)
@@ -3514,22 +3503,7 @@ const analyzeArb = async (arb) => {
           sel && sel.id === arb.id && e('div', { style: { marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' } },
             e('button', { style: st.btn('primary'), onClick: ev => { ev.stopPropagation(); setTab('calculator'); } }, 'Calculate →'),
             e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); setReportOpenId(reportOpenId === arb.id ? null : arb.id); setReportStatus('idle'); } }, 'Report'),
-            e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis'),
-            arb.home && e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); recheckArb(arb); } }, recheckingId === arb.id ? 'Checking...' : 'Re-check (uses API quota)')
-          ),
-          recheck[arb.id] && e('div', { style: { marginTop: 10, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', fontSize: 12, lineHeight: 1.6 } },
-            recheck[arb.id].error
-              ? e('div', { style: { color: '#dc2626' } }, '' + recheck[arb.id].error)
-              : e('div', null,
-                  e('div', { style: { fontWeight: 700, marginBottom: 4 } },
-                    recheck[arb.id].verdict === 'confirmed' ? 'Confirmed live: +' + recheck[arb.id].freshMargin.toFixed(2) + '%'
-                    : recheck[arb.id].verdict === 'partial' ? 'Partly re-checked: +' + recheck[arb.id].freshMargin.toFixed(2) + '% (some legs could not be re-checked)'
-                    : recheck[arb.id].verdict === 'gone' ? 'Arb is gone at current prices (' + recheck[arb.id].freshMargin.toFixed(2) + '%)'
-                    : 'A leg is no longer offered or could not be fetched'),
-                  recheck[arb.id].legs.map((l, li) => e('div', { key: li, style: { color: C.muted } },
-                    l.label + ' · ' + l.book + ': ' + l.was.toFixed(2) + (l.now != null ? ' → ' + l.now.toFixed(2) : '') + ' (' + l.status.replace(/_/g, ' ') + ')')),
-                  e('div', { style: { fontSize: 10, color: C.muted, marginTop: 4 } }, 'Checked ' + new Date(recheck[arb.id].checkedAt).toLocaleTimeString())
-                )
+            e('button', { style: { ...st.btn('outline'), fontSize: 12 }, onClick: ev => { ev.stopPropagation(); analyzeArb(arb); } }, analyzingId === arb.id ? 'Analyzing...' : 'AI Analysis')
           ),
           reportOpenId === arb.id && e('div', { onClick: ev => ev.stopPropagation(), style: { marginTop: 10, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '10px 12px', fontSize: 12, lineHeight: 1.6 } },
             e('div', { style: { fontWeight: 700, marginBottom: 6 } }, 'What is wrong with this arb?'),
@@ -4023,7 +3997,7 @@ const analyzeArb = async (arb) => {
       // ── GOALS ACCUMULATOR ──
       edgeTab === 'goals' && e('div', null,
         e('div', { style: { fontSize: 12, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', marginBottom: 10, lineHeight: 1.55 } },
-          'Over goals picks from the Champions League, Europa League, Conference League, Bundesliga, Championship and MLS, built into one slip at a single bookmaker. Chances are worked out from the books\' own Over/Under prices. A slip multiplies the bookmaker\'s margin along with the odds, so the estimated EV is usually negative and no slip is a sure thing. Only stake what you can afford to lose.'),
+          'Over goals picks from every soccer league you scan (add leagues under Sports on the Scanner tab), built into one slip at a single bookmaker. Chances are worked out from the books\' own Over/Under prices. A slip multiplies the bookmaker\'s margin along with the odds, so the estimated EV is usually negative and no slip is a sure thing. Only stake what you can afford to lose.'),
         e('div', { style: { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' } },
           [['global', 'All books'], ['wa', isWAUserNow ? 'My books' : 'My region']].map(([k, l]) =>
             e('button', { key: k, onClick: () => setGoalsSection(k), style: { ...st.btn(goalsSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, l)),
@@ -4042,13 +4016,13 @@ const analyzeArb = async (arb) => {
           const fmtT = ms => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           const coverage = e('div', { key: 'cov', style: { fontSize: 11, color: C.muted, marginBottom: 10, lineHeight: 1.5 } },
             cov
-              ? 'Scanned ' + cov.games + ' upcoming game' + (cov.games === 1 ? '' : 's') + ' in these leagues; ' + cov.withLine + ' ha' + (cov.withLine === 1 ? 's' : 've') + ' Over ' + goalsLine + ' prices from at least one bookmaker.' + (goalsData && goalsData.at ? ' Last scan ' + fmtT(goalsData.at) + '.' : '')
+              ? 'Scanned ' + cov.games + ' upcoming game' + (cov.games === 1 ? '' : 's') + ' across your scanned leagues; ' + cov.withLine + ' ha' + (cov.withLine === 1 ? 's' : 've') + ' Over ' + goalsLine + ' prices from at least one bookmaker.' + (goalsData && goalsData.at ? ' Last scan ' + fmtT(goalsData.at) + '.' : '')
               : 'Run a scan to load picks.');
           const slips = buildGoalsSlips(pool, goalsGames, goalsTarget);
           if (slips.length === 0) return [coverage, e('div', { key: 'empty', style: { textAlign: 'center', padding: '28px 16px', color: C.muted } },
             e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No Over ' + goalsLine + ' slip available yet'),
             e('div', { style: { fontSize: 12, lineHeight: 1.6 } },
-              'A slip needs at least two games in these leagues, in the next 48 hours, each with Over ' + goalsLine + ' and Under ' + goalsLine + ' prices from the same bookmaker.' + (goalsLine === '1.5' ? ' Try Over 2.5, which uses the main totals line and often has more games.' : ' Add these leagues under Sports and run a scan.')))];
+              'A slip needs at least two games across your scanned soccer leagues, in the next 48 hours, each with Over ' + goalsLine + ' and Under ' + goalsLine + ' prices from the same bookmaker.' + (goalsLine === '1.5' ? ' Try Over 2.5, which uses the main totals line and often has more games.' : ' Add more soccer leagues under Sports on the Scanner tab and run a scan.')))];
           const best = slips[0];
           const others = slips.slice(1, 4);
           return [
