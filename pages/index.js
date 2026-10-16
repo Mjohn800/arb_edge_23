@@ -1089,6 +1089,22 @@ function findScannedOddsForGame(game, events, userRegion) {
 }
 
 let LAST_ARB_DIAG = null; // written by the latest GLOBAL findArbs() call; copied into scanHealth so it shows in the app
+// Bet Analyzer fallback: the upcoming games of the latest scan, in the shape /api/fixtures returns
+// (id, sport, match, homeTeam, awayTeam, commenceTime, venue). Costs no API quota and has every league that was scanned.
+function gamesFromEvents(events) {
+  const now = Date.now(), seen = new Set(), out = [];
+  for (const ev of events || []) {
+    if (!ev || !ev.home_team || !ev.away_team || !ev.sport_key) continue;
+    const t = Date.parse(ev.commence_time);
+    if (!Number.isFinite(t) || t <= now) continue;
+    const id = 'scan_' + ev.sport_key + '_' + normLabel(ev.home_team) + '_' + normLabel(ev.away_team) + '_' + Math.round(t / 600000);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, sport: ev.sport_key, match: ev.home_team + ' vs ' + ev.away_team, homeTeam: ev.home_team, awayTeam: ev.away_team, commenceTime: new Date(t).toISOString(), venue: '', fromScan: true });
+  }
+  return out.sort((a, b) => Date.parse(a.commenceTime) - Date.parse(b.commenceTime)).slice(0, 300);
+}
+
 function findArbs(events, mode = 'global', userRegion = null) {
   const arbs = [];
   // Coverage diagnostic, per book: quotes used, quotes dropped because the team name could not be resolved to home/away,
@@ -2257,12 +2273,14 @@ useEffect(() => {
   const [evFilter, setEvFilter] = useState('all');
   const [drawOnly, setDrawOnly] = useState(false); // Draw Value filter — +EV tab
   const [reboundOnly, setReboundOnly] = useState(false); // Form rebound filter — +EV tab
-  const [analyzerGames, setAnalyzerGames] = useState([]);
+  // Analyzer games: the list saved with the last scan is shown straight away (still-upcoming games only).
+  const [analyzerGames, setAnalyzerGames] = useState(() => (snap0 && Array.isArray(snap0.games) ? snap0.games : []).filter(g => Date.parse(g.commenceTime) > Date.now()));
+  const [analyzerNote, setAnalyzerNote] = useState('');
   const [analyzerLoading, setAnalyzerLoading] = useState(false);
   const [analyzerSportFilter, setAnalyzerSportFilter] = useState('all');
   const [gameAnalyses, setGameAnalyses] = useState({});
   const [analyzingGameId, setAnalyzingGameId] = useState(null);
-  const [analyzerLoaded, setAnalyzerLoaded] = useState(false);
+  const [analyzerLoaded, setAnalyzerLoaded] = useState(!!(snap0 && Array.isArray(snap0.games) && snap0.games.length > 0));
   const [quota, setQuota] = useState(snap0 && snap0.quota ? snap0.quota : { remaining: null, used: null, keyIndex: 1 });
   const [userRegion, setUserRegion] = useState(snap0 && snap0.userRegion ? snap0.userRegion : { country: null, isWA: true, accessibleBooks: null }); // default WA until detected
   const [nextScanAt, setNextScanAt] = useState(() => {
@@ -2854,7 +2872,10 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
         integrity: integrityReport,
         quota: quotaNow,
         userRegion: regionNow,
+        games: gamesFromEvents(all),   // upcoming games for the Bet Analyzer list
       });
+      // Keep the Analyzer list current while it is empty or was built from a scan (a list from /api/fixtures is left alone).
+      setAnalyzerGames(prev => (prev.length === 0 || prev[0].fromScan) ? gamesFromEvents(all) : prev);
     }
   }, [selectedSports, minEV]);
 
@@ -4124,22 +4145,39 @@ const analyzeArb = async (arb) => {
         e('button', {
           onClick: async () => {
             setAnalyzerLoading(true);
+            setAnalyzerNote('');
+            let games = [];
             try {
-              const sportsParam = ALL_SPORTS.filter(s => {
+              const wanted = ALL_SPORTS.filter(s => {
                 if (analyzerSportFilter === 'all') return true;
                 const g = SPORT_GROUPS.find(g => g.group === analyzerSportFilter);
                 return g && g.sports.some(sp => sp.key === s.key);
-              }).map(s => s.key).join(',');
-              const res = await fetch('/api/fixtures?sports=' + sportsParam);
+              }).map(s => s.key);
+              // Only the leagues this user scans. Asking for the whole catalogue made /api/fixtures look up every
+              // league at once and they all timed out ("SportsDB fetch failed ... operation was aborted").
+              const mine = wanted.filter(k => selectedSports.includes(k));
+              const keys = mine.length ? mine : wanted.slice(0, 20);
+              const ctl = new AbortController();
+              const timer = setTimeout(() => ctl.abort(), 25000);
+              // no-store: a 304 can hand back an old (possibly empty) answer from the browser cache
+              const res = await fetch('/api/fixtures?sports=' + keys.join(','), { signal: ctl.signal, cache: 'no-store' });
+              clearTimeout(timer);
               if (res.ok) {
                 const json = await res.json();
-                setAnalyzerGames(json.fixtures || []);
-              } else {
-                setAnalyzerGames([]);
+                games = (json.fixtures || []).filter(g => !g.commenceTime || Date.parse(g.commenceTime) > Date.now());
               }
             } catch (err) {
-              setAnalyzerGames([]);
+              games = [];
             }
+            if (games.length === 0) {
+              // Fixtures service gave nothing: list the upcoming games from the latest scan instead.
+              const fromScan = gamesFromEvents(prevEventsRef.current);
+              if (fromScan.length > 0) {
+                games = fromScan;
+                setAnalyzerNote('The fixtures service did not answer, so these are the upcoming games from your latest scan.');
+              }
+            }
+            setAnalyzerGames(games);
             setAnalyzerLoaded(true);
             setAnalyzerLoading(false);
           },
@@ -4154,8 +4192,9 @@ const analyzeArb = async (arb) => {
       analyzerLoading && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
         e('div', { style: { fontSize: 14 } }, 'Loading games...')
       ),
+      analyzerNote && e('div', { style: { background: C.amberLight, borderRadius: 8, padding: '6px 10px', marginBottom: 10, fontSize: 11, color: '#78350f' } }, analyzerNote),
       analyzerLoaded && analyzerGames.length === 0 && e('div', { style: { textAlign: 'center', padding: '40px 0', color: C.muted } },
-        e('div', { style: { fontSize: 14 } }, 'No upcoming games found. Try selecting more sports or check your API key.')
+        e('div', { style: { fontSize: 14 } }, 'No upcoming games found. The fixtures service did not answer and no scan results are loaded yet. Wait for the next scan, then tap Load Games again.')
       ),
       analyzerGames
         .filter(g => {
