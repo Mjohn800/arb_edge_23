@@ -1740,16 +1740,21 @@ function middleArbsAsArbs(middles) {
 const isGoalsLeague = key => /^soccer_/.test(key) && !key.endsWith('_winner');
 const GOALS_WINDOW_MS = 48 * 3600 * 1000; // games kicking off within the next 48h
 const GOALS_MAX_LEGS = 8;
-function findGoalsPicks(events, mode = 'global', userRegion = null, line = 1.5) {
+function findGoalsPicks(events, mode = 'global', userRegion = null, line = 1.5, leagueKeys = []) {
   const picks = [];
-  let gamesSeen = 0; // upcoming games in these leagues, with or without a usable price (shown as coverage)
   const now = Date.now();
   const med = arr => { const a = [...arr].sort((p, q) => p - q); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+  // Per-league coverage, so the screen can say which leagues have confirmed Over prices and why the others do not.
+  const lg = {};
+  const L = key => (lg[key] = lg[key] || { sport: key, games: 0, later: 0, priced: 0, why: { noLine: 0, ambiguous: 0, noUnder: 0 }, books: new Set() });
+  for (const k of leagueKeys) if (isGoalsLeague(k)) L(k);
   for (const ev of events) {
     if (!isGoalsLeague(ev.sport_key)) continue;
     const t = Date.parse(ev.commence_time);
-    if (!(t > now && t - now <= GOALS_WINDOW_MS)) continue;
-    gamesSeen++;
+    const c = L(ev.sport_key);
+    if (!(t > now)) continue;
+    if (t - now > GOALS_WINDOW_MS) { c.later++; continue; }
+    c.games++;
     const perBook = {};
     for (const bm of (ev.bookmakers || [])) {
       if (mode === 'wa' && !isBookAccessible(bm.key, userRegion)) continue;
@@ -1767,17 +1772,19 @@ function findGoalsPicks(events, mode = 'global', userRegion = null, line = 1.5) 
         }
       }
     }
+    if (!Object.keys(perBook).length) { c.why.noLine++; continue; } // no verified book quotes this line for the game
     // A book quoting the same side at two prices is ambiguous (feed leaked another market): ignore that side.
     let rows = Object.values(perBook).map(b => ({ ...b, over: b.over.size === 1 ? [...b.over][0] : null, under: b.under.size === 1 ? [...b.under][0] : null }));
     rows = rows.filter(r => r.over != null);
-    if (rows.length < 1) continue; // one book quoting the line is enough; there is nothing to compare
+    if (rows.length < 1) { c.why.ambiguous++; continue; } // one book is enough; there is nothing to compare
     // Where several books quote the line, drop an Over price more than 10% above the rest: far more often a wrong price than a gift.
     // With a single book there is nothing to compare against, so its price stands.
     rows = rows.filter(r => { const others = rows.filter(x => x !== r).map(x => x.over); return !(others.length && r.over > med(others) * 1.10); });
-    if (rows.length < 1) continue;
     const fair = rows.filter(r => r.under != null).map(r => (1 / r.over) / (1 / r.over + 1 / r.under));
-    if (!fair.length) continue; // no book gave both sides, so the margin can't be removed
+    if (!fair.length) { c.why.noUnder++; continue; } // no book gave both sides, so the margin can't be removed
     const fairProb = med(fair);
+    c.priced++;
+    rows.forEach(r => c.books.add(r.bookName));
     picks.push({
       id: ev.id + '_o' + String(line).replace('.', ''),
       line,
@@ -1789,38 +1796,30 @@ function findGoalsPicks(events, mode = 'global', userRegion = null, line = 1.5) 
     });
   }
   const sorted = picks.sort((a, b) => b.fairProb - a.fairProb);
-  sorted.cov = { games: gamesSeen, withLine: sorted.length };
+  const leagues = Object.values(lg).map(x => ({ sport: x.sport, games: x.games, later: x.later, priced: x.priced, why: x.why, books: [...x.books] }));
+  sorted.cov = { leagues, games: leagues.reduce((n, x) => n + x.games, 0), withLine: sorted.length, confirmed: leagues.filter(x => x.priced > 0).length };
   return sorted;
 }
 
-// One slip per bookmaker: the same likeliest games for every book (at most 2 per league first, so it spreads
-// across leagues), priced at that book. Starts at nGames legs and adds legs (up to GOALS_MAX_LEGS) until the
-// combined odds reach targetOdds. Slips that reach the target rank first, then by estimated EV.
-function buildGoalsSlips(picks, nGames, targetOdds) {
+// One slip per bookmaker: the single most probable game from EACH league that has confirmed Over prices at that book,
+// priced at that book (an accumulator must sit on one bookmaker). Slips covering more leagues rank first, then by estimated EV.
+function buildGoalsSlips(picks) {
   const books = {};
   for (const p of picks) for (const q of p.quotes) books[q.book] = q.bookName;
   const slips = [];
   for (const [bk, bookName] of Object.entries(books)) {
-    const avail = picks.filter(p => p.quotes.some(q => q.book === bk)); // already sorted by fairProb desc
-    if (avail.length < 2) continue;
-    const perLeague = {};
-    const ordered = [];
-    for (const p of avail) { perLeague[p.sport] = (perLeague[p.sport] || 0) + 1; if (perLeague[p.sport] <= 2) ordered.push(p); }
-    for (const p of avail) if (!ordered.includes(p)) ordered.push(p);
-    const legs = [];
-    let combined = 1;
-    for (const p of ordered) {
-      if (legs.length >= GOALS_MAX_LEGS) break;
-      if (legs.length >= nGames && combined >= targetOdds) break;
+    const bestByLeague = {};
+    for (const p of picks) { // already sorted by fairProb desc, so the first one seen per league is its most probable game
       const q = p.quotes.find(x => x.book === bk);
-      legs.push({ pick: p, quote: q });
-      combined *= q.price;
+      if (q && !bestByLeague[p.sport]) bestByLeague[p.sport] = { pick: p, quote: q };
     }
-    if (legs.length < 2) continue;
-    const chance = legs.reduce((sum, l) => sum * l.pick.fairProb, 1);
-    slips.push({ book: bk, bookName, legs, combined: parseFloat(combined.toFixed(2)), chance, evPct: parseFloat(((chance * combined - 1) * 100).toFixed(1)), reachedTarget: combined >= targetOdds });
+    const legs = Object.values(bestByLeague).sort((a, b) => b.pick.fairProb - a.pick.fairProb).slice(0, GOALS_MAX_LEGS);
+    if (!legs.length) continue;
+    const combined = legs.reduce((m, l) => m * l.quote.price, 1);
+    const chance = legs.reduce((m, l) => m * l.pick.fairProb, 1);
+    slips.push({ book: bk, bookName, legs, combined: parseFloat(combined.toFixed(2)), chance, evPct: parseFloat(((chance * combined - 1) * 100).toFixed(1)) });
   }
-  return slips.sort((a, b) => (b.reachedTarget - a.reachedTarget) || (b.evPct - a.evPct));
+  return slips.sort((a, b) => (b.legs.length - a.legs.length) || (b.evPct - a.evPct));
 }
 
 const MIN_MIDDLE_EV_PCT = -2; // default view hides middles estimated worse than this (%), unless they are arbs
@@ -2278,8 +2277,6 @@ useEffect(() => {
   const [goalsData, setGoalsData] = useState(snap0 ? (snap0.goalsData || null) : null); // { global, wa, cov, at } keyed by line ('1.5' | '2.5')
   const [goalsLine, setGoalsLine] = useState('1.5');
   const [goalsSection, setGoalsSection] = useState('global'); // 'global' | 'wa'
-  const [goalsGames, setGoalsGames] = useState(5);   // how many games the slip starts with
-  const [goalsTarget, setGoalsTarget] = useState(2); // minimum combined odds to reach
   const [middleSection, setMiddleSection] = useState('global'); // 'global' | 'wa'
   const [middleSort, setMiddleSort] = useState('ev'); // 'ev' = best estimated EV first, 'likely' = biggest chance of landing first
   const [showAllMiddles, setShowAllMiddles] = useState(false); // false = hide middles whose estimated EV is clearly negative
@@ -2745,7 +2742,7 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     const steamResult = findSteam(prevEventsRef.current, all);
     setMiddles(middlesGlobalResult);
     setMiddlesWA(middlesWAResult);
-    const mkGoals = mode => { const o = {}, c = {}; for (const ln of [1.5, 2.5]) { const r = findGoalsPicks(all, mode, regionNow, ln); o[ln] = r; c[ln] = r.cov; } return { o, c }; };
+    const mkGoals = mode => { const o = {}, c = {}; for (const ln of [1.5, 2.5]) { const r = findGoalsPicks(all, mode, regionNow, ln, sportsToScan.map(x => x.key)); o[ln] = r; c[ln] = r.cov; } return { o, c }; };
     const goalsG = mkGoals('global'), goalsW = mkGoals('wa');
     const goalsDataResult = { global: goalsG.o, wa: goalsW.o, cov: { global: goalsG.c, wa: goalsW.c }, at: Date.now() };
     setGoalsData(goalsDataResult);
@@ -3997,48 +3994,49 @@ const analyzeArb = async (arb) => {
       // ── GOALS ACCUMULATOR ──
       edgeTab === 'goals' && e('div', null,
         e('div', { style: { fontSize: 12, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', marginBottom: 10, lineHeight: 1.55 } },
-          'Over goals picks from every soccer league you scan (add leagues under Sports on the Scanner tab), built into one slip at a single bookmaker. Chances are worked out from the books\' own Over/Under prices. A slip multiplies the bookmaker\'s margin along with the odds, so the estimated EV is usually negative and no slip is a sure thing. Only stake what you can afford to lose.'),
+          'Over goals picks from every soccer league you scan (add leagues under Sports on the Scanner tab), with the most probable game from each league, built into one slip at a single bookmaker. Chances are worked out from the books\' own Over/Under prices. A slip multiplies the bookmaker\'s margin along with the odds, so the estimated EV is usually negative and no slip is a sure thing. Only stake what you can afford to lose.'),
         e('div', { style: { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' } },
           [['global', 'All books'], ['wa', isWAUserNow ? 'My books' : 'My region']].map(([k, l]) =>
             e('button', { key: k, onClick: () => setGoalsSection(k), style: { ...st.btn(goalsSection === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, l)),
           [['1.5', 'Over 1.5'], ['2.5', 'Over 2.5']].map(([k, l]) =>
             e('button', { key: 'l' + k, onClick: () => setGoalsLine(k), style: { ...st.btn(goalsLine === k ? 'primary' : 'outline'), fontSize: 12, padding: '6px 12px' } }, l))
         ),
-        e('div', { style: { display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' } },
-          e('span', { style: { fontSize: 11, color: C.muted } }, 'Games'),
-          [2, 3, 4, 5, 6].map(n => e('button', { key: 'g' + n, onClick: () => setGoalsGames(n), style: { ...st.btn(goalsGames === n ? 'primary' : 'outline'), fontSize: 11, padding: '5px 9px' } }, String(n))),
-          e('span', { style: { fontSize: 11, color: C.muted, marginLeft: 6 } }, 'Odds at least'),
-          [2, 3, 5].map(n => e('button', { key: 't' + n, onClick: () => setGoalsTarget(n), style: { ...st.btn(goalsTarget === n ? 'primary' : 'outline'), fontSize: 11, padding: '5px 9px' } }, n + '.0'))
-        ),
         (() => {
           const pool = (goalsData && goalsData[goalsSection] && goalsData[goalsSection][goalsLine]) || [];
           const cov = goalsData && goalsData.cov && goalsData.cov[goalsSection] && goalsData.cov[goalsSection][goalsLine];
           const fmtT = ms => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          const coverage = e('div', { key: 'cov', style: { fontSize: 11, color: C.muted, marginBottom: 10, lineHeight: 1.5 } },
-            cov
-              ? 'Scanned ' + cov.games + ' upcoming game' + (cov.games === 1 ? '' : 's') + ' across your scanned leagues; ' + cov.withLine + ' ha' + (cov.withLine === 1 ? 's' : 've') + ' Over ' + goalsLine + ' prices from at least one bookmaker.' + (goalsData && goalsData.at ? ' Last scan ' + fmtT(goalsData.at) + '.' : '')
+          const leagueLine = l => {
+            const nm = getSportInfo(l.sport).label;
+            if (l.priced > 0) return '\u2713 ' + nm + ': ' + l.priced + ' of ' + l.games + ' game' + (l.games === 1 ? '' : 's') + ' priced' + (l.books.length ? ' (' + l.books.join(', ') + ')' : '');
+            if (l.games === 0) return '\u2013 ' + nm + ': no games in the next 48h' + (l.later ? ' (' + l.later + ' later)' : '');
+            const w = l.why;
+            return '\u2013 ' + nm + ': ' + l.games + ' game' + (l.games === 1 ? '' : 's') + ', none priced' + (w.noLine ? ' \u00B7 no verified book quotes Over/Under ' + goalsLine : '') + (w.ambiguous ? ' \u00B7 ' + w.ambiguous + ' with conflicting prices' : '') + (w.noUnder ? ' \u00B7 ' + w.noUnder + ' missing the Under price' : '');
+          };
+          const coverage = e('div', { key: 'cov', style: { fontSize: 11, color: C.muted, marginBottom: 10, lineHeight: 1.6 } },
+            cov && cov.leagues // an older saved scan has no per-league breakdown until the next scan
+              ? [e('div', { key: 'h', style: { fontWeight: 700, color: C.text } }, 'Over ' + goalsLine + ' confirmed in ' + cov.confirmed + ' of ' + cov.leagues.length + ' scanned league' + (cov.leagues.length === 1 ? '' : 's') + (goalsData && goalsData.at ? ' \u00B7 last scan ' + fmtT(goalsData.at) : '')),
+                 ...cov.leagues.slice().sort((a, b) => b.priced - a.priced).map(l => e('div', { key: l.sport }, leagueLine(l)))]
               : 'Run a scan to load picks.');
-          const slips = buildGoalsSlips(pool, goalsGames, goalsTarget);
+          const slips = buildGoalsSlips(pool);
           if (slips.length === 0) return [coverage, e('div', { key: 'empty', style: { textAlign: 'center', padding: '28px 16px', color: C.muted } },
-            e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No Over ' + goalsLine + ' slip available yet'),
+            e('div', { style: { fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 } }, 'No Over ' + goalsLine + ' suggestion available yet'),
             e('div', { style: { fontSize: 12, lineHeight: 1.6 } },
-              'A slip needs at least two games across your scanned soccer leagues, in the next 48 hours, each with Over ' + goalsLine + ' and Under ' + goalsLine + ' prices from the same bookmaker.' + (goalsLine === '1.5' ? ' Try Over 2.5, which uses the main totals line and often has more games.' : ' Add more soccer leagues under Sports on the Scanner tab and run a scan.')))];
+              'A game needs Over ' + goalsLine + ' and Under ' + goalsLine + ' prices from one bookmaker, kicking off in the next 48 hours. The list above shows what each scanned league is missing. Add more soccer leagues under Sports on the Scanner tab and run a scan.'))];
           const best = slips[0];
           const others = slips.slice(1, 4);
           return [
             coverage,
-            e('div', { key: 'best', style: { background: C.white, border: '1px solid ' + (best.reachedTarget ? C.green : '#e2e8f0'), borderRadius: 12, padding: '13px 14px', marginBottom: 10 } },
+            e('div', { key: 'best', style: { background: C.white, border: '1px solid ' + C.green, borderRadius: 12, padding: '13px 14px', marginBottom: 10 } },
               e('div', { style: st.cardRow },
                 e('div', null,
                   e('div', { style: st.sportLabel }, 'Best slip · ' + best.bookName),
-                  e('div', { style: st.matchTitle }, best.legs.length + ' games · Over ' + goalsLine + ' goals')
+                  e('div', { style: st.matchTitle }, (best.legs.length === 1 ? '1 league' : best.legs.length + ' leagues, one game each') + ' · Over ' + goalsLine + ' goals')
                 ),
                 e('div', { style: { textAlign: 'right' } },
-                  e('div', { style: { fontSize: 20, fontWeight: 800, color: best.reachedTarget ? C.greenDark : C.text } }, best.combined.toFixed(2)),
+                  e('div', { style: { fontSize: 20, fontWeight: 800, color: C.greenDark } }, best.combined.toFixed(2)),
                   e('div', { style: { fontSize: 10, color: C.muted } }, 'combined odds')
                 )
               ),
-              !best.reachedTarget && e('div', { style: { fontSize: 11, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 8px', marginTop: 8 } }, 'Even with ' + best.legs.length + ' games the odds stay below ' + goalsTarget + '.0 at this book. Try more games or a lower target.'),
               best.legs.map((l, i) => {
                 const info = getSportInfo(l.pick.sport);
                 return e('div', { key: l.pick.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 0', borderTop: '1px solid #f1f5f9', marginTop: i === 0 ? 8 : 0 } },
@@ -4058,7 +4056,7 @@ const analyzeArb = async (arb) => {
             ),
             others.length > 0 && e('div', { key: 'others', style: { fontSize: 12, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '8px 12px', marginBottom: 10, lineHeight: 1.6 } },
               e('div', { style: { fontWeight: 700, color: C.text, marginBottom: 2 } }, 'Same picks at other books'),
-              others.map(o => e('div', { key: o.book }, o.bookName + ': ' + o.legs.length + ' games, ' + o.combined.toFixed(2) + ' combined' + (o.reachedTarget ? '' : ' (below ' + goalsTarget + '.0)'))))
+              others.map(o => e('div', { key: o.book }, o.bookName + ': ' + o.legs.length + ' league' + (o.legs.length === 1 ? '' : 's') + ', ' + o.combined.toFixed(2) + ' combined')))
           ];
         })()
       ),
