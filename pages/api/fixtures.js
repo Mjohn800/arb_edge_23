@@ -1,7 +1,8 @@
+import { cacheGet, cacheSet } from '../../lib/supabaseCache';
 // pages/api/fixtures.js
 // Combines hardcoded FIFA World Cup 2026 fixtures with TheSportsDB for other sports
 
-const BASE = 'https://www.thesportsdb.com/api/v1/json/123';
+const BASE = 'https://www.thesportsdb.com/api/v1/json/' + (process.env.THESPORTSDB_KEY || '123'); // 123 is TheSportsDB's shared free test key: slow and rate-limited. A personal key in THESPORTSDB_KEY is much steadier.
 
 // TheSportsDB league IDs for non-World Cup sports
 const LEAGUE_IDS = {
@@ -140,15 +141,85 @@ const WORLD_CUP_FIXTURES = [
   { id: 'wc_r32_12', match: 'R32: 1L vs 2J 🇬🇭', homeTeam: 'Winner Group L', awayTeam: 'Runner-up Group J', commenceTime: '2026-07-09T23:00:00Z', league: 'FIFA World Cup 2026 - Round of 32 🇬🇭', venue: 'Mercedes-Benz Stadium, Atlanta' },
 ];
 
+
+// ── HOW THE LIST IS BUILT ────────────────────────────────────────────────────────────────────────
+// 1. Hardcoded World Cup fixtures (only those that have not kicked off, so none once the tournament is over).
+// 2. TheSportsDB for leagues listed in LEAGUE_IDS. Every league used to be fetched at once with a 5 s limit,
+//    and when TheSportsDB was slow they ALL aborted together, leaving the Analyzer empty. Now: at most
+//    MAX_PARALLEL at a time, a longer limit, and each league's good result is cached (shared across users).
+// 3. The Odds API /events endpoint for leagues TheSportsDB has no id for, or when TheSportsDB failed. That
+//    endpoint is free (it does not use up the monthly quota) and lists the same games the scanner prices.
+// The response also says which source each league came from, so a failure is visible instead of silent.
+const FIXTURE_CACHE_TTL = 30 * 60 * 1000;      // a league's fixture list is reused for 30 min
+const EMPTY_CACHE_TTL = 5 * 60 * 1000;         // an empty answer is only trusted for 5 min
+const LEAGUE_TIMEOUT_MS = 8000;
+const MAX_PARALLEL = 3;
+const MAX_SPORTS = 40;
+const SPORT_KEY_RE = /^[a-z0-9_]{1,60}$/;
+
+const oddsApiKeys = () => [
+  process.env.ODDS_API_KEY, process.env.ODDS_API_KEY_2, process.env.ODDS_API_KEY_3, process.env.ODDS_API_KEY_4,
+  process.env.ODDS_API_KEY_5, process.env.ODDS_API_KEY_6, process.env.ODDS_API_KEY_8,
+].filter(Boolean);
+
+async function fetchWithTimeout(url, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try { return await fetch(url, { signal: controller.signal }); } finally { clearTimeout(timer); }
+}
+
+// Runs fn over items with at most `limit` in flight at once.
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i]); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+async function fromSportsDb(key, id, cutoff) {
+  const r = await fetchWithTimeout(`${BASE}/eventsnextleague.php?id=${id}`, LEAGUE_TIMEOUT_MS);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const data = await r.json();
+  const out = [];
+  for (const ev of (data.events || [])) {
+    if (!ev.strHomeTeam || !ev.strAwayTeam) continue;
+    const when = ev.strTimestamp ? (/[zZ]|[+-]\d\d:?\d\d$/.test(ev.strTimestamp) ? ev.strTimestamp : ev.strTimestamp + 'Z') : (ev.dateEvent + 'T12:00:00Z');
+    if (new Date(when) < cutoff) continue;
+    out.push({ id: ev.idEvent, sport: key, league: ev.strLeague, match: ev.strEvent || (ev.strHomeTeam + ' vs ' + ev.strAwayTeam), homeTeam: ev.strHomeTeam, awayTeam: ev.strAwayTeam, commenceTime: when, venue: ev.strVenue || '' });
+  }
+  return out;
+}
+
+async function fromOddsApi(key, cutoff) {
+  let lastErr = 'no Odds API key configured';
+  for (const apiKey of oddsApiKeys()) {
+    try {
+      const r = await fetchWithTimeout(`https://api.the-odds-api.com/v4/sports/${key}/events?apiKey=${apiKey}&dateFormat=iso`, LEAGUE_TIMEOUT_MS);
+      if (r.status === 401 || r.status === 429) { lastErr = 'key HTTP ' + r.status; continue; }   // dead or exhausted key: try the next
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const events = await r.json();
+      return (Array.isArray(events) ? events : [])
+        .filter(ev => ev.home_team && ev.away_team && new Date(ev.commence_time) >= cutoff)
+        .map(ev => ({ id: 'oa_' + ev.id, sport: key, league: '', match: ev.home_team + ' vs ' + ev.away_team, homeTeam: ev.home_team, awayTeam: ev.away_team, commenceTime: ev.commence_time, venue: '' }));
+    } catch (err) { lastErr = err.message; }
+  }
+  throw new Error(lastErr);
+}
+
 export default async function handler(req, res) {
+  // The answer changes through the day; never let the browser or an edge reuse one (a cached empty list was being
+  // handed back with a 304).
+  res.setHeader('Cache-Control', 'no-store');
   const { sports } = req.query;
-  const sportKeys = sports ? sports.split(',') : [];
+  const sportKeys = (sports ? String(sports).split(',') : []).map(s => s.trim()).filter(k => SPORT_KEY_RE.test(k)).slice(0, MAX_SPORTS);
 
   // Show games that haven't kicked off yet, OR kicked off within the last 105 min
   // (allows in-progress games to remain visible in the analyzer)
   const now = new Date();
   const cutoff = new Date(now.getTime() - 105 * 60 * 1000);
   const results = [];
+  const sources = { cache: 0, sportsdb: 0, oddsapi: 0, failed: [] };
 
   // Always include World Cup fixtures unless caller explicitly excludes soccer
   const wantsWorldCup = !sports || sportKeys.includes('soccer_fifa_world_cup') ||
@@ -159,47 +230,40 @@ export default async function handler(req, res) {
     relevant.forEach(f => results.push({ ...f, sport: 'soccer_fifa_world_cup' }));
   }
 
-  // Fetch other sports from TheSportsDB in parallel, each with a 5 s timeout
-  const leaguesToFetch = sportKeys
-    .filter(k => k !== 'soccer_fifa_world_cup' && LEAGUE_IDS[k])
-    .map(k => ({ key: k, id: LEAGUE_IDS[k] }));
+  const leagueKeys = sportKeys.filter(k => k !== 'soccer_fifa_world_cup');
 
-  const fetchLeague = async ({ key, id }) => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    try {
-      const r = await fetch(`${BASE}/eventsnextleague.php?id=${id}`, { signal: controller.signal });
-      if (!r.ok) return [];
-      const data = await r.json();
-      const events = data.events || [];
-      const out = [];
-      for (const ev of events) {
-        const eventDate = new Date(ev.strTimestamp || ev.dateEvent);
-        if (eventDate < cutoff) continue;
-        out.push({
-          id: ev.idEvent,
-          sport: key,
-          league: ev.strLeague,
-          match: ev.strEvent,
-          homeTeam: ev.strHomeTeam,
-          awayTeam: ev.strAwayTeam,
-          commenceTime: ev.strTimestamp || ev.dateEvent + 'T12:00:00Z',
-          venue: ev.strVenue || '',
-        });
-      }
-      return out;
-    } catch (err) {
-      console.warn('SportsDB fetch failed for', key, err.message);
-      return [];
-    } finally {
-      clearTimeout(timeout);
+  const getLeague = async (key) => {
+    const cacheKey = 'fixtures:v1:' + key;
+    let hit = null;
+    try { hit = await cacheGet(cacheKey); } catch {}
+    if (hit && Array.isArray(hit.games)) {
+      // cached lists are filtered again here: a game cached 20 min ago may have started since
+      sources.cache++;
+      return hit.games.filter(g => new Date(g.commenceTime) >= cutoff);
     }
+    let games = null, via = null;
+    if (LEAGUE_IDS[key]) {
+      try { games = await fromSportsDb(key, LEAGUE_IDS[key], cutoff); via = 'sportsdb'; }
+      catch (err) { console.warn('SportsDB fetch failed for', key, err.message); }
+    }
+    if (games === null || (games.length === 0 && via === 'sportsdb')) {
+      try {
+        const alt = await fromOddsApi(key, cutoff);
+        if (alt.length > 0 || games === null) { games = alt; via = 'oddsapi'; }
+      } catch (err) {
+        if (games === null) console.warn('Odds API events failed for', key, err.message);
+      }
+    }
+    if (games === null) { sources.failed.push(key); return []; }
+    sources[via]++;
+    try { await cacheSet(cacheKey, { games }, games.length ? FIXTURE_CACHE_TTL : EMPTY_CACHE_TTL); } catch {}
+    return games;
   };
 
-  const leagueResults = await Promise.all(leaguesToFetch.map(fetchLeague));
+  const leagueResults = await mapLimit(leagueKeys, MAX_PARALLEL, getLeague);
   leagueResults.forEach(events => results.push(...events));
 
   results.sort((a, b) => new Date(a.commenceTime) - new Date(b.commenceTime));
 
-  return res.status(200).json({ fixtures: results, count: results.length });
+  return res.status(200).json({ fixtures: results, count: results.length, sources });
 }
