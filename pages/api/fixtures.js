@@ -147,7 +147,7 @@ const WORLD_CUP_FIXTURES = [
 // 2. TheSportsDB for leagues listed in LEAGUE_IDS. Every league used to be fetched at once with a 5 s limit,
 //    and when TheSportsDB was slow they ALL aborted together, leaving the Analyzer empty. Now: at most
 //    MAX_PARALLEL at a time, a longer limit, and each league's good result is cached (shared across users).
-// 3. The Odds API /events endpoint for leagues TheSportsDB has no id for, or when TheSportsDB failed. That
+// 3. The Odds API /events endpoint, only as a backup for those same leagues when TheSportsDB fails or returns none. That
 //    endpoint is free (it does not use up the monthly quota) and lists the same games the scanner prices.
 // The response also says which source each league came from, so a failure is visible instead of silent.
 const FIXTURE_CACHE_TTL = 30 * 60 * 1000;      // a league's fixture list is reused for 30 min
@@ -230,7 +230,8 @@ export default async function handler(req, res) {
     relevant.forEach(f => results.push({ ...f, sport: 'soccer_fifa_world_cup' }));
   }
 
-  const leagueKeys = sportKeys.filter(k => k !== 'soccer_fifa_world_cup');
+  // Only the leagues the Analyzer covers (LEAGUE_IDS). Anything else the client sends is ignored.
+  const leagueKeys = sportKeys.filter(k => k !== 'soccer_fifa_world_cup' && LEAGUE_IDS[k]);
 
   const getLeague = async (key) => {
     const cacheKey = 'fixtures:v1:' + key;
