@@ -1756,6 +1756,7 @@ function middleArbsAsArbs(middles) {
 const isGoalsLeague = key => /^soccer_/.test(key) && !key.endsWith('_winner');
 const GOALS_WINDOW_MS = 48 * 3600 * 1000; // games kicking off within the next 48h
 const GOALS_MAX_LEGS = 8;
+const GOALS_PER_LEAGUE = 3; // single-league view: this many most probable Over games per league
 function findGoalsPicks(events, mode = 'global', userRegion = null, line = 1.5, leagueKeys = []) {
   const picks = [];
   const now = Date.now();
@@ -4045,6 +4046,12 @@ const analyzeArb = async (arb) => {
               'A game needs Over ' + goalsLine + ' and Under ' + goalsLine + ' prices from one bookmaker, kicking off in the next 48 hours. The list above shows what each scanned league is missing. Add more soccer leagues under Sports on the Scanner tab and run a scan.'))];
           const best = slips[0];
           const others = slips.slice(1, 4);
+          // Single-league picks: the most probable Over games inside each league on its own (pool is already sorted by chance).
+          const byLeague = {};
+          pool.forEach(p => { (byLeague[p.sport] = byLeague[p.sport] || []).push(p); });
+          const leagueGroups = Object.entries(byLeague)
+            .map(([sport, list]) => ({ sport, picks: list.slice(0, GOALS_PER_LEAGUE), total: list.length }))
+            .sort((a, b) => b.picks[0].fairProb - a.picks[0].fairProb);
           return [
             coverage,
             e('div', { key: 'best', style: { background: C.white, border: '1px solid ' + C.green, borderRadius: 12, padding: '13px 14px', marginBottom: 10 } },
@@ -4077,7 +4084,36 @@ const analyzeArb = async (arb) => {
             ),
             others.length > 0 && e('div', { key: 'others', style: { fontSize: 12, color: C.muted, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '8px 12px', marginBottom: 10, lineHeight: 1.6 } },
               e('div', { style: { fontWeight: 700, color: C.text, marginBottom: 2 } }, 'Same picks at other books'),
-              others.map(o => e('div', { key: o.book }, o.bookName + ': ' + o.legs.length + ' league' + (o.legs.length === 1 ? '' : 's') + ', ' + o.combined.toFixed(2) + ' combined')))
+              others.map(o => e('div', { key: o.book }, o.bookName + ': ' + o.legs.length + ' league' + (o.legs.length === 1 ? '' : 's') + ', ' + o.combined.toFixed(2) + ' combined'))),
+            // ── SINGLE-LEAGUE OVER PICKS ──
+            leagueGroups.length > 0 && e('div', { key: 'singles', style: { marginTop: 4 } },
+              e('div', { style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 } }, 'Best Over ' + goalsLine + ' by league'),
+              e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 8, lineHeight: 1.5 } }, 'Top ' + GOALS_PER_LEAGUE + ' games in each league on their own, not combined into a slip. Each shows the best price across the books you selected above.'),
+              leagueGroups.map((g, gi) => {
+                const info = getSportInfo(g.sport);
+                return e('details', { key: g.sport, open: gi === 0, style: { background: C.white, border: '1px solid ' + C.border, borderRadius: 12, padding: '10px 14px', marginBottom: 8 } },
+                  e('summary', { style: { cursor: 'pointer', fontSize: 13, fontWeight: 700, color: C.text, display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', listStyle: 'none' } },
+                    e('span', null, info.emoji + ' ' + info.label),
+                    e('span', { style: { fontSize: 11, fontWeight: 600, color: C.muted, whiteSpace: 'nowrap' } }, 'best ' + Math.round(g.picks[0].fairProb * 100) + '% · ' + g.picks.length + ' of ' + g.total)
+                  ),
+                  g.picks.map((p, i) => {
+                    const q = p.quotes[0];
+                    const rest = p.quotes.slice(1, 3);
+                    return e('div', { key: p.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 0', borderTop: '1px solid #f1f5f9', marginTop: i === 0 ? 8 : 0 } },
+                      e('div', { style: { minWidth: 0 } },
+                        e('div', { style: { fontSize: 13, fontWeight: 600, color: C.text } }, p.match),
+                        e('div', { style: { fontSize: 11, color: C.muted } }, 'starts in ' + timeUntil(p.commenceTime) + ' · about ' + Math.round(p.fairProb * 100) + '% to go Over ' + goalsLine),
+                        rest.length > 0 && e('div', { style: { fontSize: 10, color: C.muted } }, 'Also: ' + rest.map(r => r.bookName + ' ' + r.price.toFixed(2)).join(' · '))
+                      ),
+                      e('div', { style: { textAlign: 'right', flexShrink: 0 } },
+                        e('div', { style: { fontSize: 14, fontWeight: 700, color: C.text } }, q.price.toFixed(2)),
+                        e('div', { style: { fontSize: 10, color: C.muted } }, q.bookName)
+                      )
+                    );
+                  })
+                );
+              })
+            )
           ];
         })()
       ),
