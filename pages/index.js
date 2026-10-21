@@ -2717,15 +2717,37 @@ if (i === 0) console.log('Books seen:', data.flatMap(e => (e.bookmakers||[]).map
     setIntegrity(integrityReport);
     const found = findArbs(all, 'global', regionNow);
     const foundArbsWA = findArbs(all, 'wa', regionNow);
-    // Auto-verify the scan's top candidates (see verifyTopCandidates above) —
-    // server picks which ones actually get checked (top-N by margin, or
-    // anything ≥ HIGH_MARGIN_REVIEW); anything it confirms as gone is dropped
-    // here, everything else is stamped with its liveVerify result so cards
-    // can show "live-verified" / "margin adjusted" without another round trip.
-    const verifyMap = await verifyTopCandidates(found.concat(foundArbsWA));
+    // Auto-verify every candidate that has a 22bet leg against 22bet's OWN site BEFORE it is shown (see verifyTopCandidates
+    // above and pages/api/verify-top-candidates.js: best margin first, bounded by a per-request live-fetch budget).
+    // Results are matched back by arb id + legs, because the same event can be in both the global and the WA list.
+    //   'dropped'                    -> removed (22bet no longer quotes the outcome, or the fresh margin is <= 0)
+    //   checked legs                 -> the card shows 22bet's OWN price, and the margin / min-odds are recomputed from it
+    //   'unverifiable' / 'unchecked' -> hidden 'review' tier with the reason on the card, never shown as verified
+    const sigOf = a => a.id + '|' + a.outcomes.map(o => o.book + ':' + o.odds).join(',');
+    const verifyMap = await verifyTopCandidates(found.concat(foundArbsWA).map(a => ({ ...a, id: sigOf(a) })));
     const applyVerification = (list) => list
-      .filter(a => !verifyMap[a.id] || verifyMap[a.id].status !== 'dropped')
-      .map(a => verifyMap[a.id] ? { ...a, liveVerify: verifyMap[a.id] } : a);
+      .filter(a => { const v = verifyMap[sigOf(a)]; return !v || v.status !== 'dropped'; })
+      .map(a => {
+        const v = verifyMap[sigOf(a)];
+        if (!v) return a;
+        let changed = false;
+        let outcomes = a.outcomes.map(o => {
+          const r = (v.legs || []).find(l => l.checked && l.freshPrice != null && l.book === o.book && String(l.fixtureRef) === String(o.fixtureRef) && l.marketKey === o.marketKey && l.side === o.side);
+          if (!r) return o;
+          changed = true;
+          return { ...o, odds: r.freshPrice, oddsAtScan: o.odds };
+        });
+        if (changed) { const mo = minOddsFor(outcomes.map(o => ({ price: o.odds }))); outcomes = outcomes.map((o, i) => ({ ...o, minOdds: mo[i] })); }
+        const unverified = v.status === 'unverifiable' || v.status === 'unchecked';
+        return {
+          ...a,
+          outcomes,
+          margin: v.freshMargin != null ? v.freshMargin : a.margin,
+          tier: unverified ? 'review' : a.tier,
+          verify: unverified ? { ...a.verify, level: 'review', reasons: [...((a.verify && a.verify.reasons) || []), liveVerifyLabel(v)] } : a.verify,
+          liveVerify: v,
+        };
+      });
     // arb age: stamp each arb with when this exact arb (same legs + prices) was first seen
     const stampAge = list => {
       const seen = firstSeenRef.current, now = Date.now();
@@ -3080,6 +3102,19 @@ const verifyTopCandidates = async (candidates) => {
     return Object.fromEntries(data.results.map(r => [r.id, r]));
   } catch {
     return {}; // verification failing should never block showing the scan results
+  }
+};
+
+// Card label for the scan-time live check (statuses come from pages/api/verify-top-candidates.js).
+const liveVerifyLabel = (v) => {
+  const why = (v.legs || []).find(l => l.checked === false && (l.kind === 'unreadable' || l.kind === 'over_budget') && l.reason);
+  switch (v.status) {
+    case 'confirmed':    return 'Every leg live-checked at scan';
+    case 'adjusted':     return 'Live-checked at scan: 22bet odds updated to the 22bet site price';
+    case 'partial':      return '22bet leg checked on 22bet at scan. Other legs are feed data, not live-checked';
+    case 'unverifiable': return '22bet price could not be confirmed' + (why ? ': ' + why.reason : '') + '. Verify on 22bet before staking';
+    case 'unchecked':    return '22bet leg not live-checked this scan. Press Re-check before staking';
+    default:             return 'Live-checked at scan: ' + String(v.status || 'checked').replace(/_/g, ' ');
   }
 };
 
@@ -3488,8 +3523,8 @@ const analyzeArb = async (arb) => {
           ),
           arb.firstSeenMs && e('div', { style: { fontSize: 10, color: C.muted, marginTop: 4 } }, 'Seen for ' + fmtAgeShort(Date.now() - arb.firstSeenMs)),
           arb.firstSeenMs && arb.margin >= HIGH_MARGIN_REVIEW && (Date.now() - arb.firstSeenMs) >= PERSIST_SUSPICIOUS_MS && e('div', { style: { fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px', marginTop: 6 } }, 'This arb has stayed open for ' + fmtAgeShort(Date.now() - arb.firstSeenMs) + '. Real edges of this size are usually closed within minutes — a price that never moves is more likely stale.'),
-          e('div', { style: { fontSize: 11, marginTop: 6, fontWeight: 600, color: (recheck[arb.id] && recheck[arb.id].verdict === 'confirmed') ? C.greenDark : (arb.liveVerify ? '#1e3a8a' : '#92400e') } },
-            arb.liveVerify ? 'Live-checked at scan: ' + String(arb.liveVerify.status || 'checked').replace(/_/g, ' ')
+          e('div', { style: { fontSize: 11, marginTop: 6, fontWeight: 600, color: (recheck[arb.id] && recheck[arb.id].verdict === 'confirmed') ? C.greenDark : (arb.liveVerify && arb.liveVerify.status !== 'unverifiable' && arb.liveVerify.status !== 'unchecked' ? '#1e3a8a' : '#92400e') } },
+            arb.liveVerify ? liveVerifyLabel(arb.liveVerify)
             : 'Confirm each bookmaker before betting'),
           arb.pulledAtMs && e('div', { style: { fontSize: 10, marginTop: 3, color: isArbExpired(arb) ? '#b91c1c' : C.muted, fontWeight: isArbExpired(arb) ? 700 : 400 } },
             isArbExpired(arb)
