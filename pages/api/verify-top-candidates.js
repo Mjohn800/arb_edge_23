@@ -1,80 +1,74 @@
 // pages/api/verify-top-candidates.js
 //
-// Auto-verification for the highest-value/highest-risk arb candidates from a
-// scan, BEFORE they're shown. Unlike /api/verify-arb (the manual "recheck"
-// button, which the user triggers on one arb they're already looking at),
-// this is called automatically right after findArbs() runs, on a small
-// shortlist (top N by margin, or anything clearing HIGH_MARGIN_REVIEW) —
-// see index.js's verifyTopCandidates() for the client side of this.
+// Auto-verification of scan candidates BEFORE they're shown. Unlike /api/verify-arb (the manual
+// "recheck" button on one arb already on screen), this is called automatically right after
+// findArbs() runs — see index.js's verifyTopCandidates() for the client side.
 //
-// WHY THIS QUERIES THE BOOKMAKER'S OWN API, NOT ODDSPAPI AGAIN:
-// The bad-data cases we've hit (fabricated same-book multi-leg arbs, stale
-// fixture links) originated AT OddsPapi — re-querying OddsPapi a second time
-// would just ask the same possibly-broken source the same question. The only
-// thing that gives real certainty is what the app's own UI already tells the
-// user to do by hand: check the bookmaker's own page/API directly. This route
-// automates exactly that, for whichever books we have a per-event API for.
+// WHY THIS QUERIES THE BOOKMAKER'S OWN SITE, NOT ODDSPAPI AGAIN:
+// The bad-data cases we've hit (fabricated same-book multi-leg arbs, stale fixture links, 22bet
+// prices that did not match 22bet's page) originated AT OddsPapi — asking OddsPapi a second time
+// asks the same possibly-broken source. This route reads what 22bet's own platform shows for the
+// exact event, and compares.
 //
-// LIVE_VERIFIABLE_BOOKS: a book only goes in this set once it has a function
-// here that can fetch ONE event fresh from that book's OWN platform (not
-// OddsPapi). Right now that's just 22bet, via fetch22BetEventDetail (see
-// scrapers/22bet.js) — reused here exactly as the WA scraper itself uses it,
-// so this route can never drift out of sync with how normalise22BetEvent
-// actually parses that book's response shape.
+// WHAT CHANGED (21 Oct 2026) — the route used to check only the top 3 arbs by margin (plus >=5%),
+// and any arb with a 22bet leg outside that shortlist was shown with no live check at all. Now:
+//   1. EVERY candidate that has a 22bet leg is checked, highest margin first.
+//   2. Cost is bounded by distinct 22bet EVENTS fetched live per request (MAX_LIVE_FETCHES_PER_REQUEST);
+//      events already in the 60 s shared cache are free. Candidates that did not get a live check come
+//      back as 'unchecked' and the client files them under "review" (hidden by default) — they are
+//      never shown as if verified.
+//   3. The fetched 22bet event must be the SAME MATCH as the arb (strict team match + kickoff within
+//      10 min). A fixtureRef that points at a different match used to be compared price-for-price.
+//   4. A leg is only "checked" when 22bet quotes one unambiguous price for it. A failed/blocked fetch, a
+//      page with no readable 1X2, or several different prices for one selection come back 'unverifiable'
+//      (hidden review tier) instead of being dropped as if the event had vanished. Totals / handicap legs
+//      (the scraper cannot read them yet) are simply not checked here and keep the tier the client's
+//      BOOK_PROFILES trust profile gave them.
+//   5. The client shows 22bet's own price on checked legs, so the odds on the card are the site's.
 //
-// betano is still an OddsPapi-only source — until it gets its own per-event
-// API call the way 22bet has, there is no independent source to check it
-// against, so its legs are marked "uncheckable" rather than silently trusted
-// or silently dropped. (Melbet was removed: its scraper has ended.)
+// LIVE_VERIFIABLE_BOOKS: a book only goes in this set once it has a function here that can fetch ONE
+// event fresh from that book's OWN platform. Right now that's just 22bet. betano is still an
+// OddsPapi-only source, so its legs are not live-checked (arbs with only betano legs get no result).
 import { getUserPlan } from '../../lib/serverAuth';
 import { checkRateLimit, cacheGet, cacheSet } from '../../lib/supabaseCache';
+import { fuzzyMatch } from '../../lib/teamMatch';
 import { fetch22BetEventDetail, normalise22BetEvent } from './scrapers/22bet';
 
 const LIVE_VERIFIABLE_BOOKS = new Set(['22bet']);
 
-// Fresh price within this band of the shown price still counts as "confirmed"
-// (normal 22bet-side rounding/latency), not "moved".
-const PRICE_TOLERANCE = 0.03; // 3%
+// A fresh price within this band of the shown price counts as "confirmed", beyond it as "moved".
+// (The client shows 22bet's fresh price on every checked leg either way.)
+const PRICE_TOLERANCE = 0.01; // 1% (was 3%)
 
-// How many distinct legs (across ALL candidates in one request) this route
-// will actually fetch live. Each one is a real request to 22bet (or, if their
-// session cookie needs refreshing, a ScraperAPI-proxied one) — cap it so an
-// unusually large candidate list can't turn into a burst of expensive calls.
-const MAX_LEGS_PER_REQUEST = 10;
+// The fetched 22bet event must kick off within this of the arb's kickoff (same as MERGE_KICKOFF_MS in odds.js).
+const KICKOFF_TOLERANCE_MS = 10 * 60 * 1000;
 
-// A candidate only gets checked at all if it clears one of these — matches
-// the same HIGH_MARGIN_REVIEW threshold findArbs() already uses client-side,
-// plus a flat top-N so a quiet scan with no high-margin hits still gets its
-// best few candidates checked.
-const HIGH_MARGIN_REVIEW = 5;
-const TOP_N = 3;
+// How many distinct 22bet EVENTS one request may fetch live (each is a 22bet request, or a paid
+// ScraperAPI proxy call when 22bet strips the direct one). Cache hits do not count. Was 10 legs;
+// it is now 10 events so one match with several legs costs one fetch.
+const MAX_LIVE_FETCHES_PER_REQUEST = 10;
 
 // ─── ACCESS / INPUT LIMITS ───────────────────────────────────────────────────
-// Premium only, per-user rate limit shared across instances (Supabase). Every candidate leg the
-// route fetches live is a real request to 22bet (sometimes via a paid ScraperAPI proxy).
 const VERIFY_LIMIT_MAX = 30;
 const VERIFY_LIMIT_WINDOW_SECONDS = 10 * 60;
-// The client sends every arb a scan found. Keep only the highest-margin ones so a huge request
-// body cannot turn into a huge amount of work (only ~10 legs are fetched live anyway).
 const MAX_CANDIDATES = 300;
 const MAX_LEGS_PER_CANDIDATE = 4;
 
-// QUOTA: every live 22bet event fetch can fall back to a ScraperAPI ultra_premium proxy call (see 22bet.js: "an
-// expensive call per event"). This route runs automatically after every scan for every open tab, and the same
-// top arbs are shown to every user. So a freshly fetched event is shared for FRESH_EVENT_TTL_MS across users and
-// instances (Supabase kv_cache), and concurrent requests for the same event on one instance share one fetch.
-// 60 s keeps the check "live" (the client treats a check as fresh for 5 min) while cutting duplicate paid fetches.
+// QUOTA: a freshly fetched event is shared for FRESH_EVENT_TTL_MS across users and instances
+// (Supabase kv_cache), and concurrent requests for the same event on one instance share one fetch.
 const FRESH_EVENT_TTL_MS = 60 * 1000;
 const inFlightFresh = new Map(); // cacheKey -> Promise<{ state, fresh?, fetchedAt? }>
 
+const eventCacheKey = (sport, fixtureRef) => 'verify22:' + sport + ':' + fixtureRef;
+
 async function getFreshEvent(fixtureRef, sport) {
-  const key = 'verify22:' + sport + ':' + fixtureRef;
+  const key = eventCacheKey(sport, fixtureRef);
   const hit = await cacheGet(key);
   if (hit && hit.fresh) return { state: 'ok', fresh: hit.fresh, fetchedAt: hit.fetchedAt };
   if (inFlightFresh.has(key)) return inFlightFresh.get(key);
   const p = (async () => {
     const raw = await fetch22BetEventDetail(fixtureRef);
-    if (!raw) return { state: 'missing' };            // not cached: a vanished event should be re-checked next time
+    if (!raw) return { state: 'missing' };            // not cached: re-check next time
     const fresh = normalise22BetEvent(raw, sport);
     if (!fresh) return { state: 'unparsed' };
     const fetchedAt = new Date().toISOString();
@@ -92,11 +86,13 @@ const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : null);
 const isNumericFixtureRef = ref => /^\d{1,15}$/.test(String(ref == null ? '' : ref));
 
 // Keeps only the fields this route uses, and only well-formed candidates.
+// id is whatever the client sends back to us (index.js sends arb id + legs so the same event in the
+// global and WA lists cannot collide); we only echo it.
 function sanitizeCandidates(raw) {
   const out = [];
   for (const c of raw) {
     if (!c || typeof c !== 'object') continue;
-    const id = str(c.id, 120), sport = str(c.sport, 60);
+    const id = str(c.id, 400), sport = str(c.sport, 60);
     if (!id || !sport || typeof c.margin !== 'number' || !Number.isFinite(c.margin)) continue;
     if (!Array.isArray(c.outcomes) || c.outcomes.length < 2 || c.outcomes.length > MAX_LEGS_PER_CANDIDATE) continue;
     const outcomes = [];
@@ -113,55 +109,87 @@ function sanitizeCandidates(raw) {
       });
     }
     if (outcomes.length !== c.outcomes.length) continue;
-    out.push({ id, sport, margin: c.margin, outcomes });
+    out.push({ id, sport, home: str(c.home, 80), away: str(c.away, 80), commenceTime: str(c.commenceTime, 40), margin: c.margin, outcomes });
   }
   return out.sort((a, b) => b.margin - a.margin).slice(0, MAX_CANDIDATES);
 }
 
+// Every candidate that has at least one leg we can check live, best margin first.
 function pickCandidatesToVerify(candidates) {
-  const sorted = [...candidates].sort((a, b) => b.margin - a.margin);
-  const picked = new Set();
-  sorted.slice(0, TOP_N).forEach(c => picked.add(c.id));
-  sorted.filter(c => c.margin >= HIGH_MARGIN_REVIEW).forEach(c => picked.add(c.id));
-  return sorted.filter(c => picked.has(c.id));
+  return candidates
+    .filter(c => c.outcomes.some(o => LIVE_VERIFIABLE_BOOKS.has(o.book)))
+    .sort((a, b) => b.margin - a.margin);
 }
 
-// Finds the outcome the arb actually used inside a freshly-fetched event
-// (h2h only — 22bet's totals/spreads normalisation is still a TODO in
-// normalise22BetEvent itself, so those legs are reported uncheckable too,
-// not guessed at).
+const UNSUPPORTED = { unsupported: true };
+
+// Finds the price the arb used inside a freshly-fetched 22bet event. Only the 1X2 market is parsed from
+// 22bet today (totals / handicap normalisation is still a TODO in normalise22BetEvent), so any other
+// leg is UNSUPPORTED — "cannot read", not "gone". If 22bet quotes the same selection at several
+// different prices (the scraper's 1X2 detection can pick up more than one 3-way market), the answer
+// is ambiguous and nothing is confirmed.
 function findFreshPrice(freshEvent, leg) {
-  const mkt = (freshEvent.bookmakers[0].markets || []).find(m => m.key === leg.marketKey);
-  if (!mkt) return null;
+  if (leg.marketKey !== 'h2h') return UNSUPPORTED;
   const wantName =
     leg.side === '__home__' ? freshEvent.home_team :
     leg.side === '__away__' ? freshEvent.away_team :
     leg.side === '__draw__' ? 'Draw' : null;
-  if (!wantName) return null; // totals/spreads: not supported by the fresh source yet
-  const out = mkt.outcomes.find(o => o.name === wantName);
-  return out ? out.price : null;
+  if (!wantName) return UNSUPPORTED;
+  const prices = [];
+  for (const m of freshEvent.bookmakers[0].markets || []) {
+    if (m.key !== 'h2h') continue;
+    for (const o of m.outcomes || []) if (o.name === wantName && o.price > 1) prices.push(o.price);
+  }
+  if (prices.length === 0) return null;
+  if (prices.some(p => Math.abs(p / prices[0] - 1) > 0.005)) return { ambiguous: true };
+  return prices[0];
 }
 
-async function verifyLeg(leg) {
+// One leg, one arb. Returns:
+//   { checked: true, freshPrice, moved, fetchedAt }   -> read from 22bet's own page and matched to this match
+//   { checked: true, vanished: true, reason }         -> 22bet no longer quotes this exact outcome
+//   { checked: false, kind, reason }                  -> kind: 'other_book' | 'unsupported' | 'unreadable' | 'over_budget'
+function judgeLeg(leg, arb, got) {
   if (!LIVE_VERIFIABLE_BOOKS.has(leg.book)) {
-    return { checked: false, reason: 'no live-verification source wired for ' + leg.bookName + ' yet' };
+    return { checked: false, kind: 'other_book', reason: 'no live-verification source wired for ' + leg.bookName + ' yet' };
   }
   if (!leg.fixtureRef) {
-    return { checked: false, reason: 'no fixture id captured for this leg (scanned before the fixtureRef fix, or this book path doesn\'t attach one)' };
+    return { checked: false, kind: 'unreadable', reason: 'no fixture id captured for this leg' };
   }
   if (!isNumericFixtureRef(leg.fixtureRef)) {
-    return { checked: false, reason: 'fixture id is not a valid 22bet event id' };
+    return { checked: false, kind: 'unreadable', reason: 'fixture id is not a valid 22bet event id' };
   }
-  const got = await getFreshEvent(leg.fixtureRef, leg.sportKeyForRefetch);
-  if (got.state === 'missing') return { checked: true, vanished: true, reason: '22bet event not found on re-fetch — likely suspended, settled, or removed' };
-  if (got.state === 'unparsed') return { checked: true, vanished: true, reason: 'could not parse fresh 22bet data for this event' };
+  if (!got) {
+    return { checked: false, kind: 'over_budget', reason: 'not live-checked this scan (per-request limit reached)' };
+  }
+  if (got.state === 'missing') {
+    return { checked: false, kind: 'unreadable', reason: '22bet event could not be fetched (blocked, suspended or removed)' };
+  }
+  if (got.state === 'unparsed') {
+    return { checked: false, kind: 'unreadable', reason: '22bet page had no readable 1X2 prices' };
+  }
 
   const fresh = got.fresh;
-  const freshPrice = findFreshPrice(fresh, leg);
-  if (freshPrice == null) return { checked: true, vanished: true, reason: 'this exact outcome is no longer quoted (market suspended or line changed)' };
+  // The id must lead to THIS match. A wrong id used to be compared price-for-price against another match.
+  const kickDiff = Math.abs(new Date(fresh.commence_time) - new Date(arb.commenceTime));
+  if (!arb.home || !arb.away || !fuzzyMatch(fresh.home_team, arb.home) || !fuzzyMatch(fresh.away_team, arb.away) || !(kickDiff <= KICKOFF_TOLERANCE_MS)) {
+    return { checked: false, kind: 'unreadable', reason: 'fixture id leads to "' + fresh.home_team + ' vs ' + fresh.away_team + '", not this match' };
+  }
 
-  const moved = Math.abs(freshPrice / leg.odds - 1) > PRICE_TOLERANCE;
-  return { checked: true, vanished: false, freshPrice, moved, fetchedAt: got.fetchedAt };
+  const fp = findFreshPrice(fresh, leg);
+  if (fp === UNSUPPORTED) {
+    // Not a failure: the scraper just cannot read this market yet. The arb keeps whatever tier the client's
+    // per-book trust profile (BOOK_PROFILES in index.js) already gave it, so it is neither dropped nor hidden here.
+    return { checked: false, kind: 'unsupported', reason: '22bet ' + leg.marketKey + ' prices cannot be read from 22bet yet' };
+  }
+  if (fp && fp.ambiguous) {
+    return { checked: false, kind: 'unreadable', reason: '22bet shows more than one price for this selection' };
+  }
+  if (fp == null) {
+    return { checked: true, vanished: true, reason: 'this exact outcome is no longer quoted on 22bet (market suspended or changed)' };
+  }
+  const moved = Math.abs(fp / leg.odds - 1) > PRICE_TOLERANCE;
+  return { checked: true, vanished: false, freshPrice: fp, moved, fetchedAt: got.fetchedAt };
 }
 
 export default async function handler(req, res) {
@@ -189,65 +217,70 @@ export default async function handler(req, res) {
 
   const toCheck = pickCandidatesToVerify(candidates);
 
-  // Dedupe legs across candidates by (book, fixtureRef, marketKey, side) —
-  // the same real-world fixture can show up as a leg of more than one
-  // candidate (e.g. two different lines/markets on the same match), and
-  // there's no reason to fetch that event twice.
-  const legJobs = new Map(); // dedupeKey -> { leg, promise }
-  let legBudget = MAX_LEGS_PER_REQUEST;
-
+  // Distinct 22bet events across all candidates, in order of the best margin they appear under.
+  const eventOrder = [];
+  const seenEvents = new Set();
   for (const arb of toCheck) {
-    for (const leg of arb.outcomes || []) {
-      if (!LIVE_VERIFIABLE_BOOKS.has(leg.book)) continue;
-      const dedupeKey = leg.book + '|' + leg.fixtureRef + '|' + leg.marketKey + '|' + leg.side;
-      if (legJobs.has(dedupeKey)) continue;
-      if (legBudget <= 0) continue; // over budget — leave uncheckable rather than silently skip accounting
-      legBudget--;
-      legJobs.set(dedupeKey, verifyLeg({ ...leg, sportKeyForRefetch: arb.sport }));
+    for (const leg of arb.outcomes) {
+      if (!LIVE_VERIFIABLE_BOOKS.has(leg.book) || !isNumericFixtureRef(leg.fixtureRef)) continue;
+      const key = eventCacheKey(arb.sport, leg.fixtureRef);
+      if (seenEvents.has(key)) continue;
+      seenEvents.add(key);
+      eventOrder.push({ key, sport: arb.sport, ref: leg.fixtureRef });
     }
   }
 
-  const dedupeKeyOf = leg => leg.book + '|' + leg.fixtureRef + '|' + leg.marketKey + '|' + leg.side;
-  const resolvedEntries = await Promise.all([...legJobs.entries()].map(async ([k, p]) => [k, await p]));
-  const legResults = new Map(resolvedEntries);
+  // Events already in the shared cache are free; only misses spend the live-fetch budget.
+  const cachedFlags = await Promise.all(eventOrder.map(e => Promise.resolve(cacheGet(e.key)).then(h => !!(h && h.fresh)).catch(() => false)));
+  let liveBudget = MAX_LIVE_FETCHES_PER_REQUEST;
+  const eventJobs = new Map(); // cacheKey -> Promise
+  eventOrder.forEach((e, i) => {
+    if (!cachedFlags[i]) {
+      if (liveBudget <= 0) return; // over budget: its legs come back 'over_budget' -> arb is 'unchecked'
+      liveBudget--;
+    }
+    eventJobs.set(e.key, getFreshEvent(e.ref, e.sport));
+  });
+  const eventResults = new Map(await Promise.all([...eventJobs.entries()].map(async ([k, p]) => [k, await p])));
 
   const results = [];
   for (const arb of toCheck) {
     let impliedFromFresh = 0;
-    let vanished = false;
-    const legReports = (arb.outcomes || []).map(leg => {
-      const v = legResults.get(dedupeKeyOf(leg));
-      if (!v) {
-        // unverifiable book, or over the per-request budget
+    let vanished = false, unreadable = 0, overBudget = 0, checkedLegs = 0, anyMoved = false;
+
+    const legReports = arb.outcomes.map(leg => {
+      const isLive = LIVE_VERIFIABLE_BOOKS.has(leg.book);
+      const got = isLive && isNumericFixtureRef(leg.fixtureRef) ? eventResults.get(eventCacheKey(arb.sport, leg.fixtureRef)) : null;
+      const v = judgeLeg(leg, arb, got);
+
+      if (!v.checked) {
         impliedFromFresh += 1 / leg.odds;
-        return { ...leg, checked: false, reason: 'not checked (unverifiable book or over per-request budget)' };
+        if (v.kind === 'unreadable') unreadable++;
+        else if (v.kind === 'over_budget') overBudget++;
+        return { ...leg, checked: false, kind: v.kind, reason: v.reason };
       }
-      if (!v.checked) { impliedFromFresh += 1 / leg.odds; return { ...leg, checked: false, reason: v.reason }; }
       if (v.vanished) { vanished = true; return { ...leg, checked: true, vanished: true, reason: v.reason }; }
+      checkedLegs++;
+      if (v.moved) anyMoved = true;
       impliedFromFresh += 1 / v.freshPrice;
       return { ...leg, checked: true, freshPrice: v.freshPrice, moved: v.moved, fetchedAt: v.fetchedAt };
     });
 
-    const legsChecked = legReports.filter(l => l.checked).length;
     const legsTotal = legReports.length;
-
-    // Nothing was actually verified (e.g. no 22bet leg): say nothing rather than "confirmed".
-    // The client then shows the normal "not verified live" state for this arb.
-    if (legsChecked === 0) continue;
-
-    if (vanished) {
-      results.push({ id: arb.id, status: 'dropped', freshMargin: null, legsChecked, legsTotal, legs: legReports });
-      continue;
+    // Nothing was live-checked and nothing went wrong (e.g. only an unsupported 22bet totals leg): say nothing,
+    // so the client shows the arb exactly as its own trust profile ranks it.
+    if (checkedLegs === 0 && !vanished && unreadable === 0 && overBudget === 0) continue;
+    let status, freshMargin = null;
+    if (vanished) status = 'dropped';
+    else if (unreadable > 0) status = 'unverifiable';   // a 22bet leg could not be read from 22bet's own page
+    else if (overBudget > 0) status = 'unchecked';      // not enough live-fetch budget this request
+    else {
+      freshMargin = parseFloat((((1 - impliedFromFresh) / impliedFromFresh) * 100).toFixed(2));
+      // 'confirmed' only when EVERY leg was checked live; otherwise the 22bet leg(s) are verified, the rest are not.
+      status = freshMargin <= 0 ? 'dropped' : anyMoved ? 'adjusted' : checkedLegs === legsTotal ? 'confirmed' : 'partial';
     }
-    const freshMargin = parseFloat((((1 - impliedFromFresh) / impliedFromFresh) * 100).toFixed(2));
-    const anyMoved = legReports.some(l => l.checked && l.moved);
-    // "confirmed" only when EVERY leg was checked live; otherwise it is only partly verified.
-    const status = freshMargin < 0 ? 'dropped'
-      : anyMoved ? 'adjusted'
-      : legsChecked === legsTotal ? 'confirmed'
-      : 'partial';
-    results.push({ id: arb.id, status, freshMargin, legsChecked, legsTotal, legs: legReports });
+    results.push({ id: arb.id, status, freshMargin, legsChecked: checkedLegs, legsTotal, legs: legReports });
   }
 
-  return res.status(200).json({ results, checkedCount: toCheck.length, totalCandidates: candidates.length });
+  return res.status(200).json({ results, checkedCount: toCheck.length, totalCandidates: candidates.length, liveFetches: eventJobs.size });
 }
